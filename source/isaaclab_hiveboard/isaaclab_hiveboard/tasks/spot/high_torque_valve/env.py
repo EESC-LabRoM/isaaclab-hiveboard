@@ -12,7 +12,7 @@ from isaaclab_hiveboard.tasks.spot.ball_valve.configs.actions import (
 from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.observations import (
     ObservationsCfg,
 )
-from isaaclab_hiveboard.tasks.spot.ball_valve.configs.terminations import (
+from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.terminations import (
     TerminationsCfg,
 )
 from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.commands import (

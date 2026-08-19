@@ -12,7 +12,7 @@ from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.actions import (
 from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.observations import (
     ObservationsCfg,
 )
-from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.terminations import (
+from isaaclab_hiveboard.tasks.franka.lever_valve.configs.terminations import (
     TerminationsCfg,
 )
 from isaaclab_hiveboard.tasks.franka.lever_valve.configs.commands import (

@@ -38,3 +38,7 @@ precompute-cache:
 # Collect Spot demonstration dataset
 collect-demos num_demos="10":
     uv run python scripts/collect_demos.py --headless --device cuda:0 --num_demos {{num_demos}}
+
+# Record a validation video for every HiveBoard example
+record-all *args:
+    ./scripts/record_all_examples.sh {{args}}

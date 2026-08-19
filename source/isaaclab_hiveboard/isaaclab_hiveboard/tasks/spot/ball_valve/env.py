@@ -79,6 +79,6 @@ class SpotBallValveDeltaEnvCfg_PLAY(SpotBallValveEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         # Collect and execute learned relative commands at 20 Hz. Command
-        # phases are duration-based, so their wall-clock timing is unchanged.
+        # phases use constant velocity, so wall-clock timing scales with distance.
         # self.decimation = 10
         self.episode_length_s = 15.0

@@ -7,6 +7,7 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
 
 from .configs.scene import AnymalBallValveSceneCfg
+from .configs.terminations import TerminationsCfg
 
 
 @configclass
@@ -18,7 +19,7 @@ class AnymalBallValveEnvCfg(ManagerBasedRLEnvCfg):
     actions: dict = {}
     events: dict = {}
     commands: dict = {}
-    terminations: dict = {}
+    terminations: TerminationsCfg = TerminationsCfg()
     rewards = None
 
     def __post_init__(self):

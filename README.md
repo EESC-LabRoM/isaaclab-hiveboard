@@ -13,7 +13,6 @@ An Isaac Lab extension package for simulating, controlling, and benchmarking var
 - **Multi-Robot Support**:
   - 🐕 **Boston Dynamics Spot with Arm**: Differential IK, CuRobo collision avoidance, and RMPFlow control for gate valves, lever valves, and circuit breakers.
   - 🦾 **Franka Emika Panda**: Precision end-effector tracking with orientation alignments and real-time pose diagnostics.
-  - 🐾 **ANYmal C/D**: Manipulation & locomotion co-simulation on HiveBoard panels.
 - **HiveBoard Submodule Integration**: Directly loads CAD/URDF/USD models from `dependencies/HiveBoard` (ball valves, high torque gate valves, small valves, circuit breakers, drawers, keys, buttons).
 - **Demonstration Collection**: Fixed-base relative TCP demonstration collector exporting HDF5 datasets compatible with Diffusion Policy.
 - **Pose Diagnostics**: Automated frame error decomposition (IK tracking vs facing/jaw alignment).
@@ -54,7 +53,6 @@ uv sync
 | `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
 | `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
 | `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
-| `Isaac-HiveBoard-Anymal-BallValve-v0` | ANYmal C | Ball (Lever) Valve | Locomanipulation baseline |
 
 List all available tasks:
 

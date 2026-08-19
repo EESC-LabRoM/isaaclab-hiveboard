@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Unified task player for HiveBoard manipulation environments (Spot, Franka, ANYmal)."""
+"""Unified task player for HiveBoard manipulation environments (Spot, Franka)."""
 
 import argparse
 import math
@@ -17,10 +17,25 @@ parser = argparse.ArgumentParser(description="Play and debug HiveBoard manipulat
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during playback.")
 parser.add_argument(
+    "--video_folder",
+    type=str,
+    default=os.path.join("videos", "play"),
+    help="Directory for --video recordings (default: videos/play).",
+)
+parser.add_argument(
+    "--video_name",
+    type=str,
+    default=None,
+    help="Filename prefix for --video recordings (default: rl-video).",
+)
+parser.add_argument(
     "--video_length",
     type=int,
-    default=320,
-    help="Length of the recorded video (in steps). 320 covers approach, clamp, turn, and hold.",
+    default=None,
+    help=(
+        "Maximum recorded steps. Default: one episode, stopping on success or "
+        "timeout so each clip is a single demo."
+    ),
 )
 parser.add_argument(
     "--video_fps",
@@ -116,6 +131,8 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -172,10 +189,6 @@ def main():
         from isaaclab_hiveboard.tasks.franka.lever_valve.env import FrankaLeverValveEnvCfg
 
         env_cfg = FrankaLeverValveEnvCfg()
-    elif args_cli.task == "Isaac-HiveBoard-Anymal-BallValve-v0":
-        from isaaclab_hiveboard.tasks.anymal.ball_valve.env import AnymalBallValveEnvCfg
-
-        env_cfg = AnymalBallValveEnvCfg()
     else:
         # Fallback to standard Gym registration if task is not in the explicit list
         print(f"[INFO] Using standard Gym registration for task: {args_cli.task}")
@@ -246,12 +259,21 @@ def main():
             render_mode="rgb_array" if args_cli.video else None,
         )
 
+    base_env = env.unwrapped
+    episode_steps = int(getattr(base_env, "max_episode_length", 0) or 0)
+    if episode_steps <= 0:
+        step_dt = float(base_env.cfg.sim.dt) * float(base_env.cfg.decimation)
+        episode_steps = max(1, math.ceil(float(base_env.cfg.episode_length_s) / step_dt))
+    # One clip is one demo: stop on termination, cap at the episode horizon.
+    record_steps = args_cli.video_length if args_cli.video_length is not None else episode_steps
+
     if args_cli.video:
-        video_fps = 1.0 / (env.unwrapped.cfg.sim.dt * env.unwrapped.cfg.decimation)
+        video_fps = 1.0 / (base_env.cfg.sim.dt * base_env.cfg.decimation)
         video_kwargs = {
-            "video_folder": os.path.join("videos", "play"),
+            "video_folder": args_cli.video_folder,
             "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
+            "video_length": record_steps,
+            "name_prefix": args_cli.video_name or "rl-video",
             "disable_logger": True,
             "fps": int(round(video_fps)),
         }
@@ -259,9 +281,8 @@ def main():
 
     count = 0
     obs, _ = env.reset()
-    pbar = tqdm(total=args_cli.video_length) if args_cli.video else tqdm()
+    pbar = tqdm(total=record_steps) if args_cli.video else tqdm()
 
-    base_env = env.unwrapped
     action_terms = list(base_env.action_manager.active_terms) if hasattr(base_env, "action_manager") else []
     action_term_dims = list(base_env.action_manager.action_term_dim) if hasattr(base_env, "action_manager") else []
 
@@ -295,7 +316,7 @@ def main():
     cam = getattr(base_env, "viewport_camera_controller", None)
     start_eye = tuple(base_env.cfg.viewer.eye) if hasattr(base_env.cfg, "viewer") else (2.0, 2.0, 1.0)
     lookat = tuple(base_env.cfg.viewer.lookat) if hasattr(base_env.cfg, "viewer") else (0.0, 0.0, 0.0)
-    orbit_steps = args_cli.video_length if args_cli.video else 200
+    orbit_steps = record_steps if args_cli.video else episode_steps
     orbit_rad = math.radians(args_cli.orbit_deg)
 
     def _orbit_eye(step: int) -> tuple[float, float, float]:
@@ -340,11 +361,13 @@ def main():
             else:
                 action = torch.zeros(env.action_space.shape, device=base_env.device)
 
-            obs = env.step(action)[0]
+            obs, _, terminated, truncated, _ = env.step(action)
             count += 1
             pbar.update(1)
 
-            if args_cli.video and count >= args_cli.video_length:
+            term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
+            trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
+            if args_cli.video and (term or trunc or count >= record_steps):
                 break
             if args_cli.max_steps is not None and count >= args_cli.max_steps:
                 break
