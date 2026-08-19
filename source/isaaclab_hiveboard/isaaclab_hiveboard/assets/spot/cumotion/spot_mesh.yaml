@@ -1,0 +1,191 @@
+##
+## Collision Spheres for Boston Dynamics Spot with Arm
+## Generated for cuMotion / Isaac Sim
+##
+collision_spheres:
+    # ------------------------------------------------
+    # BODY
+    # ------------------------------------------------
+    body:
+        # Main chassis along X axis
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.09
+        - "center": [0.15, 0.0, 0.0]
+          "radius": 0.09
+        - "center": [-0.15, 0.0, 0.0]
+          "radius": 0.09
+        - "center": [0.30, 0.0, 0.0]
+          "radius": 0.085
+        - "center": [-0.30, 0.0, 0.0]
+          "radius": 0.085
+        - "center": [0.42, 0.0, 0.0]
+          "radius": 0.08
+        - "center": [-0.42, 0.0, 0.0]
+          "radius": 0.08
+
+    # ------------------------------------------------
+    # LEGS - FRONT LEFT
+    # ------------------------------------------------
+    fl_hip:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.06
+    fl_uleg:
+        # Interpolated from hip joint to knee joint (approx -0.32m in Z)
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.05
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.045
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.045
+    fl_lleg:
+        # Interpolated from knee to foot (approx -0.33m in Z)
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.03
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.025
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.02
+        - "center": [0.0, 0.0, -0.33] # Near foot
+          "radius": 0.035
+
+    # ------------------------------------------------
+    # LEGS - FRONT RIGHT
+    # ------------------------------------------------
+    fr_hip:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.06
+    fr_uleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.05
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.045
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.045
+    fr_lleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.03
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.025
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.02
+        - "center": [0.0, 0.0, -0.33]
+          "radius": 0.035
+
+    # ------------------------------------------------
+    # LEGS - HIND LEFT
+    # ------------------------------------------------
+    hl_hip:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.06
+    hl_uleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.05
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.045
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.045
+    hl_lleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.03
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.025
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.02
+        - "center": [0.0, 0.0, -0.33]
+          "radius": 0.035
+
+    # ------------------------------------------------
+    # LEGS - HIND RIGHT
+    # ------------------------------------------------
+    hr_hip:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.06
+    hr_uleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.05
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.045
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.045
+    hr_lleg:
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.03
+        - "center": [0.0, 0.0, -0.15]
+          "radius": 0.025
+        - "center": [0.0, 0.0, -0.25]
+          "radius": 0.02
+        - "center": [0.0, 0.0, -0.33]
+          "radius": 0.035
+
+    # ------------------------------------------------
+    # ARM
+    # ------------------------------------------------
+    arm_link_sh0: # Turret base
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.09
+        - "center": [0.0, 0.0, 0.08]
+          "radius": 0.08
+          
+    arm_link_sh1: # Shoulder pitch joint
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.08
+        - "center": [0.1, 0.0, 0.0]
+          "radius": 0.07
+
+    arm_link_el0: # Upper Arm (First long link)
+        # Joint is at x=0.3385
+        - "center": [0.05, 0.0, 0.0]
+          "radius": 0.06
+        # - "center": [0.15, 0.0, 0.0]
+        #   "radius": 0.055
+        # - "center": [0.25, 0.0, 0.0]
+        #   "radius": 0.055
+        # - "center": [0.33, 0.0, 0.0] # Near Elbow
+        #   "radius": 0.06
+
+    arm_link_el1: # Forearm (Second long link)
+        # Joint is at x=0.4033
+        - "center": [0.05, 0.0, 0.0]
+          "radius": 0.055
+        - "center": [0.15, 0.0, 0.0]
+          "radius": 0.05
+        - "center": [0.25, 0.0, 0.0]
+          "radius": 0.05
+        - "center": [0.35, 0.0, 0.0]
+          "radius": 0.05
+        - "center": [0.40, 0.0, 0.0] # Near Wrist
+          "radius": 0.055
+
+    arm_link_wr0: # Wrist Roll
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.04
+
+    arm_link_wr1: # Wrist Pitch
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.04
+        - "center": [0.06, 0.0, 0.0]
+          "radius": 0.035
+
+    # ------------------------------------------------
+    # GRIPPER
+    # ------------------------------------------------
+    arm_link_fngr: # Moving finger/Gripper body
+        - "center": [0.02, 0.0, 0.0]
+          "radius": 0.03
+        - "center": [0.05, 0.015, 0.0]
+          "radius": 0.02
+        - "center": [0.05, -0.015, 0.0]
+          "radius": 0.02
+        - "center": [0.09, 0.0, 0.0] # Tip
+          "radius": 0.02
+         
+    arm_link_jaw: # Fixed lower jaw / Camera housing
+        # Base of the jaw (intersects with wrist/protects camera)
+        - "center": [0.12, 0.0, -0.025]
+          "radius": 0.025
+        # Middle of the jaw
+        - "center": [0.15, 0.0, -0.025]
+          "radius": 0.04
+        # Tip of the jaw
+        - "center": [0.20, 0.0, -0.025]
+          "radius": 0.02         

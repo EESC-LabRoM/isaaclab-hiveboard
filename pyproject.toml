@@ -3,6 +3,42 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+[project]
+name = "isaaclab-hiveboard"
+version = "0.1.0"
+description = "Isaac Lab simulation environments for multi-robot HiveBoard manipulation"
+readme = "README.md"
+requires-python = "==3.11.*"
+dependencies = [
+    "isaacsim[all,extscache]==5.1.0",
+    "isaaclab[all]==2.3.2.post1",
+    "setuptools<71.0.0",
+    "diffusers>=0.36.0",
+    "dill>=0.3.5.1",
+    "tensorboard>=2.20.0",
+    "pytorch-kinematics>=0.10.0",
+    "nvidia-curobo[cu12]",
+    "zarr<3",
+    "tqdm",
+    "h5py",
+    "tabulate",
+    "InquirerPy",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com/"
+
+[tool.uv.sources]
+nvidia-curobo = { git = "https://github.com/NVlabs/curobo.git" }
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["source/isaaclab_hiveboard"]
+include = ["isaaclab_hiveboard*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
@@ -17,7 +53,6 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# Enable flake8 rules and other useful ones
 select = [
     "E",      # pycodestyle errors
     "W",      # pycodestyle warnings
@@ -25,12 +60,10 @@ select = [
     "I",      # isort
     "UP",     # pyupgrade
     "C90",    # mccabe complexity
-    # "D",      # pydocstyle
     "SIM",    # flake8-simplify
     "RET",    # flake8-return
 ]
 
-# Ignore specific rules (matching your flake8 config)
 ignore = [
     "E402",   # Module level import not at top of file
     "D401",   # First line should be in imperative mood
@@ -46,7 +79,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]  # Allow unused imports in __init__.py files
+"__init__.py" = ["F401"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 30
@@ -55,30 +88,22 @@ max-complexity = 30
 convention = "google"
 
 [tool.ruff.lint.isort]
-
-# Custom import sections with separate sections for each Isaac Lab extension
 section-order = [
     "future",
     "standard-library",
     "third-party",
-    # Group omniverse extensions separately since they are run-time dependencies
-    # which are pulled in by Isaac Lab extensions
     "omniverse-extensions",
-    # Group Isaac Lab extensions together since they are all part of the Isaac Lab project
     "isaaclab",
     "isaaclab-contrib",
     "isaaclab-rl",
     "isaaclab-mimic",
     "isaaclab-tasks",
     "isaaclab-assets",
-    # First-party is reserved for project templates
     "first-party",
     "local-folder",
 ]
 
 [tool.ruff.lint.isort.sections]
-# Define what belongs in each custom section
-
 "omniverse-extensions" = [
     "isaacsim",
     "omni",
@@ -88,7 +113,6 @@ section-order = [
     "Semantics",
     "curobo",
 ]
-
 "isaaclab" = ["isaaclab"]
 "isaaclab-assets" = ["isaaclab_assets"]
 "isaaclab-contrib" = ["isaaclab_contrib"]
@@ -96,12 +120,7 @@ section-order = [
 "isaaclab-mimic" = ["isaaclab_mimic"]
 "isaaclab-tasks" = ["isaaclab_tasks"]
 
-[tool.ruff.format]
-
-docstring-code-format = true
-
 [tool.pyright]
-
 include = ["source", "scripts"]
 exclude = [
     "**/__pycache__",
@@ -111,32 +130,12 @@ exclude = [
     ".git",
     ".vscode",
 ]
-
 typeCheckingMode = "basic"
 pythonVersion = "3.11"
 pythonPlatform = "Linux"
 enableTypeIgnoreComments = true
-
-# This is required as the CI pre-commit does not download the module (i.e. numpy, torch, prettytable)
-# Therefore, we have to ignore missing imports
 reportMissingImports = "none"
-# This is required to ignore for type checks of modules with stubs missing.
-reportMissingModuleSource = "none" # -> most common: prettytable in mdp managers
-
-reportGeneralTypeIssues = "none"       # -> raises 218 errors (usage of literal MISSING in dataclasses)
-reportOptionalMemberAccess = "warning" # -> raises 8 errors
+reportMissingModuleSource = "none"
+reportGeneralTypeIssues = "none"
+reportOptionalMemberAccess = "warning"
 reportPrivateUsage = "warning"
-
-
-[tool.codespell]
-skip = '*.usd,*.usda,*.usdz,*.svg,*.png,_isaac_sim*,*.bib,*.css,*/_build'
-quiet-level = 0
-# the world list should always have words in lower case
-ignore-words-list = "haa,slq,collapsable,buss,reacher,thirdparty"
-
-
-[tool.pytest.ini_options]
-
-markers = [
-    "isaacsim_ci: mark test to run in isaacsim ci",
-]

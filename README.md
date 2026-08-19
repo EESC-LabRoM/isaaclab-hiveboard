@@ -1,135 +1,127 @@
-# Template for Isaac Lab Projects
+# Isaac Lab - HiveBoard Multi-Robot Manipulation Suite
 
-## Overview
+[![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.3.2-blue.svg)](https://isaac-sim.github.io/IsaacLab/)
+[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+An Isaac Lab extension package for simulating, controlling, and benchmarking various robot platforms (**Boston Dynamics Spot with Arm**, **Franka Emika Panda**, and **ANYmal C/D**) performing manipulation tasks on the **[HiveBoard Benchmark](https://github.com/EESC-LabRoM/HiveBoard)**.
 
-**Key Features:**
+---
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
+## 🚀 Features
 
-**Keywords:** extension, template, isaaclab
+- **Multi-Robot Support**:
+  - 🐕 **Boston Dynamics Spot with Arm**: Differential IK, CuRobo collision avoidance, and RMPFlow control for gate valves, lever valves, and circuit breakers.
+  - 🦾 **Franka Emika Panda**: Precision end-effector tracking with orientation alignments and real-time pose diagnostics.
+  - 🐾 **ANYmal C/D**: Manipulation & locomotion co-simulation on HiveBoard panels.
+- **HiveBoard Submodule Integration**: Directly loads CAD/URDF/USD models from `dependencies/HiveBoard` (ball valves, high torque gate valves, small valves, circuit breakers, drawers, keys, buttons).
+- **Demonstration Collection**: Fixed-base relative TCP demonstration collector exporting HDF5 datasets compatible with Diffusion Policy.
+- **Pose Diagnostics**: Automated frame error decomposition (IK tracking vs facing/jaw alignment).
+- **`uv` Ready**: Seamless dependency management and script execution.
 
-## Installation
+---
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
+## 📦 Installation
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
-
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
-
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/isaaclab_hiveboard
-
-- Verify that the extension is correctly installed by:
-
-    - Listing the available tasks:
-
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
-
-    - Running a task:
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
-
-    - Running a task with dummy agents:
-
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
-
-        - Zero-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
-            ```
-        - Random-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
-            ```
-
-### Set up IDE (Optional)
-
-To setup the IDE, please follow these instructions:
-
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
-
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
-
-### Setup as Omniverse Extension (Optional)
-
-We provide an example UI extension that will load upon enabling your extension defined in `source/isaaclab_hiveboard/isaaclab_hiveboard/ui_extension_example.py`.
-
-To enable your extension, follow these steps:
-
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
-
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
-
-## Code formatting
-
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
+Clone the repository with submodules:
 
 ```bash
-pip install pre-commit
+git clone --recurse-submodules https://github.com/EESC-LabRoM/isaaclab-hiveboard.git
+cd isaaclab-hiveboard
 ```
 
-Then you can run pre-commit with:
+If already cloned without submodules, initialize HiveBoard:
 
 ```bash
-pre-commit run --all-files
+git submodule update --init --recursive
 ```
 
-## Troubleshooting
+Install editable package using `uv`:
 
-### Pylance Missing Indexing of Extensions
-
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-ext-repo>/source/isaaclab_hiveboard"
-    ]
-}
+```bash
+uv sync
 ```
 
-### Pylance Crash
+---
 
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
+## 🕹️ Available Environments
 
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
-...
+| Task ID | Robot | Target Object | Controller / Action |
+| --- | --- | --- | --- |
+| `Isaac-HiveBoard-Spot-BallValve-v0` | Spot + Arm | Ball (Lever) Valve | Sequential Absolute / Relative IK |
+| `Isaac-HiveBoard-Spot-CircuitBreaker-v0` | Spot + Arm | Circuit Breaker | Sequential Pose IK |
+| `Isaac-HiveBoard-Spot-HighTorqueValve-v0` | Spot + Arm | Gate Valve | Multi-revolution IK |
+| `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
+| `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
+| `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
+| `Isaac-HiveBoard-Anymal-BallValve-v0` | ANYmal C | Ball (Lever) Valve | Locomanipulation baseline |
+
+List all available tasks:
+
+```bash
+uv run python scripts/list_envs.py
+```
+
+---
+
+## 🎮 Running Simulations
+
+### Interactive Play
+
+Play Spot ball valve with camera orbit:
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0" --orbit
+```
+
+Play Franka lever valve with pose diagnostics overlay:
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-LeverValve-v0" --pose-debug
+```
+
+Play Franka circuit breaker:
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
+```
+
+### Collecting Demonstrations
+
+Precompute reachable reset cache:
+
+```bash
+uv run python scripts/precompute_reset_states.py \
+  --headless --device cuda:0 \
+  --output_path logs/spot_reset_states.pt
+```
+
+Record 10 successful demonstrations to HDF5:
+
+```bash
+uv run python scripts/collect_demos.py \
+  --headless --device cuda:0 \
+  --reset_state_cache_path logs/spot_reset_states.pt \
+  --num_demos 10
+```
+
+---
+
+## 📁 Repository Structure
+
+```
+isaaclab-hiveboard/
+├── dependencies/
+│   └── HiveBoard/               # Git submodule (URDF/USD models & meshes)
+├── scripts/                     # Standalone CLI tools (play.py, collect_demos.py, etc.)
+└── source/
+    └── isaaclab_hiveboard/
+        ├── config/
+        │   └── extension.toml   # Omniverse extension configuration
+        ├── setup.py
+        └── isaaclab_hiveboard/
+            ├── assets/          # Dynamic HiveBoard & robot asset resolvers
+            ├── mdp/             # Custom actions, commands, events, observations
+            ├── tasks/           # Robot tasks (spot/, franka/, anymal/)
+            └── utils/           # Diagnostics & metrics
 ```

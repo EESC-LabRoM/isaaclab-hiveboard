@@ -1,17 +1,159 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2024-2026 EESC-LabRoM & The Isaac Lab Project Developers.
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Package containing task implementations for the extension."""
+"""Task registrations for HiveBoard multi-robot manipulation environments."""
+
+import gymnasium as gym
 
 ##
-# Register Gym environments.
+# Spot Environments
 ##
 
-from isaaclab_tasks.utils import import_packages
+gym.register(
+    id="Isaac-HiveBoard-Spot-BallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.env:SpotBallValveEnvCfg",
+    },
+)
 
-# The blacklist is used to prevent importing configs from sub-packages
-_BLACKLIST_PKGS = ["utils", ".mdp"]
-# Import all configs in this package
-import_packages(__name__, _BLACKLIST_PKGS)
+gym.register(
+    id="Isaac-HiveBoard-Spot-BallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.env:SpotBallValveDeltaEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-CircuitBreaker-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.circuit_breaker.env:SpotCircuitBreakerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-HighTorqueValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.high_torque_valve.env:SpotHighTorqueValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-SmallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.small_valve.env:SpotSmallValveEnvCfg",
+    },
+)
+
+##
+# Franka Environments
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-LeverValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lever_valve.env:FrankaLeverValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-CircuitBreaker-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.circuit_breaker.env:FrankaCircuitBreakerEnvCfg",
+    },
+)
+
+##
+# ANYmal Environments
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg",
+    },
+)
+
+##
+# Backwards-compatibility aliases
+##
+
+gym.register(
+    id="Spot-Manipulation-Ball-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.env:SpotBallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Spot-Manipulation-Circuit-Breaker",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.circuit_breaker.env:SpotCircuitBreakerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Spot-Manipulation-High-Torque-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.high_torque_valve.env:SpotHighTorqueValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Spot-Manipulation-Small-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.small_valve.env:SpotSmallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Franka-Manipulation-Lever-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lever_valve.env:FrankaLeverValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Franka-Manipulation-Ball-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lever_valve.env:FrankaLeverValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Franka-Manipulation-Circuit-Breaker",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.circuit_breaker.env:FrankaCircuitBreakerEnvCfg",
+    },
+)

@@ -1,0 +1,3 @@
+[submodule "dependencies/HiveBoard"]
+	path = dependencies/HiveBoard
+	url = https://github.com/EESC-LabRoM/HiveBoard.git

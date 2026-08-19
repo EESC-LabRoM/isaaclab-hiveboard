@@ -1,0 +1,832 @@
+from __future__ import annotations
+
+import math
+from dataclasses import MISSING
+from typing import Sequence, Type
+
+import isaaclab.utils.math as PoseUtils
+import isaaclab.utils.math as math_utils
+import torch
+from isaaclab.assets import Articulation
+from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
+from isaaclab.managers import CommandTerm
+from isaaclab.managers.manager_term_cfg import CommandTermCfg
+from isaaclab.markers import VisualizationMarkersCfg
+from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.markers.visualization_markers import VisualizationMarkers
+from isaaclab.sensors.frame_transformer.frame_transformer import FrameTransformer
+from isaaclab.utils.configclass import configclass
+
+from isaaclab_hiveboard.mdp.events import (
+    canonicalize_ee_orientation_upward,
+)
+
+
+class SequentialPoseCommand(CommandTerm):
+    """A command term that executes a sequence of commands for a robot's end-effector."""
+
+    cfg: "SequentialPoseCommandCfg"
+
+    def __init__(self, cfg: "SequentialPoseCommandCfg", env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        # obtain the robot asset
+        # -- robot
+        self._asset: Articulation = env.scene[cfg.asset_name]
+        body_ids, body_names = self._asset.find_bodies(self.cfg.body_name)
+        if not body_ids:
+            raise ValueError(
+                f"Body with name '{self.cfg.body_name}' not found in asset '{self.cfg.asset_name}'."
+            )
+        self._body_idx = body_ids[0]
+        self._body_name = body_names[0]
+
+        # -- command sequence
+        self._current_command_idx = torch.zeros(
+            self._env.num_envs, device=self._env.device, dtype=torch.long
+        )
+        self._command_handlers = [
+            cmd.class_type(cmd, self) for cmd in self.cfg.commands
+        ]
+
+        # -- build default command, quat can't be 0s
+        self._command = torch.zeros(
+            (self._env.num_envs, 8), device=self._env.device, dtype=torch.float32
+        )
+        self._command[:, 0] = 1  # Close gripper
+        self._command[:, 4] = 1.0  # (w,x,y,z) -> (1,0,0,0)
+
+        # -- convert the fixed offsets to torch tensors of batched shape
+        if self.cfg.body_offset is not None:
+            self._offset_pos = torch.tensor(
+                self.cfg.body_offset.pos, device=self.device
+            ).repeat(self.num_envs, 1)
+            self._offset_rot = torch.tensor(
+                self.cfg.body_offset.rot, device=self.device
+            ).repeat(self.num_envs, 1)
+        else:
+            self._offset_pos, self._offset_rot = None, None
+
+        # -- optional valve task state
+        self.valve_task_goal = torch.ones(
+            self.num_envs, device=self.device, dtype=torch.float32
+        )
+        self.valve_joint_start = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.float32
+        )
+        self.valve_joint_des = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.float32
+        )
+        self.valve_rotate_angle_rad = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.float32
+        )
+        self._valve_asset: Articulation | None = None
+        self._valve_joint_idx: int | None = None
+        self._initialize_valve_task()
+
+        if self.cfg.debug_vis:
+            self._target_pos_b = torch.zeros(
+                (self._env.num_envs, 3), device=self._env.device, dtype=torch.float32
+            )
+            self._target_quat_b = torch.zeros(
+                (self._env.num_envs, 4), device=self._env.device, dtype=torch.float32
+            )
+            self._target_quat_b[:, 0] = 1.0  # (w,x,y,z) -> (1,0,0,0)
+
+    """
+    Properties
+    """
+
+    @property
+    def command(self) -> torch.Tensor:
+        """The desired command.
+
+        The command is an 8-dimensional tensor:
+        - 1 dimension for gripper status (1 for close, -1 for open)
+        - 3 dimensions for the target end-effector position in the base frame
+        - 4 dimensions for the target end-effector orientation (quat) in the base frame
+        """
+        return self._command
+
+    def _resample_command(
+        self, env_ids: Sequence[int] | slice | None | torch.Tensor = None
+    ):
+        """Resets the command sequence for the specified environments."""
+        if isinstance(env_ids, slice) or env_ids is None:
+            env_ids = torch.arange(self._env.num_envs, device=self.device)
+        elif not isinstance(env_ids, torch.Tensor):
+            env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        self._sample_valve_task(env_ids)
+        self._current_command_idx[env_ids] = 0
+        for handler in self._command_handlers:
+            handler.reset(env_ids)
+        # Isaac Lab's reset() observes the command *before* the first
+        # command_manager.compute(). Without this, play.py would step the
+        # uninitialized buffer (TCP at the origin) and pull the arm off the
+        # lever on the first decimation.
+        env_ids_t = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        env_mask[env_ids_t] = True
+        for i, handler in enumerate(self._command_handlers):
+            active = env_mask & (self._current_command_idx == i)
+            if torch.any(active):
+                self._command[active] = handler.update(active)
+
+    def _initialize_valve_task(self) -> None:
+        """Resolve and validate the optional valve articulation and task limits."""
+        if self.cfg.valve_asset_name is None:
+            return
+        if self.cfg.valve_asset_name not in self._env.scene.keys():
+            raise ValueError(
+                f"Valve asset '{self.cfg.valve_asset_name}' not found in scene."
+            )
+        if not 0.0 <= self.cfg.open_task_prob <= 1.0:
+            raise ValueError("open_task_prob must be in [0, 1]")
+        valve_span = abs(self.cfg.valve_joint_open - self.cfg.valve_joint_closed)
+        if valve_span <= 0.0:
+            raise ValueError("valve_joint_open and valve_joint_closed must differ")
+        if not 0.0 <= self.cfg.valve_min_delta_rad <= valve_span:
+            raise ValueError("valve_min_delta_rad must be within the valve range")
+
+        self._valve_asset = self._env.scene[self.cfg.valve_asset_name]
+        joint_ids, _ = self._valve_asset.find_joints(self.cfg.valve_joint_name)
+        if len(joint_ids) != 1:
+            raise ValueError(
+                f"Expected exactly one valve joint named '{self.cfg.valve_joint_name}' "
+                f"in '{self.cfg.valve_asset_name}', found {len(joint_ids)}."
+            )
+        self._valve_joint_idx = joint_ids[0]
+
+    def _sample_valve_task(self, env_ids: torch.Tensor) -> None:
+        """Choose a feasible open/close endpoint from the reset valve state.
+
+        The reset event owns valve-state sampling because it also computes the
+        matching Spot arm pose. This command term reads that state, samples the
+        task direction, and flips infeasible directions near an endpoint so the
+        requested motion always satisfies ``valve_min_delta_rad``.
+        """
+        if self._valve_asset is None or self._valve_joint_idx is None:
+            return
+
+        q_start = self._valve_asset.data.joint_pos[env_ids, self._valve_joint_idx]
+        q_open = torch.full_like(q_start, self.cfg.valve_joint_open)
+        q_closed = torch.full_like(q_start, self.cfg.valve_joint_closed)
+        min_delta = float(self.cfg.valve_min_delta_rad)
+        can_open = torch.abs(q_open - q_start) >= min_delta
+        can_close = torch.abs(q_closed - q_start) >= min_delta
+        if torch.any(~(can_open | can_close)):
+            bad_q = q_start[~(can_open | can_close)].detach().cpu().tolist()
+            raise RuntimeError(
+                "Reset valve states leave no endpoint satisfying "
+                f"valve_min_delta_rad={min_delta}: {bad_q}"
+            )
+
+        open_mask = (
+            torch.rand(len(env_ids), device=self.device) < self.cfg.open_task_prob
+        )
+        open_mask = torch.where(can_open & ~can_close, True, open_mask)
+        open_mask = torch.where(can_close & ~can_open, False, open_mask)
+        goal = torch.where(
+            open_mask, torch.ones_like(q_start), -torch.ones_like(q_start)
+        )
+        q_des = torch.where(open_mask, q_open, q_closed)
+
+        self.valve_task_goal[env_ids] = goal
+        self.valve_joint_start[env_ids] = q_start
+        self.valve_joint_des[env_ids] = q_des
+        self.recompute_valve_rotate_angle(env_ids)
+
+    def recompute_valve_rotate_angle(self, env_ids: torch.Tensor) -> None:
+        """Update the EE arc angle from the valve's remaining joint error."""
+        if self._valve_asset is None or self._valve_joint_idx is None:
+            return
+        q_current = self._valve_asset.data.joint_pos[env_ids, self._valve_joint_idx]
+        self.valve_rotate_angle_rad[env_ids] = (
+            self.valve_joint_des[env_ids] - q_current
+        ) * float(self.cfg.valve_ee_joint_angle_scale)
+
+    def _update_command(self):
+        """Updates the command based on the current state of the command sequence."""
+        # Update the command from the current handler
+        for i, handler in enumerate(self._command_handlers):
+            env_mask = self._current_command_idx == i
+
+            if not torch.any(env_mask):
+                continue
+
+            # check if the current command is done
+            env_ids = torch.where(env_mask)[0]
+            are_done = handler.is_done(env_ids)
+            done_env_ids = env_ids[are_done]
+
+            if len(done_env_ids) > 0:
+                self._current_command_idx[done_env_ids] = (
+                    self._current_command_idx[done_env_ids] + 1
+                )
+                if i < (len(self._command_handlers) - 1):
+                    self._command_handlers[i + 1].reset(done_env_ids)
+
+            # update the command for the current handler
+            self._command[env_mask] = handler.update(env_mask)
+
+            if self.cfg.debug_vis:
+                target_pos_b, target_quat_b = handler.get_target_in_base_frame(
+                    torch.where(env_mask)[0]
+                )
+                self._target_pos_b[env_mask] = target_pos_b
+                self._target_quat_b[env_mask] = target_quat_b
+
+    def is_done(self) -> torch.Tensor:
+        """Check if all commands were finished."""
+        return self._current_command_idx == len(self._command_handlers)
+
+    def _update_metrics(self):
+        """This command term does not have any metrics to update."""
+        pass
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # set visibility of markers
+        # note: parent only deals with callbacks. not their visibility
+        if debug_vis:
+            # create markers if necessary for the first time
+            if not hasattr(self, "goal_pose_visualizer"):
+                # -- goal
+                self.goal_pose_visualizer = VisualizationMarkers(
+                    self.cfg.goal_pose_visualizer_cfg
+                )
+                # -- current
+                self.current_pose_visualizer = VisualizationMarkers(
+                    self.cfg.current_pose_visualizer_cfg
+                )
+
+            # set their visibility to true
+            self.goal_pose_visualizer.set_visibility(True)
+            self.current_pose_visualizer.set_visibility(True)
+
+        else:
+            if hasattr(self, "goal_pose_visualizer"):
+                self.goal_pose_visualizer.set_visibility(False)
+                self.current_pose_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event):
+        # check if robot is initialized
+        # note: this is needed in-case the robot is de-initialized. we can't access the data
+        if not self._asset.is_initialized:
+            return
+
+        asset_pos = self._asset.data.root_pos_w
+        asset_quat = self._asset.data.root_quat_w
+
+        # goal end-effector pose
+        target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
+            asset_pos,
+            asset_quat,
+            self._target_pos_b,
+            self._target_quat_b,
+        )
+        self.goal_pose_visualizer.visualize(target_pos_w, target_quat_w)
+
+        # current end-effector pose
+        ee_pos_b, ee_quat_b = self._get_ee_in_world_frame(slice(None))
+        self.current_pose_visualizer.visualize(ee_pos_b, ee_quat_b)
+
+    def _get_ee_in_base_frame(self, env_ids: torch.Tensor | slice):
+        """
+        To convert the end-effector pose from world frame to base frame, we do:
+        1. Get the end-effector pose in world frame   (Pwe)
+        2. Subtract the base (root) pose from the end-effector pose (Pbe = Pwb^-1 * Pwe)
+        3. Apply the fixed offset (if any) (Pbe' = Pbe * P_ee')
+        """
+
+        # End-effector pose in base frame
+        ee_pos_w = self._asset.data.body_pos_w[env_ids, self._body_idx]
+        ee_quat_w = self._asset.data.body_quat_w[env_ids, self._body_idx]
+
+        ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            ee_pos_w,
+            ee_quat_w,
+        )
+
+        if self._offset_pos is not None and self._offset_rot is not None:
+            ee_pos_b, ee_quat_b = math_utils.combine_frame_transforms(
+                ee_pos_b,
+                ee_quat_b,
+                self._offset_pos[env_ids],
+                self._offset_rot[env_ids],
+            )
+        return ee_pos_b, ee_quat_b
+
+    def _get_ee_in_world_frame(self, env_ids: torch.Tensor | slice):
+        """
+        To convert the end-effector pose from world frame to world frame, we do:
+        """
+        # End-effector pose in world frame
+        ee_pos_w = self._asset.data.body_pos_w[env_ids, self._body_idx]
+        ee_quat_w = self._asset.data.body_quat_w[env_ids, self._body_idx]
+
+        if self._offset_pos is not None and self._offset_rot is not None:
+            ee_pos_w, ee_quat_w = math_utils.combine_frame_transforms(
+                ee_pos_w,  # T01
+                ee_quat_w,  # R01
+                self._offset_pos[env_ids],  # T12
+                self._offset_rot[env_ids],  # R12
+            )
+
+        return ee_pos_w, ee_quat_w
+
+
+class _BaseCmdHandler:
+    """Base class for command handlers."""
+
+    def __init__(self, cfg: BaseCmd, command_term: SequentialPoseCommand):
+        self.cfg = cfg
+        self._command_term = command_term
+        self._asset = command_term._asset
+        self._device = command_term.device
+        self._num_envs = command_term.num_envs
+        self._num_steps = self._resolve_num_steps()
+
+    def _resolve_num_steps(self) -> int:
+        """Resolve a command duration to environment updates."""
+        duration_s = getattr(self.cfg, "duration_s", None)
+        if duration_s is not None:
+            if duration_s <= 0.0:
+                raise ValueError(
+                    f"{type(self.cfg).__name__}.duration_s must be positive"
+                )
+            return max(
+                1,
+                math.ceil(duration_s / self._command_term._env.step_dt - 1.0e-9),
+            )
+        num_frames = getattr(self.cfg, "num_frames", None)
+        if num_frames is None or num_frames <= 0:
+            raise ValueError(
+                f"{type(self.cfg).__name__} requires a positive duration_s "
+                "or legacy num_frames"
+            )
+        return int(num_frames)
+
+    def reset(self, env_ids: torch.Tensor):
+        """Reset the handler for the given environment IDs."""
+        raise NotImplementedError
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        """Update the command for the given environment IDs."""
+        raise NotImplementedError
+
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Check if the command is done for the given environment IDs."""
+        raise NotImplementedError
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        """Get the target pose in the base frame for the given environment IDs."""
+        raise NotImplementedError
+
+
+class _GoToFrameHandler(_BaseCmdHandler):
+    """Handles the GoToFrame command."""
+
+    def __init__(
+        self,
+        cfg: GoToFrameCfg,
+        command_term: SequentialPoseCommand,
+    ):
+        super().__init__(cfg, command_term)
+        self.cfg: GoToFrameCfg
+        self._frame = command_term._env.scene[cfg.frame_name]
+        self._frame_idx = self._frame.data.target_frame_names.index(
+            cfg.target_frame_name
+        )
+        self.target_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
+        self.target_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self.target_quat_b[:, 0] = 1.0
+
+        self.pos_steps = torch.zeros(
+            (self._num_envs, self._num_steps + 1, 3), device=self._device
+        )
+        self.rot_steps = torch.zeros(
+            (self._num_envs, self._num_steps + 1, 4), device=self._device
+        )
+
+        self._current_frame = torch.zeros(
+            self._num_envs, dtype=torch.int64, device=self._device
+        )
+
+    def reset(self, env_ids: torch.Tensor):
+        self.target_pos_b[env_ids], self.target_quat_b[env_ids] = (
+            self.get_target_in_base_frame(env_ids)
+        )
+
+        current_pose_b, current_quat_b = self._command_term._get_ee_in_base_frame(
+            env_ids
+        )
+
+        delta_pos = self.target_pos_b[env_ids] - current_pose_b
+
+        # Linear interpolation of positions
+        pos_step_size = delta_pos / self._num_steps
+        grid = torch.arange(self._num_steps, dtype=torch.float32)
+
+        pos_steps = torch.stack(
+            [current_pose_b + grid[i] * pos_step_size for i in range(self._num_steps)]
+        ).permute(1, 0, 2)
+
+        # Add initial endpoint
+        self.pos_steps[env_ids] = torch.cat(
+            [pos_steps, self.target_pos_b[env_ids].unsqueeze(1)], dim=1
+        )
+
+        # Interpolate rotations
+        self.rot_steps[env_ids] = torch.stack(
+            [
+                PoseUtils.quat_from_matrix(
+                    PoseUtils.interpolate_rotations(
+                        R1=PoseUtils.matrix_from_quat(current_quat),
+                        R2=PoseUtils.matrix_from_quat(target_quat),
+                        num_steps=self._num_steps,
+                        axis_angle=True,
+                    )
+                )
+                for current_quat, target_quat in zip(
+                    current_quat_b, self.target_quat_b[env_ids]
+                )
+            ],
+            dim=0,
+        )
+
+        self._current_frame[env_ids] = 0
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        command = torch.zeros(int(torch.sum(env_mask)), 8, device=self._device)
+        command[:, 0] = 1.0 if self.cfg.gripper_open else -1.0
+        command[:, 1:4] = self.pos_steps[env_mask, self._current_frame[env_mask]]
+        command[:, 4:8] = self.rot_steps[env_mask, self._current_frame[env_mask]]
+
+        self._current_frame[env_mask] = torch.clamp(
+            self._current_frame[env_mask] + 1, max=self._num_steps
+        )
+
+        return command
+
+    # def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+    #     current_pose_b, _ = self._command_term._get_ee_in_base_frame(env_ids)
+    #     target_pose_b, _ = self.get_target_in_base_frame(env_ids)
+
+    #     distance = torch.norm(current_pose_b - target_pose_b, dim=-1)
+    #     return distance < self.cfg.distance_threshold
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        return self._current_frame[env_ids] >= self._num_steps
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        # Target pose in base frame
+        target_pos_w = self._frame.data.target_pos_w[env_ids, self._frame_idx]
+        target_quat_w = self._frame.data.target_quat_w[env_ids, self._frame_idx]
+
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            target_pos_w,
+            target_quat_w,
+        )
+        target_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
+
+        return target_pos_b, target_quat_b
+
+
+class _GripperHandler(_BaseCmdHandler):
+    """Handles the GripperCommand."""
+
+    def __init__(self, cfg: GripperCommand, command_term: SequentialPoseCommand):
+        super().__init__(cfg, command_term)
+        self.cfg: GripperCommand
+        self._wait_frames = torch.zeros(
+            self._num_envs, device=self._device, dtype=torch.long
+        )
+
+    def reset(self, env_ids: torch.Tensor):
+        self._wait_frames[env_ids] = 0
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        self._wait_frames[env_mask] += 1
+        # Get the last command for the gripper pose
+        last_command = self._command_term.command[env_mask].clone()
+        last_command[:, 0] = 1.0 if self.cfg.open_gripper else -1.0
+        return last_command
+
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        return self._wait_frames[env_ids] >= self._num_steps
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        return (
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+        )
+
+
+class _RotateFrameHandler(_BaseCmdHandler):
+    """Handles the RotateFrame command."""
+
+    def __init__(
+        self,
+        cfg: RotateFrameCfg,
+        command_term: SequentialPoseCommand,
+    ):
+        super().__init__(cfg, command_term)
+        self.cfg: RotateFrameCfg
+        self._frame: FrameTransformer = command_term._env.scene[cfg.frame_name]
+        self._frame_idx = self._frame.data.target_frame_names.index(
+            cfg.target_frame_name
+        )
+        self.initial_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self.axis_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
+        self.axis_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self._frame_count = torch.zeros(
+            self._num_envs, device=self._device, dtype=torch.long
+        )
+        self.angle_rad_tensor = torch.deg2rad(
+            torch.tensor(self.cfg.angle_deg, device=self._device, dtype=torch.float32)
+        ).repeat(self._num_envs)
+        self.final_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self.rot_axis_b = torch.zeros(self._num_envs, 3, device=self._device)
+        self.radius_vec = torch.zeros(self._num_envs, 3, device=self._device)
+
+    def reset(self, env_ids: torch.Tensor):
+        self._frame_count[env_ids] = 0
+
+        if self._command_term._valve_asset is not None:
+            self._command_term.recompute_valve_rotate_angle(env_ids)
+            self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[
+                env_ids
+            ]
+        else:
+            self.angle_rad_tensor[env_ids] = math.radians(self.cfg.angle_deg)
+
+        ee_pos_b, self.initial_quat_b[env_ids] = (
+            self._command_term._get_ee_in_base_frame(env_ids)
+        )
+
+        self.axis_pos_b[env_ids], axis_quat_b = self._get_rotation_axis_pose_b(env_ids)
+
+        if self._command_term.cfg.debug_vis:
+            print(
+                "Initial Pose in relation to axis: ",
+                ee_pos_b - self.axis_pos_b[env_ids],
+            )
+            print("Initial pose: ", ee_pos_b)
+            print("Axis position: ", self.axis_pos_b[env_ids])
+            print("Axis quat: ", axis_quat_b)
+
+        # The rotation vector is explicit in the axis frame. Keeping it in the
+        # command config prevents a grasp-frame rotation from silently changing
+        # the mechanical joint axis.
+        axis_in_frame = torch.tensor(
+            self.cfg.axis, device=self._device, dtype=torch.float32
+        ).repeat(len(env_ids), 1)
+        if torch.any(torch.linalg.vector_norm(axis_in_frame, dim=-1) < 1.0e-6):
+            raise ValueError("RotateFrameCfg.axis must be non-zero")
+
+        # Rotation axis expressed in the robot base frame.
+        rot_axis_b = math_utils.quat_apply(axis_quat_b, axis_in_frame)
+        self.rot_axis_b[env_ids] = rot_axis_b / torch.linalg.vector_norm(
+            rot_axis_b, dim=-1, keepdim=True
+        )
+        if self._command_term.cfg.debug_vis:
+            print("Rotation axis: ", self.rot_axis_b[env_ids])
+
+        # vector from rotation center to initial ee pos, which describes
+        # our expected motion
+        radius_vec = ee_pos_b - self.axis_pos_b[env_ids]
+        self.radius_vec[env_ids] = self._get_ortogonal_vector(
+            radius_vec, self.rot_axis_b[env_ids]
+        )
+        if self._command_term.cfg.debug_vis:
+            print("Radius vector: ", self.radius_vec[env_ids])
+
+        # Get final motion poses
+        angle = self.angle_rad_tensor[env_ids]
+        total_rotation = math_utils.quat_from_angle_axis(
+            angle, self.rot_axis_b[env_ids]
+        )
+        self.final_quat_b[env_ids] = math_utils.quat_mul(
+            total_rotation, self.initial_quat_b[env_ids]
+        )
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        # Get final motion poses
+        angle = self.angle_rad_tensor[env_ids]
+
+        v_rot = self._rodrigues_rotate(
+            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
+        )
+        final_pose_b = self.axis_pos_b[env_ids] + v_rot
+
+        total_rotation = math_utils.quat_from_angle_axis(
+            angle, self.rot_axis_b[env_ids]
+        )
+        final_quat = math_utils.quat_mul(total_rotation, self.initial_quat_b[env_ids])
+
+        return final_pose_b, final_quat
+
+    def _rodrigues_rotate(
+        self, v: torch.Tensor, axis: torch.Tensor, theta: torch.Tensor
+    ) -> torch.Tensor:
+        return (
+            v * torch.cos(theta)[:, None]
+            + torch.cross(axis, v, dim=-1) * torch.sin(theta)[:, None]
+            + axis
+            * torch.sum(axis * v, dim=-1)[:, None]
+            * (1 - torch.cos(theta))[:, None]
+        )
+
+    def _get_ortogonal_vector(
+        self, vector: torch.Tensor, ortogonal_to: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Given a vector V and K, we can decompose on V = V || k  + V |_ k
+
+        This function returns the V |_ k
+        """
+        return (
+            vector
+            - torch.sum(vector * ortogonal_to, dim=-1, keepdim=True) * ortogonal_to
+        )
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        env_ids = torch.where(env_mask)[0]
+        self._frame_count[env_mask] += 1
+
+        # Interpolation factor
+        alpha = self._frame_count[env_mask].float() / self._num_steps
+        alpha = torch.clamp(alpha, 0.0, 1.0)
+        angle = self.angle_rad_tensor[env_mask] * alpha
+
+        # -- position
+        # rotate radius vector using Rodrigues' rotation formula
+        v_rot = self._rodrigues_rotate(
+            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
+        )
+        target_pos_b = self.axis_pos_b[env_ids] + v_rot
+
+        # -- orientation
+        # slerp
+        interp_quat_b = torch.stack(
+            [
+                math_utils.quat_slerp(
+                    self.initial_quat_b[env_id],
+                    self.final_quat_b[env_id],
+                    fraction.item(),
+                )
+                for env_id, fraction in zip(env_ids, alpha)
+            ]
+        )
+
+        command = torch.zeros(int(torch.sum(env_mask)), 8, device=self._device)
+        command[:, 0] = 1.0 if self.cfg.gripper_open else -1.0
+        command[:, 1:4] = target_pos_b
+        command[:, 4:8] = interp_quat_b
+
+        return command
+
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        return self._frame_count[env_ids] >= self._num_steps
+
+    def _get_rotation_axis_pose_b(self, env_ids: torch.Tensor):
+        # Target pose in base frame
+        target_pos_w = self._frame.data.target_pos_w[env_ids, self._frame_idx]
+        target_quat_w = self._frame.data.target_quat_w[env_ids, self._frame_idx]
+
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            target_pos_w,
+            target_quat_w,
+        )
+
+        return target_pos_b, target_quat_b
+
+
+@configclass
+class SequentialPoseCommandCfg(CommandTermCfg):
+    """Configuration for the uniform velocity command generator."""
+
+    @configclass
+    class OffsetCfg:
+        """The offset pose from parent frame to child frame.
+
+        On many robots, end-effector frames are fictitious frames that do not have a corresponding
+        rigid body. In such cases, it is easier to define this transform w.r.t. their parent rigid body.
+        For instance, for the Franka Emika arm, the end-effector is defined at an offset to the the
+        "panda_hand" frame.
+        """
+
+        pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        """Translation w.r.t. the parent frame. Defaults to (0.0, 0.0, 0.0)."""
+        rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+        """Quaternion rotation ``(w, x, y, z)`` w.r.t. the parent frame. Defaults to (1.0, 0.0, 0.0, 0.0)."""
+
+    class_type: type = SequentialPoseCommand
+
+    asset_name: str = MISSING  # type: ignore
+    """Name of the asset in the environment for which the commands are generated."""
+
+    body_name: str = MISSING  # type: ignore
+    """Name of the end-effector body used for pose commands."""
+
+    body_offset: OffsetCfg | None = None
+    """Offset of target frame w.r.t. to the body frame. Defaults to None, in which case no offset is applied."""
+
+    commands: Sequence[BaseCmd] = MISSING  # type: ignore
+    """The sequence of commands to execute."""
+
+    valve_asset_name: str | None = None
+    """Valve articulation to use for per-episode open/close tasks."""
+    valve_joint_name: str = "RevoluteJoint"
+    """Valve joint controlled by the task."""
+    open_task_prob: float = 0.5
+    """Probability of selecting the open endpoint when both directions are feasible."""
+    valve_joint_closed: float = 0.0
+    """Joint position representing the closed endpoint [rad]."""
+    valve_joint_open: float = -math.pi / 2
+    """Joint position representing the open endpoint [rad]."""
+    valve_min_delta_rad: float = math.radians(20.0)
+    """Minimum required distance between the sampled start and desired endpoint."""
+    valve_ee_joint_angle_scale: float = 1.0
+    """Scale from remaining valve error to the commanded EE arc angle."""
+
+    debug_vis: bool = False
+
+    goal_pose_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(  # type: ignore
+        prim_path="/Visuals/Command/pose_goal"
+    )
+
+    """The configuration for the goal pose visualization marker. Defaults to GREEN_ARROW_X_MARKER_CFG."""
+
+    current_pose_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(  # type: ignore
+        prim_path="/Visuals/Command/current_pose"
+    )
+
+    """The configuration for the current pose visualization marker. Defaults to BLUE_ARROW_X_MARKER_CFG."""
+
+    # Set the scale of the visualization markers to (0.5, 0.5, 0.5)
+    goal_pose_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)  # type: ignore
+    current_pose_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)  # type: ignore
+
+
+@configclass
+class BaseCmd:
+    """Base configuration for frame pose command generators."""
+
+    class_type: Type[_BaseCmdHandler] = MISSING  # type: ignore
+
+
+@configclass
+class GoToFrameCfg(BaseCmd):
+    class_type = _GoToFrameHandler
+
+    frame_name: str = MISSING  # type: ignore
+    """Name of the frame used for pose commands."""
+    target_frame_name: str = MISSING  # type: ignore
+    """Index of the frame used for pose commands."""
+    gripper_open: bool = False
+    """Status of the gripper during the command."""
+    distance_threshold: float = 0.05
+    """Distance threshold to consider the command achieved."""
+    duration_s: float | None = None
+    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
+    num_frames: int | None = 10
+    """Legacy number of updates used when :attr:`duration_s` is None."""
+
+
+@configclass
+class GripperCommand(BaseCmd):
+    class_type = _GripperHandler
+
+    open_gripper: bool = True
+    """Whether to open or close the gripper."""
+    duration_s: float | None = None
+    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
+    num_frames: int | None = 1
+    """Legacy number of updates used when :attr:`duration_s` is None."""
+
+
+@configclass
+class RotateFrameCfg(BaseCmd):
+    class_type = _RotateFrameHandler
+
+    frame_name: str = MISSING  # type: ignore
+    """Name of the frame used to rotate around."""
+    target_frame_name: str = "rotate_frame"
+    """Name of the frame used to rotate around."""
+    axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
+    """Rotation axis expressed in ``target_frame_name`` coordinates."""
+    angle_deg: float = -90.0
+    """Angle in degrees to rotate around :attr:`axis`."""
+    duration_s: float | None = None
+    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
+    num_frames: int | None = 10
+    """Legacy number of updates used when :attr:`duration_s` is None."""
+    gripper_open: bool = False
+    """Status of the gripper during the command."""
+    angle_threshold_deg: float = 5.0
+    """Angle threshold in degrees to consider the command achieved."""

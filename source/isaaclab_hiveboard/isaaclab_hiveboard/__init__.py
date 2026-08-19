@@ -1,14 +1,17 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# Copyright (c) 2024-2026 EESC-LabRoM & The Isaac Lab Project Developers.
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Python module serving as a project/extension template.
+Python module for the HiveBoard multi-robot manipulation extension.
 """
 
 # Register Gym environments.
 from .tasks import *
 
-# Register UI extensions.
-from .ui_extension_example import *
+# Register UI extensions if Omniverse Kit is running.
+try:
+    from .ui_extension_example import *
+except (ImportError, ModuleNotFoundError):
+    pass

@@ -1,0 +1,315 @@
+##
+## Copyright (c) 2024 Boston Dynamics AI Institute LLC. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+robot_cfg:
+  kinematics:
+    use_usd_kinematics: False
+    isaac_usd_path: "/Isaac/Robots/BostonDynamics/spot_arm.usd"
+    usd_path: "robot/spot/spot_with_arm.usd"
+    usd_robot_root: "/spot"
+    
+    # Assuming standard Z-axis orientation for converted USD joints
+    usd_flip_joints: {
+      "fl_hx": "Z", "fl_hy": "Z", "fl_kn": "Z",
+      "fr_hx": "Z", "fr_hy": "Z", "fr_kn": "Z",
+      "hl_hx": "Z", "hl_hy": "Z", "hl_kn": "Z",
+      "hr_hx": "Z", "hr_hy": "Z", "hr_kn": "Z",
+      "arm_sh0": "Z", "arm_sh1": "Z",
+      "arm_el0": "Z", "arm_el1": "Z",
+      "arm_wr0": "Z", "arm_wr1": "Z",
+      "arm_f1x": "Z"
+    }
+
+    usd_flip_joint_limits: []
+    urdf_path: "robot/spot_description/spot_with_arm.urdf"
+    asset_root_path: "robot/spot_description"
+    base_link: "body"
+    ee_link: "arm_link_wr1"
+
+    collision_link_names:
+      [
+        "body",
+        # "fl_hip", "fl_uleg", "fl_lleg",
+        # "fr_hip", "fr_uleg", "fr_lleg",
+        # "hl_hip", "hl_uleg", "hl_lleg",
+        # "hr_hip", 
+        # "hr_uleg", "hr_lleg",
+        #"arm_link_sh0", "arm_link_sh1",
+        "arm_link_el0", 
+        #"arm_link_el1",
+        "arm_link_wr0", 
+        "arm_link_wr1",
+        "arm_link_fngr",
+        "arm_link_jaw"
+      ]
+    
+    # collision_spheres: "spheres/spot_mesh.yml"
+    collision_sphere_buffer: 0.005
+    use_global_cumul: True
+
+    # Standard adjacent link ignore list
+    self_collision_ignore:
+      {
+        "body": ["fl_hip", "fr_hip", "hl_hip", "hr_hip", "arm_link_sh0"],
+        "fl_hip": ["body", "fl_uleg"], "fl_uleg": ["fl_hip", "fl_lleg"], "fl_lleg": ["fl_uleg"],
+        "fr_hip": ["body", "fr_uleg"], "fr_uleg": ["fr_hip", "fr_lleg"], "fr_lleg": ["fr_uleg"],
+        "hl_hip": ["body", "hl_uleg"], "hl_uleg": ["hl_hip", "hl_lleg"], "hl_lleg": ["hl_uleg"],
+        "hr_hip": ["body", "hr_uleg"], "hr_uleg": ["hr_hip", "hr_lleg"], "hr_lleg": ["hr_uleg"],
+        "arm_link_sh0": ["body", "arm_link_sh1"],
+        "arm_link_sh1": ["arm_link_sh0", "arm_link_el0"],
+        "arm_link_el0": ["arm_link_sh1", "arm_link_el1"],
+        "arm_link_el1": ["arm_link_el0", "arm_link_wr0"],
+        "arm_link_wr0": ["arm_link_el1", "arm_link_wr1"],
+        "arm_link_wr1": ["arm_link_wr0", "arm_link_fngr", "arm_link_jaw"],
+        "arm_link_fngr": ["arm_link_wr1", "arm_link_jaw"],
+        "arm_link_jaw": ["arm_link_wr1", "arm_link_fngr"]
+      }
+
+    self_collision_buffer:
+      {
+        "body": 0.01,
+        "fl_hip": 0.01, "fl_uleg": 0.01, "fl_lleg": 0.02,
+        "fr_hip": 0.01, "fr_uleg": 0.01, "fr_lleg": 0.02,
+        "hl_hip": 0.01, "hl_uleg": 0.01, "hl_lleg": 0.02,
+        "hr_hip": 0.01, "hr_uleg": 0.01, "hr_lleg": 0.02,
+        "arm_link_sh0": 0.02, "arm_link_sh1": 0.02,
+        "arm_link_el0": 0.02, "arm_link_el1": 0.02,
+        "arm_link_wr0": 0.01, "arm_link_wr1": 0.01,
+        "arm_link_fngr": 0.01
+      }
+
+    mesh_link_names:
+      [
+        "body",
+        "fl_hip", "fl_uleg", "fl_lleg",
+        "fr_hip", "fr_uleg", "fr_lleg",
+        "hl_hip", "hl_uleg", "hl_lleg",
+        "hr_hip", "hr_uleg", "hr_lleg",
+        "arm_link_sh0", "arm_link_sh1",
+        "arm_link_el0", "arm_link_el1",
+        "arm_link_wr0", "arm_link_wr1",
+        "arm_link_fngr", "arm_link_jaw"
+      ]
+    lock_joints: { "arm_f1x": 0.0 }
+    cspace:
+      # Order: FL, FR, HL, HR, Arm(sh0->wr1), Gripper
+      joint_names: [
+        "fl_hx", "fl_hy", "fl_kn",
+        "fr_hx", "fr_hy", "fr_kn",
+        "hl_hx", "hl_hy", "hl_kn",
+        "hr_hx", "hr_hy", "hr_kn",
+        "arm_sh0", "arm_sh1", "arm_el0", "arm_el1", "arm_wr0", "arm_wr1",
+        "arm_f1x"
+      ]
+      
+      # Based on SPOT_DEFAULT_JOINT_POS
+      retract_config: [
+        0.12, 0.5, -1.0,   # FL
+        -0.12, 0.5, -1.0,  # FR
+        0.12, 0.5, -1.0,   # HL
+        -0.12, 0.5, -1.0,  # HR
+        0.0, -0.9, 1.8, 0.0, -0.9, 0.0, # Arm
+        -1.54 # Gripper
+      ]
+
+      
+      null_space_weight: [1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1,1,1,1, 1]
+      cspace_distance_weight: [1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1,1,1,1, 1]
+      max_acceleration: 15.0
+      max_jerk: 500.0
+
+    collision_spheres:
+        # ------------------------------------------------
+        # BODY
+        # ------------------------------------------------
+        body:
+            # Main chassis along X axis
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.09
+            - "center": [0.15, 0.0, 0.0]
+              "radius": 0.09
+            - "center": [-0.15, 0.0, 0.0]
+              "radius": 0.09
+            - "center": [0.30, 0.0, 0.0]
+              "radius": 0.085
+            - "center": [-0.30, 0.0, 0.0]
+              "radius": 0.085
+            - "center": [0.42, 0.0, 0.0]
+              "radius": 0.08
+            - "center": [-0.42, 0.0, 0.0]
+              "radius": 0.08
+
+        # ------------------------------------------------
+        # LEGS - FRONT LEFT
+        # ------------------------------------------------
+        fl_hip:
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.06
+        fl_uleg:
+            # Interpolated from hip joint to knee joint (approx -0.32m in Z)
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.05
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.045
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.045
+        fl_lleg:
+            # Interpolated from knee to foot (approx -0.33m in Z)
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.03
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.025
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.02
+            - "center": [0.0, 0.0, -0.33] # Near foot
+              "radius": 0.035
+
+        # ------------------------------------------------
+        # LEGS - FRONT RIGHT
+        # ------------------------------------------------
+        fr_hip:
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.06
+        fr_uleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.05
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.045
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.045
+        fr_lleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.03
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.025
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.02
+            - "center": [0.0, 0.0, -0.33]
+              "radius": 0.035
+
+        # ------------------------------------------------
+        # LEGS - HIND LEFT
+        # ------------------------------------------------
+        hl_hip:
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.06
+        hl_uleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.05
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.045
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.045
+        hl_lleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.03
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.025
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.02
+            - "center": [0.0, 0.0, -0.33]
+              "radius": 0.035
+
+        # ------------------------------------------------
+        # LEGS - HIND RIGHT
+        # ------------------------------------------------
+        hr_hip:
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.06
+        hr_uleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.05
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.045
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.045
+        hr_lleg:
+            - "center": [0.0, 0.0, -0.05]
+              "radius": 0.03
+            - "center": [0.0, 0.0, -0.15]
+              "radius": 0.025
+            - "center": [0.0, 0.0, -0.25]
+              "radius": 0.02
+            - "center": [0.0, 0.0, -0.33]
+              "radius": 0.035
+
+        # ------------------------------------------------
+        # ARM
+        # ------------------------------------------------
+        arm_link_sh0: # Turret base
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.09
+            - "center": [0.0, 0.0, 0.08]
+              "radius": 0.08
+              
+        arm_link_sh1: # Shoulder pitch joint
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.08
+            - "center": [0.1, 0.0, 0.0]
+              "radius": 0.07
+
+        arm_link_el0: # Upper Arm (First long link)
+            # Joint is at x=0.3385
+            - "center": [0.05, 0.0, 0.0]
+              "radius": 0.06
+            # - "center": [0.15, 0.0, 0.0]
+            #   "radius": 0.055
+            # - "center": [0.25, 0.0, 0.0]
+            #   "radius": 0.055
+            # - "center": [0.33, 0.0, 0.0] # Near Elbow
+            #   "radius": 0.06
+
+        arm_link_el1: # Forearm (Second long link)
+            # Joint is at x=0.4033
+            - "center": [0.05, 0.0, 0.0]
+              "radius": 0.055
+            - "center": [0.15, 0.0, 0.0]
+              "radius": 0.05
+            - "center": [0.25, 0.0, 0.0]
+              "radius": 0.05
+            - "center": [0.35, 0.0, 0.0]
+              "radius": 0.05
+            - "center": [0.40, 0.0, 0.0] # Near Wrist
+              "radius": 0.055
+
+        arm_link_wr0: # Wrist Roll
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.04
+
+        arm_link_wr1: # Wrist Pitch
+            - "center": [0.0, 0.0, 0.0]
+              "radius": 0.04
+            - "center": [0.06, 0.0, 0.0]
+              "radius": 0.035
+
+        # ------------------------------------------------
+        # GRIPPER
+        # ------------------------------------------------
+        arm_link_fngr: # Moving finger/Gripper body
+            - "center": [0.02, 0.0, 0.0]
+              "radius": 0.03
+            - "center": [0.05, 0.015, 0.0]
+              "radius": 0.02
+            - "center": [0.05, -0.015, 0.0]
+              "radius": 0.02
+            - "center": [0.09, 0.0, 0.0] # Tip
+              "radius": 0.02
+            
+        arm_link_jaw: # Fixed lower jaw / Camera housing
+            # Base of the jaw (intersects with wrist/protects camera)
+            - "center": [0.12, 0.0, -0.025]
+              "radius": 0.025
+            # Middle of the jaw
+            - "center": [0.15, 0.0, -0.025]
+              "radius": 0.04
+            # Tip of the jaw
+            - "center": [0.20, 0.0, -0.025]
+              "radius": 0.02         
