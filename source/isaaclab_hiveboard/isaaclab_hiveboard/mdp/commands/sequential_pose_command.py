@@ -4,7 +4,6 @@ import math
 from dataclasses import MISSING
 from typing import Sequence, Type
 
-import isaaclab.utils.math as PoseUtils
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import Articulation
@@ -345,27 +344,7 @@ class _BaseCmdHandler:
         self._asset = command_term._asset
         self._device = command_term.device
         self._num_envs = command_term.num_envs
-        self._num_steps = self._resolve_num_steps()
-
-    def _resolve_num_steps(self) -> int:
-        """Resolve a command duration to environment updates."""
-        duration_s = getattr(self.cfg, "duration_s", None)
-        if duration_s is not None:
-            if duration_s <= 0.0:
-                raise ValueError(
-                    f"{type(self.cfg).__name__}.duration_s must be positive"
-                )
-            return max(
-                1,
-                math.ceil(duration_s / self._command_term._env.step_dt - 1.0e-9),
-            )
-        num_frames = getattr(self.cfg, "num_frames", None)
-        if num_frames is None or num_frames <= 0:
-            raise ValueError(
-                f"{type(self.cfg).__name__} requires a positive duration_s "
-                "or legacy num_frames"
-            )
-        return int(num_frames)
+        self._dt = float(command_term._env.step_dt)
 
     def reset(self, env_ids: torch.Tensor):
         """Reset the handler for the given environment IDs."""
@@ -383,6 +362,35 @@ class _BaseCmdHandler:
         """Get the target pose in the base frame for the given environment IDs."""
         raise NotImplementedError
 
+    def _pack_command(
+        self, gripper_open: bool, pos: torch.Tensor, quat: torch.Tensor
+    ) -> torch.Tensor:
+        command = torch.zeros(pos.shape[0], 8, device=self._device)
+        command[:, 0] = 1.0 if gripper_open else -1.0
+        command[:, 1:4] = pos
+        command[:, 4:8] = quat
+        return command
+
+    def _step_pos_towards(
+        self, current: torch.Tensor, target: torch.Tensor, velocity: float
+    ) -> torch.Tensor:
+        """Advance ``current`` toward ``target`` by at most ``velocity * dt``."""
+        delta = target - current
+        dist = torch.linalg.vector_norm(delta, dim=-1, keepdim=True)
+        scale = torch.clamp(velocity * self._dt / dist.clamp(min=1.0e-8), max=1.0)
+        return current + delta * scale
+
+    def _step_quat_towards(
+        self, current: torch.Tensor, target: torch.Tensor, angular_velocity: float
+    ) -> torch.Tensor:
+        """Advance ``current`` toward ``target`` by at most ``angular_velocity * dt``."""
+        err = math_utils.quat_box_minus(target, current)
+        angle = torch.linalg.vector_norm(err, dim=-1, keepdim=True)
+        scale = torch.clamp(
+            angular_velocity * self._dt / angle.clamp(min=1.0e-8), max=1.0
+        )
+        return math_utils.quat_box_plus(current, err * scale)
+
 
 class _GoToFrameHandler(_BaseCmdHandler):
     """Handles the GoToFrame command."""
@@ -394,89 +402,55 @@ class _GoToFrameHandler(_BaseCmdHandler):
     ):
         super().__init__(cfg, command_term)
         self.cfg: GoToFrameCfg
+        if self.cfg.velocity <= 0.0:
+            raise ValueError("GoToFrameCfg.velocity must be positive")
+        if self.cfg.angular_velocity <= 0.0:
+            raise ValueError("GoToFrameCfg.angular_velocity must be positive")
+        if self.cfg.distance_threshold < 0.0:
+            raise ValueError("GoToFrameCfg.distance_threshold must be non-negative")
+        if self.cfg.orientation_threshold_deg < 0.0:
+            raise ValueError(
+                "GoToFrameCfg.orientation_threshold_deg must be non-negative"
+            )
+
         self._frame = command_term._env.scene[cfg.frame_name]
         self._frame_idx = self._frame.data.target_frame_names.index(
             cfg.target_frame_name
         )
-        self.target_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
-        self.target_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
-        self.target_quat_b[:, 0] = 1.0
-
-        self.pos_steps = torch.zeros(
-            (self._num_envs, self._num_steps + 1, 3), device=self._device
-        )
-        self.rot_steps = torch.zeros(
-            (self._num_envs, self._num_steps + 1, 4), device=self._device
-        )
-
-        self._current_frame = torch.zeros(
-            self._num_envs, dtype=torch.int64, device=self._device
-        )
+        self.command_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
+        self.command_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self.command_quat_b[:, 0] = 1.0
+        self._ori_threshold_rad = math.radians(self.cfg.orientation_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
-        self.target_pos_b[env_ids], self.target_quat_b[env_ids] = (
-            self.get_target_in_base_frame(env_ids)
-        )
-
-        current_pose_b, current_quat_b = self._command_term._get_ee_in_base_frame(
-            env_ids
-        )
-
-        delta_pos = self.target_pos_b[env_ids] - current_pose_b
-
-        # Linear interpolation of positions
-        pos_step_size = delta_pos / self._num_steps
-        grid = torch.arange(self._num_steps, dtype=torch.float32)
-
-        pos_steps = torch.stack(
-            [current_pose_b + grid[i] * pos_step_size for i in range(self._num_steps)]
-        ).permute(1, 0, 2)
-
-        # Add initial endpoint
-        self.pos_steps[env_ids] = torch.cat(
-            [pos_steps, self.target_pos_b[env_ids].unsqueeze(1)], dim=1
-        )
-
-        # Interpolate rotations
-        self.rot_steps[env_ids] = torch.stack(
-            [
-                PoseUtils.quat_from_matrix(
-                    PoseUtils.interpolate_rotations(
-                        R1=PoseUtils.matrix_from_quat(current_quat),
-                        R2=PoseUtils.matrix_from_quat(target_quat),
-                        num_steps=self._num_steps,
-                        axis_angle=True,
-                    )
-                )
-                for current_quat, target_quat in zip(
-                    current_quat_b, self.target_quat_b[env_ids]
-                )
-            ],
-            dim=0,
-        )
-
-        self._current_frame[env_ids] = 0
+        ee_pos_b, ee_quat_b = self._command_term._get_ee_in_base_frame(env_ids)
+        self.command_pos_b[env_ids] = ee_pos_b
+        self.command_quat_b[env_ids] = ee_quat_b
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
-        command = torch.zeros(int(torch.sum(env_mask)), 8, device=self._device)
-        command[:, 0] = 1.0 if self.cfg.gripper_open else -1.0
-        command[:, 1:4] = self.pos_steps[env_mask, self._current_frame[env_mask]]
-        command[:, 4:8] = self.rot_steps[env_mask, self._current_frame[env_mask]]
+        env_ids = torch.where(env_mask)[0]
+        target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
 
-        self._current_frame[env_mask] = torch.clamp(
-            self._current_frame[env_mask] + 1, max=self._num_steps
+        self.command_pos_b[env_ids] = self._step_pos_towards(
+            self.command_pos_b[env_ids], target_pos_b, self.cfg.velocity
+        )
+        self.command_quat_b[env_ids] = self._step_quat_towards(
+            self.command_quat_b[env_ids], target_quat_b, self.cfg.angular_velocity
+        )
+        return self._pack_command(
+            self.cfg.gripper_open,
+            self.command_pos_b[env_ids],
+            self.command_quat_b[env_ids],
         )
 
-        return command
-
-    # def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-    #     current_pose_b, _ = self._command_term._get_ee_in_base_frame(env_ids)
-    #     target_pose_b, _ = self.get_target_in_base_frame(env_ids)
-
-    #     distance = torch.norm(current_pose_b - target_pose_b, dim=-1)
-    #     return distance < self.cfg.distance_threshold
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        return self._current_frame[env_ids] >= self._num_steps
+        ee_pos_b, ee_quat_b = self._command_term._get_ee_in_base_frame(env_ids)
+        target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
+        pos_err = torch.linalg.vector_norm(ee_pos_b - target_pos_b, dim=-1)
+        ori_err = math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)
+        return (pos_err <= self.cfg.distance_threshold) & (
+            ori_err <= self._ori_threshold_rad
+        )
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         # Target pose in base frame
@@ -500,22 +474,22 @@ class _GripperHandler(_BaseCmdHandler):
     def __init__(self, cfg: GripperCommand, command_term: SequentialPoseCommand):
         super().__init__(cfg, command_term)
         self.cfg: GripperCommand
-        self._wait_frames = torch.zeros(
-            self._num_envs, device=self._device, dtype=torch.long
-        )
+        if self.cfg.duration_s <= 0.0:
+            raise ValueError("GripperCommand.duration_s must be positive")
+        self._elapsed_s = torch.zeros(self._num_envs, device=self._device)
 
     def reset(self, env_ids: torch.Tensor):
-        self._wait_frames[env_ids] = 0
+        self._elapsed_s[env_ids] = 0.0
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
-        self._wait_frames[env_mask] += 1
-        # Get the last command for the gripper pose
+        self._elapsed_s[env_mask] += self._dt
+        # Hold the last pose while changing only the gripper command.
         last_command = self._command_term.command[env_mask].clone()
         last_command[:, 0] = 1.0 if self.cfg.open_gripper else -1.0
         return last_command
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        return self._wait_frames[env_ids] >= self._num_steps
+        return self._elapsed_s[env_ids] >= self.cfg.duration_s
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return (
@@ -534,6 +508,11 @@ class _RotateFrameHandler(_BaseCmdHandler):
     ):
         super().__init__(cfg, command_term)
         self.cfg: RotateFrameCfg
+        if self.cfg.angular_velocity <= 0.0:
+            raise ValueError("RotateFrameCfg.angular_velocity must be positive")
+        if self.cfg.angle_threshold_deg < 0.0:
+            raise ValueError("RotateFrameCfg.angle_threshold_deg must be non-negative")
+
         self._frame: FrameTransformer = command_term._env.scene[cfg.frame_name]
         self._frame_idx = self._frame.data.target_frame_names.index(
             cfg.target_frame_name
@@ -541,18 +520,17 @@ class _RotateFrameHandler(_BaseCmdHandler):
         self.initial_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.axis_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.axis_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
-        self._frame_count = torch.zeros(
-            self._num_envs, device=self._device, dtype=torch.long
-        )
+        self._progress_abs = torch.zeros(self._num_envs, device=self._device)
         self.angle_rad_tensor = torch.deg2rad(
             torch.tensor(self.cfg.angle_deg, device=self._device, dtype=torch.float32)
         ).repeat(self._num_envs)
         self.final_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.rot_axis_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.radius_vec = torch.zeros(self._num_envs, 3, device=self._device)
+        self._angle_threshold_rad = math.radians(self.cfg.angle_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
-        self._frame_count[env_ids] = 0
+        self._progress_abs[env_ids] = 0.0
 
         if self._command_term._valve_asset is not None:
             self._command_term.recompute_valve_rotate_angle(env_ids)
@@ -654,12 +632,14 @@ class _RotateFrameHandler(_BaseCmdHandler):
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         env_ids = torch.where(env_mask)[0]
-        self._frame_count[env_mask] += 1
-
-        # Interpolation factor
-        alpha = self._frame_count[env_mask].float() / self._num_steps
-        alpha = torch.clamp(alpha, 0.0, 1.0)
-        angle = self.angle_rad_tensor[env_mask] * alpha
+        abs_angle = torch.abs(self.angle_rad_tensor[env_ids])
+        self._progress_abs[env_ids] = torch.clamp(
+            self._progress_abs[env_ids] + self.cfg.angular_velocity * self._dt,
+            max=abs_angle,
+        )
+        angle = torch.copysign(
+            self._progress_abs[env_ids], self.angle_rad_tensor[env_ids]
+        )
 
         # -- position
         # rotate radius vector using Rodrigues' rotation formula
@@ -668,28 +648,26 @@ class _RotateFrameHandler(_BaseCmdHandler):
         )
         target_pos_b = self.axis_pos_b[env_ids] + v_rot
 
-        # -- orientation
-        # slerp
-        interp_quat_b = torch.stack(
-            [
-                math_utils.quat_slerp(
-                    self.initial_quat_b[env_id],
-                    self.final_quat_b[env_id],
-                    fraction.item(),
-                )
-                for env_id, fraction in zip(env_ids, alpha)
-            ]
+        # -- orientation along the same geodesic as the remaining arc
+        alpha = torch.where(
+            abs_angle > 1.0e-8,
+            self._progress_abs[env_ids] / abs_angle,
+            torch.ones_like(abs_angle),
+        )
+        delta = math_utils.quat_box_minus(
+            self.final_quat_b[env_ids], self.initial_quat_b[env_ids]
+        )
+        interp_quat_b = math_utils.quat_box_plus(
+            self.initial_quat_b[env_ids], alpha.unsqueeze(-1) * delta
         )
 
-        command = torch.zeros(int(torch.sum(env_mask)), 8, device=self._device)
-        command[:, 0] = 1.0 if self.cfg.gripper_open else -1.0
-        command[:, 1:4] = target_pos_b
-        command[:, 4:8] = interp_quat_b
-
-        return command
+        return self._pack_command(self.cfg.gripper_open, target_pos_b, interp_quat_b)
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        return self._frame_count[env_ids] >= self._num_steps
+        remaining = (
+            torch.abs(self.angle_rad_tensor[env_ids]) - self._progress_abs[env_ids]
+        )
+        return remaining <= self._angle_threshold_rad
 
     def _get_rotation_axis_pose_b(self, env_ids: torch.Tensor):
         # Target pose in base frame
@@ -790,12 +768,14 @@ class GoToFrameCfg(BaseCmd):
     """Index of the frame used for pose commands."""
     gripper_open: bool = False
     """Status of the gripper during the command."""
+    velocity: float = 0.2
+    """Linear speed of the commanded pose toward the target frame [m/s]."""
+    angular_velocity: float = 1.0
+    """Angular speed of the commanded orientation toward the target [rad/s]."""
     distance_threshold: float = 0.05
-    """Distance threshold to consider the command achieved."""
-    duration_s: float | None = None
-    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
-    num_frames: int | None = 10
-    """Legacy number of updates used when :attr:`duration_s` is None."""
+    """End-effector distance to the target frame at which the command is done [m]."""
+    orientation_threshold_deg: float = 10.0
+    """End-effector orientation error to the target at which the command is done [deg]."""
 
 
 @configclass
@@ -804,10 +784,8 @@ class GripperCommand(BaseCmd):
 
     open_gripper: bool = True
     """Whether to open or close the gripper."""
-    duration_s: float | None = None
-    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
-    num_frames: int | None = 1
-    """Legacy number of updates used when :attr:`duration_s` is None."""
+    duration_s: float = 0.2
+    """Hold time after changing the gripper command [s]."""
 
 
 @configclass
@@ -822,11 +800,9 @@ class RotateFrameCfg(BaseCmd):
     """Rotation axis expressed in ``target_frame_name`` coordinates."""
     angle_deg: float = -90.0
     """Angle in degrees to rotate around :attr:`axis`."""
-    duration_s: float | None = None
-    """Physical duration [s]. When set, this takes precedence over ``num_frames``."""
-    num_frames: int | None = 10
-    """Legacy number of updates used when :attr:`duration_s` is None."""
+    angular_velocity: float = 0.3
+    """Angular speed of the commanded arc [rad/s]."""
     gripper_open: bool = False
     """Status of the gripper during the command."""
     angle_threshold_deg: float = 5.0
-    """Angle threshold in degrees to consider the command achieved."""
+    """Remaining commanded arc at which the command is done [deg]."""

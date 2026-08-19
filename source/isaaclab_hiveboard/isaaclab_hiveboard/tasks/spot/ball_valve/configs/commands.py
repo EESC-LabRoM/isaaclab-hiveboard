@@ -31,14 +31,14 @@ class FramePoseCommandsCfg:
                 gripper_open=True,
                 distance_threshold=0.03,
                 target_frame_name="approaching",
-                duration_s=0.625,
+                velocity=0.25,
             ),
             GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.02,
                 target_frame_name="lever_pivot",
-                duration_s=0.5,
+                velocity=0.15,
             ),
             # GripperCommand(open_gripper=False, duration_s=0.3),
             RotateFrameCfg(
@@ -46,10 +46,10 @@ class FramePoseCommandsCfg:
                 target_frame_name="rotate_frame",
                 # Fallback only; the command term uses the remaining valve error.
                 angle_deg=-90,
-                duration_s=5.0,
+                angular_velocity=0.3,
                 gripper_open=False,
             ),
-            # Hold the finished 90° pose so the end state reads on video.
+            # Hold the finished pose so the end state reads on video.
             GripperCommand(open_gripper=False, duration_s=0.075),
         ],
         body_offset=SequentialPoseCommandCfg.OffsetCfg(
