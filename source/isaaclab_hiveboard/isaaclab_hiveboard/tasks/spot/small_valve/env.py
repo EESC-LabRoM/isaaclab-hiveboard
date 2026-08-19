@@ -9,7 +9,7 @@ from isaaclab.utils import configclass
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.actions import (
     SpotIKAbsActionCfg,
 )
-from isaaclab_hiveboard.tasks.spot.ball_valve.configs.observations import (
+from isaaclab_hiveboard.tasks.spot.small_valve.configs.observations import (
     ObservationsCfg,
 )
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.terminations import (
