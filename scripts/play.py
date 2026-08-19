@@ -268,6 +268,7 @@ def main():
     relative_controller = None
     if set(action_terms) == {"gripper_action", "arm_action"} and 6 in action_term_dims:
         from isaaclab_hiveboard.mdp.relative_ee_pose_controller import RelativeEePoseController
+
         relative_controller = RelativeEePoseController(env)
 
     if action_terms == ["gripper_action", "arm_action"] and action_term_dims == [1, 7]:

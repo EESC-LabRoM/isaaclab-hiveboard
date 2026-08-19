@@ -30,9 +30,7 @@ from isaaclab_hiveboard.tasks.franka.lever_valve.configs.scene import (
 class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the Franka Emika Panda lever / ball valve manipulation environment."""
 
-    scene: FrankaLeverValveSceneCfg = FrankaLeverValveSceneCfg(
-        num_envs=1, env_spacing=3.0
-    )  # type: ignore
+    scene: FrankaLeverValveSceneCfg = FrankaLeverValveSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
     actions: FrankaIKAbsActionCfg = FrankaIKAbsActionCfg()  # type: ignore
     terminations: TerminationsCfg = TerminationsCfg()  # type: ignore
@@ -52,15 +50,5 @@ class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = (0.0, 0.0, 0.0)
         self.viewer.resolution = (2560, 1440)
         self.sim.dt = 1 / 200
-        self.sim.render_interval = 10
-        self.sim.render.antialiasing_mode = "DLAA"
-        self.sim.render.dlss_mode = 2
-        self.sim.render.enable_reflections = True
-        self.sim.render.enable_shadows = True
-        self.sim.render.enable_direct_lighting = True
-        self.sim.render.enable_ambient_occlusion = True
-        self.sim.render.enable_global_illumination = True
-        self.sim.render.enable_dl_denoiser = True
-        self.sim.render.samples_per_pixel = 8
         self.sim.physx.bounce_threshold_velocity = 0.2
         self.sim.physx.friction_correlation_distance = 0.00625

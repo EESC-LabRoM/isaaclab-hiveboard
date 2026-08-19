@@ -59,17 +59,7 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.resolution = (2560, 1440)
         # simulation settings
         self.sim.dt = 1 / 200  # 200Hz
-        self.sim.render_interval = 10
         # Prefer native-res AA over DLSS upscale for recorded video.
-        self.sim.render.antialiasing_mode = "DLAA"
-        self.sim.render.dlss_mode = 2  # Quality, if DLSS is selected instead
-        self.sim.render.enable_reflections = True
-        self.sim.render.enable_shadows = True
-        self.sim.render.enable_direct_lighting = True
-        self.sim.render.enable_ambient_occlusion = True
-        self.sim.render.enable_global_illumination = True
-        self.sim.render.enable_dl_denoiser = True
-        self.sim.render.samples_per_pixel = 8
         self.sim.physx.bounce_threshold_velocity = 0.2
         # self.sim.physx.bounce_threshold_velocity = 0.01
         self.sim.physx.friction_correlation_distance = 0.00625
@@ -90,5 +80,5 @@ class SpotBallValveDeltaEnvCfg_PLAY(SpotBallValveEnvCfg):
         super().__post_init__()
         # Collect and execute learned relative commands at 20 Hz. Command
         # phases are duration-based, so their wall-clock timing is unchanged.
-        self.decimation = 10
+        # self.decimation = 10
         self.episode_length_s = 15.0
