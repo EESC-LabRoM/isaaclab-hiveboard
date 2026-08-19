@@ -23,9 +23,7 @@ class ValveEventCfg:
         func=mdp.randomize_rigid_body_material,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg(
-                "robot", body_names=["arm_link_fngr", "arm_link_wr1"]
-            ),
+            "asset_cfg": SceneEntityCfg("robot", body_names=["arm_link_fngr", "arm_link_wr1"]),
             "static_friction_range": (0.3, 0.3),
             "dynamic_friction_range": (0.3, 0.3),
             "restitution_range": (0.0, 0.0),
@@ -86,7 +84,7 @@ class ValveEventCfg:
             # orientation, matching Spot's nominal arm pose.  The pi yaw makes
             # the front of the HiveBoard valve face the robot.
             "valve_root_pose": OffsetCfg(
-                pos=(1.14, 0.06, 0.154),
+                pos=(1.0, 0.06, 0.154),
                 rot=(0.0, 0.0, 0.0, 1.0),
             ),
             "ee_offset": OffsetCfg(

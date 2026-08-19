@@ -26,7 +26,7 @@ from isaaclab_hiveboard.tasks.spot.ball_valve.configs.terminations import (
     DeltaCollectionTerminationsCfg,
     TerminationsCfg,
 )
-from isaaclab_hiveboard.tasks.spot.cabinet.configs.recorders import (
+from isaaclab_hiveboard.mdp.recorders import (
     SpotManipulationRecorderCfg,
 )
 

@@ -14,12 +14,8 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play and debug HiveBoard manipulation tasks.")
-parser.add_argument(
-    "--num_envs", type=int, default=1, help="Number of environments to spawn."
-)
-parser.add_argument(
-    "--video", action="store_true", default=False, help="Record videos during playback."
-)
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during playback.")
 parser.add_argument(
     "--video_length",
     type=int,
@@ -93,12 +89,7 @@ parser.add_argument(
     default=0,
     help="Environment index to inspect with --pose-debug (default: 0).",
 )
-parser.add_argument(
-    "--pose-debug-csv",
-    type=str,
-    default=None,
-    help="Optional path for one row of pose diagnostics per environment step.",
-)
+
 parser.add_argument(
     "--max-steps",
     type=int,
@@ -136,28 +127,42 @@ import torch
 from tqdm import tqdm
 
 import isaaclab_hiveboard  # noqa: F401
-from isaaclab_hiveboard.utils.pose_diagnostics import PoseDiagnostics
 
 
 def main():
     """Main function."""
     if args_cli.task == "Isaac-HiveBoard-Spot-BallValve-v0" or args_cli.task == "Spot-Manipulation-Ball-Valve":
         from isaaclab_hiveboard.tasks.spot.ball_valve.env import SpotBallValveEnvCfg
+
         env_cfg = SpotBallValveEnvCfg()
     elif args_cli.task == "Isaac-HiveBoard-Spot-BallValve-Play-v0":
         from isaaclab_hiveboard.tasks.spot.ball_valve.env import SpotBallValveDeltaEnvCfg_PLAY
+
         env_cfg = SpotBallValveDeltaEnvCfg_PLAY()
-    elif args_cli.task == "Isaac-HiveBoard-Spot-HighTorqueValve-v0" or args_cli.task == "Spot-Manipulation-High-Torque-Valve":
+    elif (
+        args_cli.task == "Isaac-HiveBoard-Spot-HighTorqueValve-v0"
+        or args_cli.task == "Spot-Manipulation-High-Torque-Valve"
+    ):
         from isaaclab_hiveboard.tasks.spot.high_torque_valve.env import SpotHighTorqueValveEnvCfg
+
         env_cfg = SpotHighTorqueValveEnvCfg()
     elif args_cli.task == "Isaac-HiveBoard-Spot-SmallValve-v0" or args_cli.task == "Spot-Manipulation-Small-Valve":
         from isaaclab_hiveboard.tasks.spot.small_valve.env import SpotSmallValveEnvCfg
+
         env_cfg = SpotSmallValveEnvCfg()
-    elif args_cli.task == "Isaac-HiveBoard-Spot-CircuitBreaker-v0" or args_cli.task == "Spot-Manipulation-Circuit-Breaker":
+    elif (
+        args_cli.task == "Isaac-HiveBoard-Spot-CircuitBreaker-v0"
+        or args_cli.task == "Spot-Manipulation-Circuit-Breaker"
+    ):
         from isaaclab_hiveboard.tasks.spot.circuit_breaker.env import SpotCircuitBreakerEnvCfg
+
         env_cfg = SpotCircuitBreakerEnvCfg()
-    elif args_cli.task == "Isaac-HiveBoard-Franka-CircuitBreaker-v0" or args_cli.task == "Franka-Manipulation-Circuit-Breaker":
+    elif (
+        args_cli.task == "Isaac-HiveBoard-Franka-CircuitBreaker-v0"
+        or args_cli.task == "Franka-Manipulation-Circuit-Breaker"
+    ):
         from isaaclab_hiveboard.tasks.franka.circuit_breaker.env import FrankaCircuitBreakerEnvCfg
+
         env_cfg = FrankaCircuitBreakerEnvCfg()
     elif args_cli.task in (
         "Isaac-HiveBoard-Franka-LeverValve-v0",
@@ -165,9 +170,11 @@ def main():
         "Franka-Manipulation-Ball-Valve",
     ):
         from isaaclab_hiveboard.tasks.franka.lever_valve.env import FrankaLeverValveEnvCfg
+
         env_cfg = FrankaLeverValveEnvCfg()
     elif args_cli.task == "Isaac-HiveBoard-Anymal-BallValve-v0":
         from isaaclab_hiveboard.tasks.anymal.ball_valve.env import AnymalBallValveEnvCfg
+
         env_cfg = AnymalBallValveEnvCfg()
     else:
         # Fallback to standard Gym registration if task is not in the explicit list
@@ -194,9 +201,7 @@ def main():
 
         if args_cli.franka_breaker_pitch_deg is not None:
             if not ("CircuitBreaker" in args_cli.task or "Circuit-Breaker" in args_cli.task):
-                raise ValueError(
-                    "--franka-breaker-pitch-deg is only valid for the Franka circuit-breaker task"
-                )
+                raise ValueError("--franka-breaker-pitch-deg is only valid for the Franka circuit-breaker task")
             pitch = math.radians(args_cli.franka_breaker_pitch_deg)
             quat_w = math.cos(pitch / 2.0)
             quat_y = math.sin(pitch / 2.0)
@@ -260,32 +265,31 @@ def main():
     action_terms = list(base_env.action_manager.active_terms) if hasattr(base_env, "action_manager") else []
     action_term_dims = list(base_env.action_manager.action_term_dim) if hasattr(base_env, "action_manager") else []
 
+    relative_controller = None
+    if set(action_terms) == {"gripper_action", "arm_action"} and 6 in action_term_dims:
+        from isaaclab_hiveboard.mdp.relative_ee_pose_controller import RelativeEePoseController
+        relative_controller = RelativeEePoseController(env)
+
     if action_terms == ["gripper_action", "arm_action"] and action_term_dims == [1, 7]:
+
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return command
     elif action_terms == ["gripper_action", "arm_action"] and action_term_dims == [1, 3]:
+
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return command[:, 0:4]
     elif action_terms == ["arm_action", "gripper_action"] and action_term_dims == [7, 1]:
+
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return torch.cat((command[:, 1:8], command[:, 0:1]), dim=-1)
     elif action_terms == ["arm_action", "gripper_action"] and action_term_dims == [3, 1]:
+
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return torch.cat((command[:, 1:4], command[:, 0:1]), dim=-1)
     else:
+
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return command
-
-    pose_diagnostics = None
-    if args_cli.pose_debug:
-        pose_diagnostics = PoseDiagnostics(
-            base_env,
-            env_index=args_cli.pose_debug_env,
-            print_interval=args_cli.pose_debug_interval,
-            csv_path=args_cli.pose_debug_csv,
-            task_name=args_cli.task,
-        )
-        pose_diagnostics.update(count)
 
     cam = getattr(base_env, "viewport_camera_controller", None)
     start_eye = tuple(base_env.cfg.viewer.eye) if hasattr(base_env.cfg, "viewer") else (2.0, 2.0, 1.0)
@@ -307,9 +311,7 @@ def main():
         eye = _orbit_eye(step)
         if cam is not None:
             if getattr(base_env.cfg.viewer, "origin_type", None) == "asset_body":
-                cam.update_view_to_asset_body(
-                    base_env.cfg.viewer.asset_name, base_env.cfg.viewer.body_name
-                )
+                cam.update_view_to_asset_body(base_env.cfg.viewer.asset_name, base_env.cfg.viewer.body_name)
             cam.update_view_location(eye=eye, lookat=lookat)
             return
         origin = torch.zeros(3, device=base_env.device)
@@ -329,7 +331,9 @@ def main():
             if args_cli.orbit:
                 _apply_orbit(count)
 
-            if isinstance(obs, dict) and "policy" in obs and "command" in obs["policy"]:
+            if relative_controller is not None:
+                action = relative_controller.compute()
+            elif isinstance(obs, dict) and "policy" in obs and "command" in obs["policy"]:
                 command = obs["policy"]["command"]
                 action = _route_pose_command(command)
             else:
@@ -339,16 +343,11 @@ def main():
             count += 1
             pbar.update(1)
 
-            if pose_diagnostics is not None:
-                pose_diagnostics.update(count)
-
             if args_cli.video and count >= args_cli.video_length:
                 break
             if args_cli.max_steps is not None and count >= args_cli.max_steps:
                 break
 
-    if pose_diagnostics is not None:
-        pose_diagnostics.close()
     env.close()
 
 

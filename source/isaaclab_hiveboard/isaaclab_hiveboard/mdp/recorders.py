@@ -1,4 +1,9 @@
-"""Recorder terms for fixed-base Spot manipulation demonstrations."""
+# Copyright (c) 2024-2026 EESC-LabRoM & The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Recorder terms for manipulation demonstrations."""
 
 from __future__ import annotations
 
@@ -78,13 +83,10 @@ class SpotManipulationRecorderCfg(RecorderManagerBaseCfg):
     record_actions = PreStepActionsRecorderCfg()
     record_observations = PreStepDiffusionObservationsRecorderCfg()
     record_processed_actions = PostStepProcessedActionsRecorderCfg()
-    # Relative world states can be enabled for replay/debugging, but are omitted by
-    # default so the recorded HDF5 matches the flat Diffusion Policy layout directly.
-    # record_states = PostStepStatesRecorderCfg()
 
     dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
     dataset_export_dir_path: str = "logs/recorded_datasets"
     dataset_filename: str = (
-        f"spot_ball_valve_delta_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        f"spot_manipulation_demo_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     )
     export_in_close: bool = False
