@@ -36,8 +36,8 @@ EE_TCP_OFFSET = OffsetCfg(pos=(0.21, 0.0, -0.03))
 # Nut-frame targets for target_frame. Reset IK looks up ``approaching`` by
 # name so the arm spawns there and the sequence can skip an arrival command.
 VALVE_APPROACHING_OFFSET = OffsetCfg(pos=(-0.04, 0.0, 0.25), rot=VALVE_Y90_QUAT)
-VALVE_NUT_GRASP_OFFSET = OffsetCfg(pos=(-0.04, 0.0, 0.14), rot=VALVE_Y90_QUAT)
-VALVE_ROTATE_OFFSET = OffsetCfg(pos=(-0.0, 0.0, 0.0), rot=VALVE_Y90_QUAT)
+VALVE_NUT_GRASP_OFFSET = OffsetCfg(pos=(-0.05, 0.0, 0.16), rot=VALVE_Y90_QUAT)
+VALVE_ROTATE_OFFSET = OffsetCfg(pos=(-0.0, 0.0, 0.16), rot=VALVE_Y90_QUAT)
 
 
 @configclass
@@ -154,7 +154,7 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/nut",
                 name="rotate_frame",
-                offset=VALVE_NUT_GRASP_OFFSET,
+                offset=VALVE_ROTATE_OFFSET,
             ),
         ],
     )

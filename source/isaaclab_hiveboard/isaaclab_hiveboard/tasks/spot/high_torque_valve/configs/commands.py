@@ -34,6 +34,7 @@ class FramePoseCommandsCfg:
                 target_frame_name="rotate_frame",
                 angle_deg=-180,
                 gripper_open=False,
+                axis=(-1.0, 0.0, 0.0),
             ),
             GoToFrameCfg(
                 frame_name="target_frame",
