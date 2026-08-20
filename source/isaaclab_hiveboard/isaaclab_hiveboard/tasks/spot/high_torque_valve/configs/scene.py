@@ -138,7 +138,7 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
 
     target_frame = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Valve/nut",
-        debug_vis=True,
+        debug_vis=False,
         visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/ValveTransformers"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(

@@ -22,15 +22,16 @@ HIVEBOARD_SIM_DIR = f"{HIVEBOARD_DIR}/Simulation"
 SMALL_VALVE_URDF = f"{HIVEBOARD_SIM_DIR}/Valves/Gate Valve/Small Valve/Small_Valve.urdf"
 HONEYCOMB_USD = f"{HIVEBOARD_SIM_DIR}/Honeycomb/Honeycomb_Panel.usd"
 
+# +90 deg about Y: command frames on eixo_trans so RotateFrame's -X lines
+# up with the stem (link +Z).
 VALVE_Y90_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
 # In front of Spot at the origin; x=0.1 put the valve inside the body.
 VALVE_SPAWN_POS = (1.0, 0.0, 0.0)
-HIVE_Y90_INV_QUAT = (
-    0.65328148,
-    0.27059805,
-    -0.27059805,
-    -0.65328148,
-)  # (0.70710678, 0.0, 0.0, -0.70710678)
+# -90 deg about Z: URDF stem is body -Y (RevoluteJoint Rx90), so this aims
+# the handwheel at Spot. A Y rotation leaves -Y as world ±Y (to the side).
+VALVE_SPAWN_QUAT = (0.70710678, 0.0, 0.0, -0.70710678)
+# Inverse of the valve spawn so the hive stays wall-aligned.
+HIVE_SPAWN_INV_QUAT = (0.70710678, 0.0, 0.0, 0.70710678)
 
 
 @configclass
@@ -85,7 +86,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=VALVE_SPAWN_POS,
-            rot=VALVE_Y90_QUAT,
+            rot=VALVE_SPAWN_QUAT,
             joint_pos={
                 "PrismaticJoint": 0.0,
                 "RevoluteJoint": 0.0,
@@ -121,7 +122,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(0.0, 0.075, 0.0),
-            rot=HIVE_Y90_INV_QUAT,
+            rot=HIVE_SPAWN_INV_QUAT,
         ),
         collision_group=-1,
     )
@@ -129,9 +130,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
     target_frame = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Valve/eixo_trans",
         debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
-            prim_path="/Visuals/ValveTransformers"
-        ),
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/ValveTransformers"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/eixo_trans",
@@ -145,7 +144,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
                 prim_path="{ENV_REGEX_NS}/Valve/eixo_trans",
                 name="nut_grasp",
                 offset=OffsetCfg(
-                    pos=(-0.02, 0.0, 0.05),
+                    pos=(-0.03, 0.0, 0.05),
                     rot=VALVE_Y90_QUAT,
                 ),
             ),
@@ -163,9 +162,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Robot/body",
         debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
-            prim_path="/Visuals/EndEffectorFrameTransformer"
-        ),
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/EndEffectorFrameTransformer"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/arm_link_wr1",
