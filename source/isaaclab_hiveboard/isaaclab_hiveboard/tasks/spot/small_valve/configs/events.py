@@ -9,6 +9,7 @@ from isaaclab_hiveboard.mdp.events import (
 )
 from isaaclab_hiveboard.tasks.spot.small_valve.configs.scene import (
     SMALL_VALVE_URDF,
+    VALVE_SPAWN_POS,
     VALVE_Y90_QUAT,
 )
 
@@ -41,10 +42,14 @@ class ValveEventCfg:
             "valve_urdf": SMALL_VALVE_URDF,
             "valve_root_link": "valvula_gaveta",
             "valve_ee_link": "eixo_trans",
-            "ee_offset": OffsetCfg(
-                pos=(0.21, 0.0, -0.03),
-                rot=(1.0, 0.0, 0.0, 0.0),
+            # Valve stays at its scene pose; IK the arm to it. Without this
+            # the event teleports the valve onto the retract TCP (the robot).
+            "valve_root_pose": OffsetCfg(
+                pos=VALVE_SPAWN_POS,
+                rot=VALVE_Y90_QUAT,
             ),
+            # TCP offset comes from pose_command.body_offset. Spawn offset is
+            # still explicit: it is closer than target_frame/approaching.
             "valve_offset": OffsetCfg(
                 pos=(0.0, 0.0, 0.10),
                 rot=VALVE_Y90_QUAT,

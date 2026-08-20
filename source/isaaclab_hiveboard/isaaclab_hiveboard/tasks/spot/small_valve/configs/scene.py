@@ -23,6 +23,8 @@ SMALL_VALVE_URDF = f"{HIVEBOARD_SIM_DIR}/Valves/Gate Valve/Small Valve/Small_Val
 HONEYCOMB_USD = f"{HIVEBOARD_SIM_DIR}/Honeycomb/Honeycomb_Panel.usd"
 
 VALVE_Y90_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
+# In front of Spot at the origin; x=0.1 put the valve inside the body.
+VALVE_SPAWN_POS = (1.0, 0.0, 0.0)
 HIVE_Y90_INV_QUAT = (
     0.65328148,
     0.27059805,
@@ -82,7 +84,7 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
             semantic_tags=[("class", "valve")],
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.1, 0, 0.0),
+            pos=VALVE_SPAWN_POS,
             rot=VALVE_Y90_QUAT,
             joint_pos={
                 "PrismaticJoint": 0.0,

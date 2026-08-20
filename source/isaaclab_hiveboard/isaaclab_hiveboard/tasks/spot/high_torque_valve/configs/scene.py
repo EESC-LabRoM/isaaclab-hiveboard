@@ -19,16 +19,25 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_hiveboard.assets import HIVEBOARD_DIR
 
 HIVEBOARD_SIM_DIR = f"{HIVEBOARD_DIR}/Simulation"
-HIGH_TORQUE_VALVE_URDF = (
-    f"{HIVEBOARD_SIM_DIR}/Valves/Gate Valve/High Torque Valve/High_Torque_Valve.urdf"
-)
+HIGH_TORQUE_VALVE_URDF = f"{HIVEBOARD_SIM_DIR}/Valves/Gate Valve/High Torque Valve/High_Torque_Valve.urdf"
 HONEYCOMB_USD = f"{HIVEBOARD_SIM_DIR}/Honeycomb/Honeycomb_Panel.usd"
 
-# +90 deg about Y: CAD +Z (handwheel axis) faces the robot; also used so
-# RotateFrame's -X lines up with the nut spin axis.
+# +90 deg about Y: used on command frames so RotateFrame's -X lines up with
+# the nut spin axis (CAD +Z).
 VALVE_Y90_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
+# -90 deg about Y: CAD +Z (handwheel) points toward Spot at the origin.
+VALVE_SPAWN_POS = (1.0, 0.0, 0.0)
+VALVE_SPAWN_QUAT = (0.70710678, 0.0, -0.70710678, 0.0)
 # Inverse of the valve spawn rotation so the hive stays wall-aligned.
-HIVE_Y90_INV_QUAT = (0.70710678, 0.0, -0.70710678, 0.0)
+HIVE_SPAWN_INV_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
+
+# Flange (arm_link_wr1) → TCP. Shared by ee_frame, pose commands, and reset IK.
+EE_TCP_OFFSET = OffsetCfg(pos=(0.21, 0.0, -0.03))
+# Nut-frame targets for target_frame. Reset IK looks up ``approaching`` by
+# name so the arm spawns there and the sequence can skip an arrival command.
+VALVE_APPROACHING_OFFSET = OffsetCfg(pos=(-0.04, 0.0, 0.25), rot=VALVE_Y90_QUAT)
+VALVE_NUT_GRASP_OFFSET = OffsetCfg(pos=(-0.04, 0.0, 0.14), rot=VALVE_Y90_QUAT)
+VALVE_ROTATE_OFFSET = OffsetCfg(pos=(-0.0, 0.0, 0.0), rot=VALVE_Y90_QUAT)
 
 
 @configclass
@@ -82,9 +91,9 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
             semantic_tags=[("class", "valve")],
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(1.0, 0, 0.0),
-            # CAD +Z is the handwheel axis; +90° about Y aims it at the robot.
-            rot=VALVE_Y90_QUAT,
+            pos=VALVE_SPAWN_POS,
+            # CAD +Z is the handwheel axis; -90° about Y aims it at the robot.
+            rot=VALVE_SPAWN_QUAT,
             joint_pos={
                 "PrismaticJoint": 0.0,
                 "RevoluteJoint": 0.0,
@@ -119,44 +128,33 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
             semantic_tags=[("class", "honeycomb")],
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            # Behind the valve in the rotated World frame. Local -90° Y undoes
+            # Behind the valve in the rotated World frame. Local +90° Y undoes
             # the valve spawn so the panel stays upright as before.
-            pos=(0.0, 0.0, -0.04),
-            rot=HIVE_Y90_INV_QUAT,
+            pos=(0.0, 0.0, 0.0),
+            rot=HIVE_SPAWN_INV_QUAT,
         ),
         collision_group=-1,
     )
 
     target_frame = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Valve/nut",
-        debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
-            prim_path="/Visuals/ValveTransformers"
-        ),
+        debug_vis=True,
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/ValveTransformers"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/nut",
                 name="approaching",
-                offset=OffsetCfg(
-                    pos=(0.0, 0.0, 0.26),
-                    rot=VALVE_Y90_QUAT,
-                ),
+                offset=VALVE_APPROACHING_OFFSET,
             ),
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/nut",
                 name="nut_grasp",
-                offset=OffsetCfg(
-                    pos=(0.0, 0.055, 0.14),
-                    rot=VALVE_Y90_QUAT,
-                ),
+                offset=VALVE_NUT_GRASP_OFFSET,
             ),
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/nut",
                 name="rotate_frame",
-                offset=OffsetCfg(
-                    pos=(0.0, 0.0, 0.14),
-                    rot=VALVE_Y90_QUAT,
-                ),
+                offset=VALVE_NUT_GRASP_OFFSET,
             ),
         ],
     )
@@ -164,16 +162,12 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Robot/body",
         debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
-            prim_path="/Visuals/EndEffectorFrameTransformer"
-        ),
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/EndEffectorFrameTransformer"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/arm_link_wr1",
                 name="tool_rightfinger",
-                offset=OffsetCfg(
-                    pos=(0.21, 0.0, -0.03),
-                ),
+                offset=EE_TCP_OFFSET,
             ),
         ],
     )

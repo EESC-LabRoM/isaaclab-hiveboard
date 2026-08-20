@@ -141,7 +141,69 @@ def _squeeze_seed_dim(js: JointState) -> JointState:
     return JointState.from_position(position, joint_names=js.joint_names)
 
 
+def _as_offset_cfg(offset) -> OffsetCfg:
+    """Copy ``pos``/``rot`` into Isaac Lab's frame-transformer ``OffsetCfg``."""
+    return OffsetCfg(pos=tuple(offset.pos), rot=tuple(offset.rot))
+
+
+def _resolve_ee_offset(cfg: EventTermCfg, env: ManagerBasedEnv) -> OffsetCfg:
+    """TCP offset from ``ee_offset``, else the pose command's ``body_offset``."""
+    ee_offset = cfg.params.get("ee_offset")
+    if ee_offset is not None:
+        return _as_offset_cfg(ee_offset)
+    command_name = cfg.params.get("command_name", "pose_command")
+    commands_cfg = getattr(env.cfg, "commands", None)
+    command_cfg = (
+        getattr(commands_cfg, command_name, None)
+        if commands_cfg is not None
+        else None
+    )
+    body_offset = getattr(command_cfg, "body_offset", None)
+    if body_offset is None:
+        raise ValueError(
+            "RandomizeValveHandlePoseEvent needs ee_offset, or a command "
+            f"'{command_name}' with body_offset (the same TCP offset used "
+            "by SequentialPoseCommand)."
+        )
+    return _as_offset_cfg(body_offset)
+
+
+def _resolve_valve_offset(cfg: EventTermCfg, env: ManagerBasedEnv) -> OffsetCfg:
+    """Spawn offset from ``valve_offset``, else a named ``FrameCfg``."""
+    target_frame_name = cfg.params.get("target_frame_name")
+    if target_frame_name:
+        frame_name = cfg.params.get("frame_name", "target_frame")
+        try:
+            transformer = env.scene[frame_name]
+        except KeyError as err:
+            raise ValueError(
+                f"Frame transformer '{frame_name}' is not in the scene."
+            ) from err
+        for frame in transformer.cfg.target_frames:
+            if frame.name == target_frame_name:
+                return _as_offset_cfg(frame.offset)
+        available = [frame.name for frame in transformer.cfg.target_frames]
+        raise ValueError(
+            f"FrameCfg '{target_frame_name}' not found on '{frame_name}'. "
+            f"Available: {available}."
+        )
+    valve_offset = cfg.params.get("valve_offset")
+    if valve_offset is not None:
+        return _as_offset_cfg(valve_offset)
+    raise ValueError(
+        "RandomizeValveHandlePoseEvent needs target_frame_name (a "
+        "FrameTransformerCfg.FrameCfg name) or valve_offset."
+    )
+
+
 class RandomizeValveHandlePoseEvent(ManagerTermBase):
+    """Reset the arm so the TCP sits on a named valve frame.
+
+    ``ee_offset`` defaults to the pose command's ``body_offset``. The spawn
+    pose defaults to ``FrameTransformerCfg.FrameCfg`` named
+    ``target_frame_name`` on the scene transformer ``frame_name``.
+    """
+
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
         """Initialize the term.
 
@@ -158,8 +220,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self._asset: Articulation = env.scene[asset_cfg.name]
         self._valve_cfg: SceneEntityCfg = cfg.params["valve_cfg"]
-        self._valve_offset: OffsetCfg = cfg.params["valve_offset"]
-        self._ee_offset: OffsetCfg = cfg.params["ee_offset"]
+        self._valve_offset: OffsetCfg = _resolve_valve_offset(cfg, env)
+        self._ee_offset: OffsetCfg = _resolve_ee_offset(cfg, env)
         self._valve: Articulation = env.scene[self._valve_cfg.name]
         self._valve_urdf: str = cfg.params.get(
             "valve_urdf", f"{ASSET_DIR}/ball_valve/ball_valve.urdf"
@@ -1043,6 +1105,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         valve_cfg: SceneEntityCfg = None,
         valve_offset: OffsetCfg = None,
         ee_offset: OffsetCfg = None,
+        frame_name: str = "target_frame",
+        target_frame_name: str | None = None,
+        command_name: str = "pose_command",
         valve_urdf: str = None,
         valve_root_link: str = None,
         valve_ee_link: str = None,

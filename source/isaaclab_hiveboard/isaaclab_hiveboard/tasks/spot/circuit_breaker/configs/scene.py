@@ -80,7 +80,8 @@ class CircuitBreakerSceneCfg(InteractiveSceneCfg):
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(1.0, 0, 0.0),
-            rot=(1.0, 0.0, 0.0, 0.0),
+            # 180 deg about Z so the operator face points at Spot at the origin.
+            rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
                 "RevoluteJoint": 0.0,  # -0.5235988,
             },

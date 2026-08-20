@@ -54,3 +54,4 @@ class SpotHighTorqueValveEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.robot.spawn.joint_drive.gains.stiffness = None
         self.scene.robot.spawn.fix_base = True
         self.scene.robot.init_state.pos = (0, 0, 0)
+        self.actions.gripper_action.close_command_expr = {"arm_f1x": -0.8}

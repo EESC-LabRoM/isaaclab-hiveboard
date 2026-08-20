@@ -6,11 +6,16 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     RotateFrameCfg,
     SequentialPoseCommandCfg,
 )
+from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.scene import EE_TCP_OFFSET
 
 
 @configclass
 class FramePoseCommandsCfg:
-    """Approach the handwheel, clamp, then spin about +Z."""
+    """Clamp the handwheel, then spin about +Z.
+
+    Reset IK already places the TCP on ``approaching``, so the sequence starts
+    at ``nut_grasp`` instead of an arrival command.
+    """
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
@@ -21,33 +26,25 @@ class FramePoseCommandsCfg:
             GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
-                distance_threshold=0.03,
-                target_frame_name="approaching",
-            ),
-            GoToFrameCfg(
-                frame_name="target_frame",
-                gripper_open=True,
                 distance_threshold=0.02,
                 target_frame_name="nut_grasp",
             ),
-            GripperCommand(open_gripper=False, duration_s=0.3),
             RotateFrameCfg(
                 frame_name="target_frame",
                 target_frame_name="rotate_frame",
-                angle_deg=-90,
+                angle_deg=-180,
                 gripper_open=False,
             ),
-            GripperCommand(open_gripper=False, duration_s=0.375),
-            GripperCommand(open_gripper=True, duration_s=0.375),
             GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.03,
                 target_frame_name="approaching",
             ),
-            GripperCommand(open_gripper=True, duration_s=5.0),
+            GripperCommand(open_gripper=True, duration_s=0.10),
         ],
         body_offset=SequentialPoseCommandCfg.OffsetCfg(
-            pos=(0.21, 0.0, -0.03),
+            pos=EE_TCP_OFFSET.pos,
+            rot=EE_TCP_OFFSET.rot,
         ),
     )

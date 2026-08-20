@@ -6,7 +6,8 @@ from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
 from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.scene import (
     HIGH_TORQUE_VALVE_URDF,
-    VALVE_Y90_QUAT,
+    VALVE_SPAWN_POS,
+    VALVE_SPAWN_QUAT,
 )
 from isaaclab_hiveboard.mdp.events import (
     RandomizeValveHandlePoseEvent,
@@ -21,9 +22,7 @@ class ValveEventCfg:
         func=mdp.randomize_rigid_body_material,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg(
-                "robot", body_names=["arm_link_fngr", "arm_link_wr1"]
-            ),
+            "asset_cfg": SceneEntityCfg("robot", body_names=["arm_link_fngr", "arm_link_wr1"]),
             "static_friction_range": (0.3, 0.3),
             "dynamic_friction_range": (0.3, 0.3),
             "restitution_range": (0.0, 0.0),
@@ -41,15 +40,15 @@ class ValveEventCfg:
             "valve_urdf": HIGH_TORQUE_VALVE_URDF,
             "valve_root_link": "World",
             "valve_ee_link": "nut",
-            "ee_offset": OffsetCfg(
-                pos=(0.21, 0.0, -0.03),
-                rot=(1.0, 0.0, 0.0, 0.0),
+            # Valve stays at its scene pose; IK the arm so the TCP sits on
+            # target_frame/approaching. Without this, the event uses the
+            # robot-first path (retract pose) and never aligns to the valve.
+            "valve_root_pose": OffsetCfg(
+                pos=VALVE_SPAWN_POS,
+                rot=VALVE_SPAWN_QUAT,
             ),
-            # Align TCP with the approach frame so the arm only moves forward.
-            "valve_offset": OffsetCfg(
-                pos=(0.0, 0.0, 0.26),
-                rot=VALVE_Y90_QUAT,
-            ),
+            "frame_name": "target_frame",
+            "target_frame_name": "approaching",
             "n_x": 1,
             "n_y": 1,
             "n_z": 1,

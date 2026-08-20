@@ -87,16 +87,10 @@ class ValveEventCfg:
                 pos=(1.0, 0.06, 0.154),
                 rot=(0.0, 0.0, 0.0, 1.0),
             ),
-            "ee_offset": OffsetCfg(
-                pos=(0.21, 0.0, -0.03),
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-            # Align TCP with the *approach* frame, not the grasp. The command
-            # sequence then only moves forward onto the lever.
-            "valve_offset": OffsetCfg(
-                pos=(0.12, 0.06, 0.0),
-                rot=(0.0, 0.0, 0.0, 1.0),
-            ),
+            # TCP offset comes from pose_command.body_offset. Spawn on the
+            # approaching FrameCfg so the sequence only moves onto the lever.
+            "frame_name": "target_frame",
+            "target_frame_name": "approaching",
             # Set on-the-fly to True to generate reachable reset states dynamically on each reset
             "on_the_fly": True,
             # Keep perturbations inside the tested Spot reachability margin.

@@ -1,6 +1,5 @@
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
@@ -40,15 +39,10 @@ class CircuitBreakerEventCfg:
             "valve_urdf": CIRCUIT_BREAKER_URDF,
             "valve_root_link": "World",
             "valve_ee_link": "lever_pivot",
-            "ee_offset": OffsetCfg(
-                pos=(0.21, 0.0, -0.03),
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-            # Align TCP with the approach frame
-            "valve_offset": OffsetCfg(
-                pos=(0.10, 0.02, 0.0),
-                rot=(0.0, 0.0, 0.0, 1.0),
-            ),
+            # TCP offset comes from pose_command.body_offset. Spawn on the
+            # approaching FrameCfg.
+            "frame_name": "target_frame",
+            "target_frame_name": "approaching",
             "n_x": 1,
             "n_y": 1,
             "n_z": 1,
