@@ -153,9 +153,13 @@ def main():
 
         env_cfg = SpotBallValveEnvCfg()
     elif args_cli.task == "Isaac-HiveBoard-Spot-BallValve-Play-v0":
-        from isaaclab_hiveboard.tasks.spot.ball_valve.env import SpotBallValveDeltaEnvCfg_PLAY
+        from isaaclab_hiveboard.tasks.spot.ball_valve.env import SpotBallValveEnvCfg_PLAY
 
-        env_cfg = SpotBallValveDeltaEnvCfg_PLAY()
+        env_cfg = SpotBallValveEnvCfg_PLAY()
+    elif args_cli.task == "Isaac-HiveBoard-Spot-BallValve-Play-Cameras-v0":
+        from isaaclab_hiveboard.tasks.spot.ball_valve.env import SpotBallValveEnvCfg_PLAY_CAMERAS
+
+        env_cfg = SpotBallValveEnvCfg_PLAY_CAMERAS()
     elif (
         args_cli.task == "Isaac-HiveBoard-Spot-HighTorqueValve-v0"
         or args_cli.task == "Spot-Manipulation-High-Torque-Valve"
