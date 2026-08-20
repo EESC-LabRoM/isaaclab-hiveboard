@@ -648,18 +648,12 @@ class _RotateFrameHandler(_BaseCmdHandler):
         )
         target_pos_b = self.axis_pos_b[env_ids] + v_rot
 
-        # -- orientation along the same geodesic as the remaining arc
-        alpha = torch.where(
-            abs_angle > 1.0e-8,
-            self._progress_abs[env_ids] / abs_angle,
-            torch.ones_like(abs_angle),
-        )
-        delta = math_utils.quat_box_minus(
-            self.final_quat_b[env_ids], self.initial_quat_b[env_ids]
-        )
-        interp_quat_b = math_utils.quat_box_plus(
-            self.initial_quat_b[env_ids], alpha.unsqueeze(-1) * delta
-        )
+        # Same signed angle-axis as the position orbit. Slerping to the
+        # endpoint via quat_box_minus is ambiguous at ±180 deg and can spin
+        # the gripper the opposite way from the TCP, so the wrist offset
+        # walks through the hub instead of riding the grasp circle.
+        delta_q = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
+        interp_quat_b = math_utils.quat_mul(delta_q, self.initial_quat_b[env_ids])
 
         return self._pack_command(self.cfg.gripper_open, target_pos_b, interp_quat_b)
 
