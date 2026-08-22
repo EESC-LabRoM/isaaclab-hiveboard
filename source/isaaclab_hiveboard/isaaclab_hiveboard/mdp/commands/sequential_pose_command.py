@@ -689,7 +689,7 @@ class SequentialPoseCommandCfg(CommandTermCfg):
         On many robots, end-effector frames are fictitious frames that do not have a corresponding
         rigid body. In such cases, it is easier to define this transform w.r.t. their parent rigid body.
         For instance, for the Franka Emika arm, the end-effector is defined at an offset to the the
-        "panda_hand" frame.
+        "fr3_hand" (or similar) frame.
         """
 
         pos: tuple[float, float, float] = (0.0, 0.0, 0.0)

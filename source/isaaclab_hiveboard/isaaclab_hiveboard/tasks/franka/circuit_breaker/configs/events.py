@@ -13,7 +13,7 @@ class FrankaCircuitBreakerEventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg(
-                "robot", body_names=["panda_leftfinger", "panda_rightfinger"]
+                "robot", body_names=["fr3_leftfinger", "fr3_rightfinger"]
             ),
             "static_friction_range": (0.4, 0.4),
             "dynamic_friction_range": (0.4, 0.4),

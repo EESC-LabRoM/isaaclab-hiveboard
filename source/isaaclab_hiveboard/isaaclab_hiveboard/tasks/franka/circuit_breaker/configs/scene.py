@@ -1,7 +1,7 @@
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim.converters.urdf_converter_cfg import UrdfConverterCfg
-from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG
+from isaaclab_hiveboard.assets import FRANKA_FR3_HIGH_PD_CFG
 
 from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
     FRAME_MARKER_SMALL_CFG,
@@ -26,23 +26,23 @@ HONEYCOMB_USD = f"{HIVEBOARD_SIM_DIR}/Honeycomb/Honeycomb_Panel.usd"
 
 @configclass
 class FrankaCircuitBreakerSceneCfg(InteractiveSceneCfg):
-    """Franka Emika Panda + HiveBoard Circuit Breaker in the Isaac warehouse."""
+    """Franka Research 3 + HiveBoard Circuit Breaker in the Isaac warehouse."""
 
     # robot
-    robot: ArticulationCfg = FRANKA_PANDA_HIGH_PD_CFG.replace(
+    robot: ArticulationCfg = FRANKA_FR3_HIGH_PD_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
             joint_pos={
-                "panda_joint1": 0.0,
-                "panda_joint2": -0.569,
-                "panda_joint3": 0.0,
-                "panda_joint4": -2.810,
-                "panda_joint5": 0.0,
-                "panda_joint6": 3.037,
-                "panda_joint7": 0.741,
-                "panda_finger_joint.*": 0.04,
+                "fr3_joint1": 0.0,
+                "fr3_joint2": -0.569,
+                "fr3_joint3": 0.0,
+                "fr3_joint4": -2.810,
+                "fr3_joint5": 0.0,
+                "fr3_joint6": 3.037,
+                "fr3_joint7": 0.741,
+                "fr3_finger_joint.*": 0.04,
             },
         ),
     )
@@ -177,28 +177,28 @@ class FrankaCircuitBreakerSceneCfg(InteractiveSceneCfg):
 
     # Franka End-Effector Frame Transformer
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/panda_link0",
+        prim_path="{ENV_REGEX_NS}/Robot/fr3_link0",
         debug_vis=False,
         visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
             prim_path="/Visuals/EndEffectorFrameTransformer"
         ),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/panda_hand",
+                prim_path="{ENV_REGEX_NS}/Robot/fr3_hand",
                 name="ee_tcp",
                 offset=OffsetCfg(
                     pos=(0.0, 0.0, 0.1034),
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/panda_leftfinger",
+                prim_path="{ENV_REGEX_NS}/Robot/fr3_leftfinger",
                 name="tool_leftfinger",
                 offset=OffsetCfg(
                     pos=(0.0, 0.0, 0.046),
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/panda_rightfinger",
+                prim_path="{ENV_REGEX_NS}/Robot/fr3_rightfinger",
                 name="tool_rightfinger",
                 offset=OffsetCfg(
                     pos=(0.0, 0.0, 0.046),

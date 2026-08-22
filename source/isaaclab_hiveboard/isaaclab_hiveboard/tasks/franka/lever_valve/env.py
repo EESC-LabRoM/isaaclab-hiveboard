@@ -28,7 +28,7 @@ from isaaclab_hiveboard.tasks.franka.lever_valve.configs.scene import (
 
 @configclass
 class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the Franka Emika Panda lever / ball valve manipulation environment."""
+    """Configuration for the Franka Research 3 lever / ball valve manipulation environment."""
 
     scene: FrankaLeverValveSceneCfg = FrankaLeverValveSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore

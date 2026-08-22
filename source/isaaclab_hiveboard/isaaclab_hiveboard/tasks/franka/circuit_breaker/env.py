@@ -28,7 +28,7 @@ from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.terminations import
 
 @configclass
 class FrankaCircuitBreakerEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the Franka Emika Panda circuit breaker manipulation environment."""
+    """Configuration for the Franka Research 3 circuit breaker manipulation environment."""
 
     scene: FrankaCircuitBreakerSceneCfg = FrankaCircuitBreakerSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore

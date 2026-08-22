@@ -14,7 +14,7 @@ class FramePoseCommandsCfg:
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
-        body_name="panda_hand",
+        body_name="fr3_hand",
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
         commands=[

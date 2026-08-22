@@ -6,6 +6,7 @@
 import os
 from pathlib import Path
 
+from .franka import FRANKA_FR3_CFG, FRANKA_FR3_HIGH_PD_CFG
 from .hiveboard import (
     ASSET_DIR,
     BALL_VALVE_FRICTION_RING_URDF,

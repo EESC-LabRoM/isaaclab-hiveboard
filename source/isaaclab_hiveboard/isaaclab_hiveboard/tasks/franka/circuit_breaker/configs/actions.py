@@ -6,31 +6,31 @@ from isaaclab_tasks.manager_based.manipulation.stack import mdp
 
 @configclass
 class FrankaIKAbsActionCfg:
-    """Action specifications for Franka Emika Panda with Differential IK."""
+    """Action specifications for Franka Research 3 with Differential IK."""
 
     # ActionManager concatenates terms in declaration order. SequentialPoseCommand
     # emits [gripper, position XYZ, quaternion WXYZ], so the one-dimensional
     # gripper term must be declared before the seven-dimensional arm term.
     gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
-        joint_names=["panda_finger_joint.*"],
-        open_command_expr={"panda_finger_joint.*": 0.04},
-        close_command_expr={"panda_finger_joint.*": 0.0},
+        joint_names=["fr3_finger_joint.*"],
+        open_command_expr={"fr3_finger_joint.*": 0.04},
+        close_command_expr={"fr3_finger_joint.*": 0.0},
     )
 
     arm_action = DifferentialInverseKinematicsActionCfg(
         debug_vis=False,
         asset_name="robot",
         joint_names=[
-            "panda_joint1",
-            "panda_joint2",
-            "panda_joint3",
-            "panda_joint4",
-            "panda_joint5",
-            "panda_joint6",
-            "panda_joint7",
+            "fr3_joint1",
+            "fr3_joint2",
+            "fr3_joint3",
+            "fr3_joint4",
+            "fr3_joint5",
+            "fr3_joint6",
+            "fr3_joint7",
         ],
-        body_name="panda_hand",
+        body_name="fr3_hand",
         controller=DifferentialIKControllerCfg(
             command_type="pose", use_relative_mode=False, ik_method="dls"
         ),
