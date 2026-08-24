@@ -1078,6 +1078,14 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 raise ValueError(
                     f"Frame '{target_frame_name}' is not provided by '{frame_name}'."
                 ) from error
+            ee_pos_w = self._asset.data.body_pos_w[env_ids, self._ee_body_idx]
+            ee_quat_w = self._asset.data.body_quat_w[env_ids, self._ee_body_idx]
+            tcp_pos_w, _ = math_utils.combine_frame_transforms(
+                ee_pos_w,
+                ee_quat_w,
+                self._ee_offset_pos.expand(num_resets, -1),
+                self._ee_offset_quat.expand(num_resets, -1),
+            )
             target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
             root_pos_w = self._valve.data.root_pos_w[env_ids]
             root_quat_w = self._valve.data.root_quat_w[env_ids]
