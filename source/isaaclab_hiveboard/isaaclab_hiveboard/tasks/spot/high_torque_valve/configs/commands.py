@@ -6,7 +6,7 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     RotateFrameCfg,
     SequentialPoseCommandCfg,
 )
-from isaaclab_hiveboard.tasks.spot.high_torque_valve.configs.scene import EE_TCP_OFFSET
+from isaaclab_hiveboard.assets import SPOT_EE, as_command_offset
 
 
 @configclass
@@ -19,7 +19,7 @@ class FramePoseCommandsCfg:
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
-        body_name="arm_link_wr1",
+        body_name=SPOT_EE.body_name,
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
         commands=[
@@ -44,8 +44,5 @@ class FramePoseCommandsCfg:
             ),
             GripperCommand(open_gripper=True, duration_s=0.10),
         ],
-        body_offset=SequentialPoseCommandCfg.OffsetCfg(
-            pos=EE_TCP_OFFSET.pos,
-            rot=EE_TCP_OFFSET.rot,
-        ),
+        body_offset=as_command_offset(SPOT_EE),
     )

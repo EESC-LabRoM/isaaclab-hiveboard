@@ -33,8 +33,7 @@ parser.add_argument(
     type=int,
     default=None,
     help=(
-        "Maximum recorded steps. Default: one episode, stopping on success or "
-        "timeout so each clip is a single demo."
+        "Maximum recorded steps. Default: one episode, stopping on success or timeout so each clip is a single demo."
     ),
 )
 parser.add_argument(
@@ -185,6 +184,10 @@ def main():
         from isaaclab_hiveboard.tasks.franka.circuit_breaker.env import FrankaCircuitBreakerEnvCfg
 
         env_cfg = FrankaCircuitBreakerEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Franka-OnlyRobot-v0":
+        from isaaclab_hiveboard.tasks.franka.only_robot.env import FrankaOnlyRobotEnvCfg
+
+        env_cfg = FrankaOnlyRobotEnvCfg()
     elif args_cli.task in (
         "Isaac-HiveBoard-Franka-LeverValve-v0",
         "Franka-Manipulation-Lever-Valve",
@@ -207,8 +210,8 @@ def main():
                 env_cfg.scene.target_frame.debug_vis = True
             if hasattr(env_cfg.scene, "ee_frame"):
                 env_cfg.scene.ee_frame.debug_vis = True
-            if hasattr(env_cfg.commands, "pose_command"):
-                env_cfg.commands.pose_command.debug_vis = True
+            # if hasattr(env_cfg.commands, "pose_command"):
+            #     env_cfg.commands.pose_command.debug_vis = True
 
         if args_cli.franka_position_only:
             if not ("Franka" in args_cli.task):
@@ -359,7 +362,11 @@ def main():
 
             if relative_controller is not None:
                 action = relative_controller.compute()
-            elif isinstance(obs, dict) and "policy" in obs and "command" in obs["policy"]:
+            elif (
+                isinstance(obs, dict)
+                and isinstance(obs.get("policy"), dict)
+                and "command" in obs["policy"]
+            ):
                 command = obs["policy"]["command"]
                 action = _route_pose_command(command)
             else:

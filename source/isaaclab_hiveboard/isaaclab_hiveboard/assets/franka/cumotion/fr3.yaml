@@ -1,0 +1,12 @@
+# Kinematics-only cuRobo v2 configuration for the Isaac Sim FR3 articulation.
+# The loader replaces ``urdf_path`` with an absolute, package-local path.
+robot_cfg:
+  kinematics:
+    format_version: 2.0
+    urdf_path: fr3.urdf
+    base_link: fr3_link0
+    tool_frames: [fr3_hand]
+    cspace:
+      joint_names: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      default_joint_position: [0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

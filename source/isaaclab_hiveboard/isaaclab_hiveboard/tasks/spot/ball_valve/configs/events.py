@@ -5,9 +5,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.tasks.spot.ball_valve.configs.scene import (
-    BALL_VALVE_URDF,
-)
+from isaaclab_hiveboard.assets import BALL_VALVE_URDF
 from isaaclab_hiveboard.mdp.events import (
     RandomizeValveHandlePoseEvent,
 )

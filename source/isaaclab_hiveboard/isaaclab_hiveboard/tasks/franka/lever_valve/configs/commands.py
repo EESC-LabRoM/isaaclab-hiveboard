@@ -1,9 +1,10 @@
 from isaaclab.utils import configclass
 
+from isaaclab_hiveboard.assets import FRANKA_EE, as_command_offset
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
-    GoToFrameCfg,
+    CuroboPlannedGoToFrameCfg,
+    CuroboPlannedRotateFrameCfg,
     GripperCommand,
-    RotateFrameCfg,
     SequentialPoseCommandCfg,
 )
 
@@ -14,41 +15,34 @@ class FramePoseCommandsCfg:
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
-        body_name="fr3_hand",
+        body_name=FRANKA_EE.body_name,
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
         commands=[
-            GoToFrameCfg(
-                frame_name="target_frame",
-                gripper_open=True,
-                distance_threshold=0.03,
-                target_frame_name="approaching",
-            ),
-            GoToFrameCfg(
+            CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.02,
+                canonicalize_upward=False,
                 target_frame_name="lever_pivot",
+                robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
             ),
-            GripperCommand(open_gripper=False, duration_s=0.375),
-            RotateFrameCfg(
+            CuroboPlannedRotateFrameCfg(
                 frame_name="target_frame",
                 target_frame_name="rotate_frame",
                 axis=(1.0, 0.0, 0.0),  # Ball-valve URDF RevoluteJoint axis
                 angle_deg=-90,
                 gripper_open=False,
+                robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
             ),
-            GripperCommand(open_gripper=False, duration_s=0.375),
-            GripperCommand(open_gripper=True, duration_s=0.375),
-            GoToFrameCfg(
+            CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.03,
+                canonicalize_upward=False,
                 target_frame_name="approaching",
+                robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
             ),
-            GripperCommand(open_gripper=True, duration_s=0.75),
         ],
-        body_offset=SequentialPoseCommandCfg.OffsetCfg(
-            pos=(0.0, 0.0, 0.1034),  # Franka TCP offset
-        ),
+        body_offset=as_command_offset(FRANKA_EE),
     )

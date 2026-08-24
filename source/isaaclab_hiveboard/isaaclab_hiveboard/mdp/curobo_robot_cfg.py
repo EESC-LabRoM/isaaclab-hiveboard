@@ -20,11 +20,11 @@ _LEGACY_KINEMATICS_KEYS = (
 )
 
 
-def load_spot_robot_cfg(
+def load_curobo_robot_cfg(
     yaml_path: str,
     urdf_path: str,
 ) -> dict[str, Any]:
-    """Load a v0 Spot YAML and rewrite it for ``InverseKinematicsCfg.create``.
+    """Load a robot YAML and rewrite legacy fields for ``InverseKinematicsCfg.create``.
 
     The source ``spot.yaml`` still uses the v0 schema (``ee_link``,
     ``retract_config``, USD kinematics fields). cuRobo v2 requires
@@ -76,3 +76,8 @@ def load_spot_robot_cfg(
         kinematics.pop(key, None)
 
     return data
+
+
+def load_spot_robot_cfg(yaml_path: str, urdf_path: str) -> dict[str, Any]:
+    """Backward-compatible Spot-specific alias for :func:`load_curobo_robot_cfg`."""
+    return load_curobo_robot_cfg(yaml_path, urdf_path)

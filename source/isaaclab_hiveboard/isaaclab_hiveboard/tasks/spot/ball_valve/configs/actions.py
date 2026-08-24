@@ -3,6 +3,8 @@ from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsA
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.stack import mdp
 
+from isaaclab_hiveboard.assets import SPOT_EE, as_ik_offset
+
 
 @configclass
 class SpotIKAbsActionCfg:
@@ -18,14 +20,12 @@ class SpotIKAbsActionCfg:
             "arm_wr0",
             "arm_wr1",
         ],
-        body_name="arm_link_wr1",
+        body_name=SPOT_EE.body_name,
         controller=DifferentialIKControllerCfg(
             command_type="pose", use_relative_mode=False, ik_method="dls"
         ),
         scale=1,
-        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
-            pos=(0.21, 0.0, -0.03),  # Tool Center Point
-        ),
+        body_offset=as_ik_offset(SPOT_EE),
     )
 
     gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(
@@ -50,16 +50,14 @@ class SpotIKRelativeActionCfg:
             "arm_wr0",
             "arm_wr1",
         ],
-        body_name="arm_link_wr1",
+        body_name=SPOT_EE.body_name,
         controller=DifferentialIKControllerCfg(
             command_type="pose", use_relative_mode=True, ik_method="dls"
         ),
         # At 20 Hz, normalized actions map to 4 cm translation and 0.2 rad
         # rotation, preserving the former 40 Hz maximum task-space velocity.
         scale=(0.04, 0.04, 0.04, 0.2, 0.2, 0.2),
-        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
-            pos=(0.21, 0.0, -0.03),  # Tool Center Point
-        ),
+        body_offset=as_ik_offset(SPOT_EE),
     )
 
     gripper_action: mdp.BinaryJointPositionActionCfg = mdp.BinaryJointPositionActionCfg(

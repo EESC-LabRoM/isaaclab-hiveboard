@@ -1,10 +1,15 @@
+# Copyright (c) 2024-2026 EESC-LabRoM & The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""HiveBoard circuit breaker scene. Robot and EE frames are filled per robot."""
+
+from dataclasses import MISSING
+
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim.converters.urdf_converter_cfg import UrdfConverterCfg
-
-from isaaclab_hiveboard.assets import SPOT_EE, make_ee_frame
-from isaaclab_hiveboard.assets.spot.spot import SPOT_ARM_CFG
-
 from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
     FRAME_MARKER_SMALL_CFG,
 )
@@ -17,33 +22,19 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
-from isaaclab_hiveboard.assets import HIVEBOARD_DIR
-
-HIVEBOARD_SIM_DIR = f"{HIVEBOARD_DIR}/Simulation"
-HIGH_TORQUE_VALVE_URDF = f"{HIVEBOARD_SIM_DIR}/Valves/Gate Valve/High Torque Valve/High_Torque_Valve.urdf"
-HONEYCOMB_USD = f"{HIVEBOARD_SIM_DIR}/Honeycomb/Honeycomb_Panel.usd"
-
-# +90 deg about Y: used on command frames so RotateFrame's -X lines up with
-# the nut spin axis (CAD +Z).
-VALVE_Y90_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
-# -90 deg about Y: CAD +Z (handwheel) points toward Spot at the origin.
-VALVE_SPAWN_POS = (1.0, 0.0, 0.0)
-VALVE_SPAWN_QUAT = (0.70710678, 0.0, -0.70710678, 0.0)
-# Inverse of the valve spawn rotation so the hive stays wall-aligned.
-HIVE_SPAWN_INV_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
-
-# Nut-frame targets for target_frame. Reset IK looks up ``approaching`` by
-# name so the arm spawns there and the sequence can skip an arrival command.
-VALVE_APPROACHING_OFFSET = OffsetCfg(pos=(-0.04, 0.0, 0.25), rot=VALVE_Y90_QUAT)
-VALVE_NUT_GRASP_OFFSET = OffsetCfg(pos=(-0.05, 0.0, 0.16), rot=VALVE_Y90_QUAT)
-VALVE_ROTATE_OFFSET = OffsetCfg(pos=(-0.0, 0.0, 0.16), rot=VALVE_Y90_QUAT)
+from isaaclab_hiveboard.assets import CIRCUIT_BREAKER_URDF, HONEYCOMB_USD, SPOT_WORKSPACE
 
 
 @configclass
-class HighTorqueValveSceneCfg(InteractiveSceneCfg):
-    """Spot + HiveBoard high-torque (gate) valve in the Isaac warehouse."""
+class CircuitBreakerSceneCfg(InteractiveSceneCfg):
+    """Circuit breaker + honeycomb + canonical TCP frames.
 
-    robot: ArticulationCfg = SPOT_ARM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    ``robot`` and ``ee_frame`` are filled by the robot-specific subclass.
+    Default placement matches Spot; Franka overrides workspace pose.
+    """
+
+    robot: ArticulationCfg = MISSING  # type: ignore
+    ee_frame: FrameTransformerCfg = MISSING  # type: ignore
 
     warehouse = AssetBaseCfg(
         prim_path="/World/Warehouse",
@@ -51,7 +42,7 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.60)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=SPOT_WORKSPACE.warehouse_pos),
         collision_group=-1,
     )
 
@@ -60,14 +51,14 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    high_torque_valve = ArticulationCfg(
-        prim_path="{ENV_REGEX_NS}/Valve",
+    circuit_breaker = ArticulationCfg(
+        prim_path="{ENV_REGEX_NS}/CircuitBreaker",
         spawn=sim_utils.UrdfFileCfg(
             fix_base=True,
             merge_fixed_joints=False,
             make_instanceable=False,
             link_density=1.0e-8,
-            asset_path=HIGH_TORQUE_VALVE_URDF,
+            asset_path=CIRCUIT_BREAKER_URDF,
             activate_contact_sensors=True,
             joint_drive=UrdfConverterCfg.JointDriveCfg(
                 drive_type="force",
@@ -87,14 +78,12 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
                 solver_position_iteration_count=4,
                 solver_velocity_iteration_count=0,
             ),
-            semantic_tags=[("class", "valve")],
+            semantic_tags=[("class", "circuit_breaker")],
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=VALVE_SPAWN_POS,
-            # CAD +Z is the handwheel axis; -90° about Y aims it at the robot.
-            rot=VALVE_SPAWN_QUAT,
+            pos=SPOT_WORKSPACE.object_pos,
+            rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
-                "PrismaticJoint": 0.0,
                 "RevoluteJoint": 0.0,
             },
             joint_vel={".*": 0.0},
@@ -109,17 +98,11 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
                 joint_names_expr=["RevoluteJoint"],
                 stiffness=0.0,
             ),
-            "prismatic_fixed": ImplicitActuatorCfg(
-                joint_names_expr=["PrismaticJoint"],
-                stiffness=1e5,
-                damping=1e3,
-                effort_limit=1000.0,
-            ),
         },
     )
 
     honeycomb = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Valve/World/Honeycomb",
+        prim_path="{ENV_REGEX_NS}/CircuitBreaker/World/Honeycomb",
         spawn=sim_utils.UsdFileCfg(
             usd_path=HONEYCOMB_USD,
             scale=(0.001, 0.001, 0.001),
@@ -127,35 +110,48 @@ class HighTorqueValveSceneCfg(InteractiveSceneCfg):
             semantic_tags=[("class", "honeycomb")],
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            # Behind the valve in the rotated World frame. Local +90° Y undoes
-            # the valve spawn so the panel stays upright as before.
-            pos=(0.0, 0.0, 0.0),
-            rot=HIVE_SPAWN_INV_QUAT,
+            pos=(-0.04, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
         ),
         collision_group=-1,
     )
 
     target_frame = FrameTransformerCfg(
-        prim_path="{ENV_REGEX_NS}/Valve/nut",
+        prim_path="{ENV_REGEX_NS}/CircuitBreaker/World",
         debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/ValveTransformers"),
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/CircuitBreakerTransformers"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/nut",
+                prim_path="{ENV_REGEX_NS}/CircuitBreaker/World",
                 name="approaching",
-                offset=VALVE_APPROACHING_OFFSET,
+                offset=OffsetCfg(
+                    pos=(0.10, 0.02, 0.0),
+                    rot=(0.0, 0.0, 0.0, 1.0),
+                ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/nut",
-                name="nut_grasp",
-                offset=VALVE_NUT_GRASP_OFFSET,
+                prim_path="{ENV_REGEX_NS}/CircuitBreaker/World",
+                name="lever_pivot_below",
+                offset=OffsetCfg(
+                    pos=(0.04, 0.0, -0.07),
+                    rot=(0.0, 0.0, 0.0, 1.0),
+                ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/nut",
+                prim_path="{ENV_REGEX_NS}/CircuitBreaker/World",
+                name="lever_pivot_above",
+                offset=OffsetCfg(
+                    pos=(0.04, 0.0, 0.07),
+                    rot=(0.0, 0.0, 0.0, 1.0),
+                ),
+            ),
+            FrameTransformerCfg.FrameCfg(
+                prim_path="{ENV_REGEX_NS}/CircuitBreaker/World",
                 name="rotate_frame",
-                offset=VALVE_ROTATE_OFFSET,
+                offset=OffsetCfg(
+                    pos=(0.02, 0.0, 0.0),
+                    rot=(0.0, 0.0, 0.0, 1.0),
+                ),
             ),
         ],
     )
-
-    ee_frame: FrameTransformerCfg = make_ee_frame(SPOT_EE)

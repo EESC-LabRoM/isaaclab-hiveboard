@@ -1,5 +1,6 @@
 from isaaclab.utils import configclass
 
+from isaaclab_hiveboard.assets import SPOT_EE, as_command_offset
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     GoToFrameCfg,
     GripperCommand,
@@ -14,7 +15,7 @@ class FramePoseCommandsCfg:
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
-        body_name="arm_link_wr1",
+        body_name=SPOT_EE.body_name,
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
         commands=[
@@ -53,7 +54,5 @@ class FramePoseCommandsCfg:
             ),
             GripperCommand(open_gripper=True, duration_s=0.75),
         ],
-        body_offset=SequentialPoseCommandCfg.OffsetCfg(
-            pos=(0.21, 0.0, -0.03),  # Tool Center Point
-        ),
+        body_offset=as_command_offset(SPOT_EE),
     )

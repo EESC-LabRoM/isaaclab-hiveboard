@@ -238,6 +238,39 @@ class SequentialPoseCommand(CommandTerm):
         """Check if all commands were finished."""
         return self._current_command_idx == len(self._command_handlers)
 
+    def get_curobo_joint_targets(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return direct joint targets for environments executing a cuRobo term.
+
+        The normal command remains a TCP pose so that the existing gripper and
+        differential-IK action interface is unchanged.  During a planned
+        segment, though, applying that pose through DLS can select a different
+        redundant-joint branch than the one cuRobo validated.  The matching
+        action term uses this method to apply the planner's exact joint
+        waypoint instead.
+        """
+        targets = torch.zeros(
+            self.num_envs, 0, device=self.device, dtype=self._command.dtype
+        )
+        active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        for command_idx, handler in enumerate(self._command_handlers):
+            if not isinstance(handler, _CuroboPlannedGoToFrameHandler):
+                continue
+            if handler._joint_target is None:
+                continue
+            if targets.shape[1] == 0:
+                targets = torch.zeros(
+                    self.num_envs,
+                    handler._joint_target.shape[1],
+                    device=self.device,
+                    dtype=handler._joint_target.dtype,
+                )
+            elif targets.shape[1] != handler._joint_target.shape[1]:
+                raise RuntimeError("All cuRobo command terms must command the same joint count.")
+            env_mask = self._current_command_idx == command_idx
+            targets[env_mask] = handler._joint_target[env_mask]
+            active |= env_mask
+        return active, targets
+
     def _update_metrics(self):
         """This command term does not have any metrics to update."""
         pass
@@ -463,9 +496,204 @@ class _GoToFrameHandler(_BaseCmdHandler):
             target_pos_w,
             target_quat_w,
         )
-        target_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
+        if self.cfg.canonicalize_upward:
+            target_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
 
         return target_pos_b, target_quat_b
+
+
+class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
+    """Follow cuRobo joint-plan waypoints for a constrained Cartesian move."""
+
+    def __init__(self, cfg: "CuroboPlannedGoToFrameCfg", command_term: SequentialPoseCommand):
+        super().__init__(cfg, command_term)
+        self.cfg: CuroboPlannedGoToFrameCfg
+        self._waypoint_pos_b = None
+        self._waypoint_quat_b = None
+        self._joint_waypoints = None
+        self._joint_target = None
+        self._waypoint_index = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
+
+    def reset(self, env_ids: torch.Tensor):
+        super().reset(env_ids)
+        self._waypoint_pos_b = None
+        self._waypoint_quat_b = None
+        self._joint_waypoints = None
+        self._joint_target = None
+        self._waypoint_index[env_ids] = 0
+        if len(env_ids) != self._num_envs:
+            raise RuntimeError("CuroboPlannedGoToFrameCfg currently requires synchronized environments.")
+
+    def _plan(self, env_ids: torch.Tensor) -> None:
+        """Build a bounded cuRobo plan and convert it to TCP pose waypoints."""
+        from isaaclab_hiveboard.assets import ASSET_DIR
+        from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
+        from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
+
+        with curobo_compatible_warp():
+            from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
+            from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
+
+            robot_cfg = load_curobo_robot_cfg(
+                self.cfg.robot_curobo_yaml or f"{ASSET_DIR}/franka/cumotion/fr3.yaml",
+                self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
+            )
+            # CommandManager runs in inference mode. Constructing cuRobo in
+            # that mode makes its reusable goal buffers inference tensors,
+            # which TrajOpt cannot subsequently update in place.
+            with torch.inference_mode(False):
+                planner = MotionPlanner(
+                    MotionPlannerCfg.create(
+                        robot=robot_cfg,
+                        self_collision_check=False,
+                        use_cuda_graph=False,
+                        num_ik_seeds=self.cfg.num_ik_seeds,
+                        num_trajopt_seeds=1,
+                        interpolation_dt=self._dt,
+                        interpolation_buffer_size=self.cfg.interpolation_buffer_size,
+                        device_cfg=DeviceCfg(),
+                    )
+                )
+            try:
+                target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
+                if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+                    raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
+                tcp_to_flange_quat = math_utils.quat_inv(
+                    self._command_term._offset_rot[env_ids]
+                )
+                tcp_to_flange_pos = -math_utils.quat_apply(
+                    tcp_to_flange_quat, self._command_term._offset_pos[env_ids]
+                )
+                flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
+                    target_pos_b,
+                    target_quat_b,
+                    tcp_to_flange_pos,
+                    tcp_to_flange_quat,
+                )
+                joint_ids, joint_names = self._asset.find_joints(
+                    self.cfg.robot_joint_names, preserve_order=True
+                )
+                current = JointState.from_position(
+                    self._asset.data.joint_pos[env_ids][:, joint_ids], joint_names=joint_names
+                )
+                # The Isaac articulation root and the FR3 URDF root are not
+                # the same frame.  Calibrate the constant transform from the
+                # current shared joint configuration, then express the Isaac
+                # target flange pose in cuRobo's URDF base frame.
+                curobo_flange = planner.compute_kinematics(current).tool_poses.get_link_pose(
+                    planner.tool_frames[0]
+                )
+                isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
+                    self._asset.data.root_pos_w[env_ids],
+                    self._asset.data.root_quat_w[env_ids],
+                    self._asset.data.body_pos_w[env_ids, self._command_term._body_idx],
+                    self._asset.data.body_quat_w[env_ids, self._command_term._body_idx],
+                )
+                flange_quat_inv_c = math_utils.quat_inv(curobo_flange.quaternion)
+                flange_pos_inv_c = -math_utils.quat_apply(
+                    flange_quat_inv_c, curobo_flange.position
+                )
+                curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
+                    isaac_flange_pos_b,
+                    isaac_flange_quat_b,
+                    flange_pos_inv_c,
+                    flange_quat_inv_c,
+                )
+                flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                    curobo_base_pos_b,
+                    curobo_base_quat_b,
+                    flange_pos_b,
+                    flange_quat_b,
+                )
+                # Isaac Lab evaluates command terms under ``inference_mode``.
+                # cuRobo's seed IK intentionally differentiates its pose cost;
+                # ``enable_grad`` alone cannot override inference mode.  Clone
+                # the input tensors in this context too: otherwise cuRobo
+                # adopts an inference-mode goal tensor as its mutable cache.
+                with torch.inference_mode(False), torch.enable_grad():
+                    current = JointState.from_position(
+                        current.position.clone(), joint_names=joint_names
+                    )
+                    goal = GoalToolPose.from_poses(
+                        {
+                            planner.tool_frames[0]: Pose(
+                                position=flange_pos_c.clone(),
+                                quaternion=flange_quat_c.clone(),
+                            )
+                        },
+                        ordered_tool_frames=planner.tool_frames,
+                        num_goalset=1,
+                    )
+                    result = planner.plan_pose(
+                        goal, current, max_attempts=1, enable_graph_attempt=99
+                    )
+                if result is None or not bool(result.success.all().item()):
+                    print(
+                        "[WARN] cuRobo plan failed; "
+                        f"start_q={current.position.detach().cpu().tolist()} "
+                        f"isaac_flange={isaac_flange_pos_b.detach().cpu().tolist()} "
+                        f"curobo_flange={curobo_flange.position.detach().cpu().tolist()} "
+                        f"curobo_base={curobo_base_pos_b.detach().cpu().tolist()} "
+                        f"flange_pos_c={flange_pos_c.detach().cpu().tolist()} "
+                        f"flange_quat_c={flange_quat_c.detach().cpu().tolist()}"
+                    )
+                    raise RuntimeError("cuRobo could not plan the requested frame motion")
+                trajectory = result.get_interpolated_plan().position
+                if trajectory.ndim == 4:
+                    trajectory = trajectory[:, 0]
+                poses = planner.compute_kinematics(
+                    JointState.from_position(trajectory[0], joint_names=joint_names)
+                ).tool_poses.get_link_pose(planner.tool_frames[0])
+                tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
+                    poses.position,
+                    poses.quaternion,
+                    self._command_term._offset_pos[0].expand_as(poses.position),
+                    self._command_term._offset_rot[0].expand_as(poses.quaternion),
+                )
+                # Convert visual TCP waypoints back to Isaac's base frame;
+                # direct joint execution below is the authoritative motion.
+                tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
+                    curobo_base_pos_b[0].expand_as(tcp_pos),
+                    curobo_base_quat_b[0].expand_as(tcp_quat),
+                    tcp_pos,
+                    tcp_quat,
+                )
+                self._waypoint_pos_b = tcp_pos.unsqueeze(0)
+                self._waypoint_quat_b = tcp_quat.unsqueeze(0)
+                self._joint_waypoints = trajectory
+                self._joint_target = torch.zeros(
+                    self._num_envs, trajectory.shape[-1], device=self._device, dtype=trajectory.dtype
+                )
+                print(f"[INFO] cuRobo planned {tcp_pos.shape[0]} TCP waypoints for {self.cfg.target_frame_name}.")
+            finally:
+                planner.destroy()
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        env_ids = torch.where(env_mask)[0]
+        # CommandManager resets every sequence handler at episode reset. Plan
+        # here instead, once this term actually becomes active after the arm
+        # has reached the lower lever pose and closed the gripper.
+        if self._waypoint_pos_b is None:
+            self._plan(env_ids)
+        # CommandManager advances a completed handler and still invokes its
+        # update once in that same tick.  Use the final waypoint for that
+        # harmless trailing update while retaining the one-past-end completion
+        # sentinel in ``_waypoint_index``.
+        last = self._waypoint_pos_b.shape[1] - 1
+        index = torch.clamp(self._waypoint_index[env_ids], max=last)
+        pos = self._waypoint_pos_b[env_ids, index]
+        quat = self._waypoint_quat_b[env_ids, index]
+        self._joint_target[env_ids] = self._joint_waypoints[env_ids, index]
+        # Keep one past the final waypoint as a completion sentinel.  Clamping
+        # at ``last`` would mark the handler done before ever commanding the
+        # final planned joint target.
+        self._waypoint_index[env_ids] = index + 1
+        return self._pack_command(self.cfg.gripper_open, pos, quat)
+
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self._waypoint_pos_b is None:
+            return torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
+        return self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
 
 
 class _GripperHandler(_BaseCmdHandler):
@@ -678,6 +906,41 @@ class _RotateFrameHandler(_BaseCmdHandler):
         return target_pos_b, target_quat_b
 
 
+class _CuroboPlannedRotateFrameHandler(
+    _CuroboPlannedGoToFrameHandler, _RotateFrameHandler
+):
+    """Execute a valve rotation endpoint through cuRobo joint waypoints."""
+
+    def __init__(
+        self, cfg: "CuroboPlannedRotateFrameCfg", command_term: SequentialPoseCommand
+    ):
+        # Initialize the mechanical rotation geometry, then the cuRobo state.
+        _RotateFrameHandler.__init__(self, cfg, command_term)
+        self.cfg: CuroboPlannedRotateFrameCfg
+        self._waypoint_pos_b = None
+        self._waypoint_quat_b = None
+        self._joint_waypoints = None
+        self._joint_target = None
+        self._waypoint_index = torch.zeros(
+            self._num_envs, dtype=torch.long, device=self._device
+        )
+
+    def reset(self, env_ids: torch.Tensor):
+        _RotateFrameHandler.reset(self, env_ids)
+        self._waypoint_pos_b = None
+        self._waypoint_quat_b = None
+        self._joint_waypoints = None
+        self._joint_target = None
+        self._waypoint_index[env_ids] = 0
+        if len(env_ids) != self._num_envs:
+            raise RuntimeError(
+                "CuroboPlannedRotateFrameCfg currently requires synchronized environments."
+            )
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        return _RotateFrameHandler.get_target_in_base_frame(self, env_ids)
+
+
 @configclass
 class SequentialPoseCommandCfg(CommandTermCfg):
     """Configuration for the uniform velocity command generator."""
@@ -695,7 +958,7 @@ class SequentialPoseCommandCfg(CommandTermCfg):
         pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         """Translation w.r.t. the parent frame. Defaults to (0.0, 0.0, 0.0)."""
         rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
-        """Quaternion rotation ``(w, x, y, z)`` w.r.t. the parent frame. Defaults to (1.0, 0.0, 0.0, 0.0)."""
+        """Quaternion rotation ``(w, x, y, z)`` w.r.t. the parent frame. Defaults to identity."""
 
     class_type: type = SequentialPoseCommand
 
@@ -770,6 +1033,25 @@ class GoToFrameCfg(BaseCmd):
     """End-effector distance to the target frame at which the command is done [m]."""
     orientation_threshold_deg: float = 10.0
     """End-effector orientation error to the target at which the command is done [deg]."""
+    canonicalize_upward: bool = True
+    """If True, flip the target 180° about TCP +X when TCP +Z points down.
+
+    That assumes Spot's TCP (+Z up, +X approach). Franka TCP is +Z approach,
+    +X hand-top — leave this False there so the authored frame rotation is
+    used as-is.
+    """
+
+
+@configclass
+class CuroboPlannedGoToFrameCfg(GoToFrameCfg):
+    """A cuRobo-planned variant of :class:`GoToFrameCfg`."""
+
+    class_type = _CuroboPlannedGoToFrameHandler
+    robot_joint_names: list[str] = MISSING  # type: ignore
+    robot_curobo_yaml: str | None = None
+    robot_urdf: str | None = None
+    num_ik_seeds: int = 4
+    interpolation_buffer_size: int = 128
 
 
 @configclass
@@ -800,3 +1082,15 @@ class RotateFrameCfg(BaseCmd):
     """Status of the gripper during the command."""
     angle_threshold_deg: float = 5.0
     """Remaining commanded arc at which the command is done [deg]."""
+
+
+@configclass
+class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
+    """A cuRobo-planned endpoint variant of :class:`RotateFrameCfg`."""
+
+    class_type = _CuroboPlannedRotateFrameHandler
+    robot_joint_names: list[str] = MISSING  # type: ignore
+    robot_curobo_yaml: str | None = None
+    robot_urdf: str | None = None
+    num_ik_seeds: int = 4
+    interpolation_buffer_size: int = 128

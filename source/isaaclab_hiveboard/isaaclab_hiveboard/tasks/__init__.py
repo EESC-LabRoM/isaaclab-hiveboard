@@ -89,6 +89,15 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-HiveBoard-Franka-OnlyRobot-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.only_robot.env:FrankaOnlyRobotEnvCfg",
+    },
+)
+
 ##
 # Backwards-compatibility aliases
 ##

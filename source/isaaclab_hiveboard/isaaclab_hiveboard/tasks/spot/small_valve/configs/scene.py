@@ -2,6 +2,7 @@ from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim.converters.urdf_converter_cfg import UrdfConverterCfg
 
+from isaaclab_hiveboard.assets import SPOT_EE, make_ee_frame
 from isaaclab_hiveboard.assets.spot.spot import SPOT_ARM_CFG
 
 from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
@@ -159,17 +160,4 @@ class SmallValveSceneCfg(InteractiveSceneCfg):
         ],
     )
 
-    ee_frame: FrameTransformerCfg = FrameTransformerCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/body",
-        debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/EndEffectorFrameTransformer"),
-        target_frames=[
-            FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/arm_link_wr1",
-                name="tool_rightfinger",
-                offset=OffsetCfg(
-                    pos=(0.21, 0.0, -0.03),
-                ),
-            ),
-        ],
-    )
+    ee_frame: FrameTransformerCfg = make_ee_frame(SPOT_EE)

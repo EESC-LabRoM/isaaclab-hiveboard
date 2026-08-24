@@ -1,7 +1,11 @@
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
-from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.stack import mdp
+
+from isaaclab_hiveboard.assets import FRANKA_EE, as_ik_offset
+from isaaclab_hiveboard.mdp.actions.curobo_planned_ik import (
+    CuroboPlannedDifferentialInverseKinematicsActionCfg,
+)
 
 
 @configclass
@@ -18,7 +22,7 @@ class FrankaIKAbsActionCfg:
         close_command_expr={"fr3_finger_joint.*": 0.0},
     )
 
-    arm_action = DifferentialInverseKinematicsActionCfg(
+    arm_action = CuroboPlannedDifferentialInverseKinematicsActionCfg(
         debug_vis=False,
         asset_name="robot",
         joint_names=[
@@ -30,12 +34,13 @@ class FrankaIKAbsActionCfg:
             "fr3_joint6",
             "fr3_joint7",
         ],
-        body_name="fr3_hand",
+        body_name=FRANKA_EE.body_name,
         controller=DifferentialIKControllerCfg(
-            command_type="pose", use_relative_mode=False, ik_method="dls"
+            command_type="pose",
+            use_relative_mode=False,
+            ik_method="dls",
+            ik_params={"lambda_val": 0.1},
         ),
         scale=1.0,
-        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
-            pos=(0.0, 0.0, 0.1034),  # Franka Tool Center Point (between finger tips)
-        ),
+        body_offset=as_ik_offset(FRANKA_EE),
     )

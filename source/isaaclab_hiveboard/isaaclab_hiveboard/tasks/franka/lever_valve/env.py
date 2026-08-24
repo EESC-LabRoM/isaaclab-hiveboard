@@ -43,7 +43,7 @@ class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
         # 11 s = 440 environment steps. The scripted sequence needs 365 steps.
         self.episode_length_s = 11.0
         self.viewer.origin_type = "asset_body"
-        self.viewer.asset_name = "lever_valve"
+        self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"
         self.viewer.env_index = 0
         self.viewer.eye = (-1.0, 1.2, 1.0)

@@ -28,7 +28,7 @@ try:
         from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
 
     from isaaclab_hiveboard.mdp.curobo_robot_cfg import (
-        load_spot_robot_cfg,
+        load_curobo_robot_cfg,
     )
 
     HAS_CUROBO = True
@@ -40,7 +40,7 @@ except ImportError as err:
     GoalToolPose = None
     JointState = None
     Pose = None
-    load_spot_robot_cfg = None
+    load_curobo_robot_cfg = None
 
 
 def _assert_get_item(obj, key_name, default: int) -> int:
@@ -79,6 +79,23 @@ def canonicalize_ee_orientation_upward(quat_b: torch.Tensor) -> torch.Tensor:
     flipped_quat = math_utils.quat_mul(q, flip_x)
     result = torch.where(inverted.unsqueeze(-1), flipped_quat, q)
     return result.squeeze(0) if is_1d else result
+
+
+def reset_joint_position(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    position: float = 0.0,
+) -> None:
+    """Write an absolute joint position (not an offset from the URDF default)."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_ids = asset_cfg.joint_ids
+    n_joints = asset.num_joints if joint_ids == slice(None) else len(joint_ids)
+    pos = torch.full(
+        (len(env_ids), n_joints), position, device=env.device, dtype=torch.float32
+    )
+    vel = torch.zeros_like(pos)
+    asset.write_joint_state_to_sim(pos, vel, joint_ids=joint_ids, env_ids=env_ids)
 
 
 def get_pose_grid(
@@ -254,9 +271,12 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             preserve_order=asset_cfg.preserve_order,
         )
         self._joint_names = joint_names
-        ee_body_ids, _ = self._asset.find_bodies("arm_link_wr1")
+        self._ee_body_name = cfg.params.get("robot_ee_body_name", "arm_link_wr1")
+        ee_body_ids, _ = self._asset.find_bodies(self._ee_body_name)
         if not ee_body_ids:
-            raise ValueError("Body 'arm_link_wr1' not found on the robot.")
+            raise ValueError(
+                f"Body '{self._ee_body_name}' not found on robot '{asset_cfg.name}'."
+            )
         self._ee_body_idx = ee_body_ids[0]
         self._ee_offset_pos = torch.tensor(
             self._ee_offset.pos, device=env.device, dtype=torch.float32
@@ -740,9 +760,13 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 "There should be more than one point in the grid for RandomizeValveHandlePoseEvent."
             )
 
-        robot_cfg = load_spot_robot_cfg(
-            yaml_path=f"{ASSET_DIR}/spot/cumotion/spot.yaml",
-            urdf_path=f"{ASSET_DIR}/spot/spot_with_arm.urdf",
+        robot_cfg = load_curobo_robot_cfg(
+            yaml_path=self.cfg.params.get(
+                "robot_curobo_yaml", f"{ASSET_DIR}/spot/cumotion/spot.yaml"
+            ),
+            urdf_path=self.cfg.params.get(
+                "robot_urdf", f"{ASSET_DIR}/spot/spot_with_arm.urdf"
+            ),
         )
         chunk_size = min(n_poses, 64)
         device_cfg = DeviceCfg()
@@ -752,7 +776,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 num_seeds=20,
                 position_tolerance=0.005,
                 orientation_tolerance=0.05,
-                self_collision_check=True,
+                self_collision_check=bool(
+                    self.cfg.params.get("self_collision_check", True)
+                ),
                 use_cuda_graph=True,
                 max_batch_size=chunk_size,
                 device_cfg=device_cfg,
@@ -1036,6 +1062,33 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         env.sim.forward()
         env.scene.update(dt=0.0)
 
+        # The valve URDF's root convention can differ from the articulation
+        # root that Isaac Sim writes (the circuit-breaker ``World`` link is a
+        # concrete example).  Correct the residual from the *simulated*
+        # FrameTransformer rather than relying on that proxy convention.  This
+        # preserves the configured, shared scenario frame offsets while making
+        # the named reset target coincide with the robot TCP.
+        target_frame_name = self.cfg.params.get("target_frame_name")
+        frame_name = self.cfg.params.get("frame_name", "target_frame")
+        if target_frame_name is not None:
+            frame = env.scene[frame_name]
+            try:
+                target_idx = frame.data.target_frame_names.index(target_frame_name)
+            except ValueError as error:
+                raise ValueError(
+                    f"Frame '{target_frame_name}' is not provided by '{frame_name}'."
+                ) from error
+            target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
+            root_pos_w = self._valve.data.root_pos_w[env_ids]
+            root_quat_w = self._valve.data.root_quat_w[env_ids]
+            root_pos_w = root_pos_w + (tcp_pos_w - target_pos_w)
+            self._valve.write_root_pose_to_sim(
+                torch.cat((root_pos_w, root_quat_w), dim=-1), env_ids=env_ids
+            )
+            env.scene.write_data_to_sim()
+            env.sim.forward()
+            env.scene.update(dt=0.0)
+
     def _apply_valve_first_reset(
         self, env: ManagerBasedEnv, env_ids: torch.Tensor
     ) -> None:
@@ -1112,6 +1165,10 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         valve_root_link: str = None,
         valve_ee_link: str = None,
         valve_root_pose: OffsetCfg | None = None,
+        robot_ee_body_name: str | None = None,
+        robot_curobo_yaml: str | None = None,
+        robot_urdf: str | None = None,
+        self_collision_check: bool = True,
         valve_joint_range: tuple | list | float | None = None,
         n_valve_states: int | None = None,
         align_rotation: bool | None = None,
@@ -1226,3 +1283,27 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         env.scene.write_data_to_sim()
         env.sim.forward()
         env.scene.update(dt=0.0)
+
+        # Correct the remaining pose error using the simulated target frame.
+        # The valve URDF root and Isaac articulation root can differ, so the
+        # analytical valve-root transform above is only an initial estimate.
+        target_frame_name = self.cfg.params.get("target_frame_name")
+        frame_name = self.cfg.params.get("frame_name", "target_frame")
+        if target_frame_name is not None:
+            frame = env.scene[frame_name]
+            try:
+                target_idx = frame.data.target_frame_names.index(target_frame_name)
+            except ValueError as error:
+                raise ValueError(
+                    f"Frame '{target_frame_name}' is not provided by '{frame_name}'."
+                ) from error
+            target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
+            root_pos_w = self._valve.data.root_pos_w[env_ids]
+            root_quat_w = self._valve.data.root_quat_w[env_ids]
+            corrected_root_pos_w = root_pos_w + (tcp_pos_w - target_pos_w)
+            self._valve.write_root_pose_to_sim(
+                torch.cat((corrected_root_pos_w, root_quat_w), dim=-1), env_ids=env_ids
+            )
+            env.scene.write_data_to_sim()
+            env.sim.forward()
+            env.scene.update(dt=0.0)

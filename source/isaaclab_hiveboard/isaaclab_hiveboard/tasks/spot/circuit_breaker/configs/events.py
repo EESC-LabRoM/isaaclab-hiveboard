@@ -3,9 +3,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.tasks.spot.circuit_breaker.configs.scene import (
-    CIRCUIT_BREAKER_URDF,
-)
+from isaaclab_hiveboard.assets import CIRCUIT_BREAKER_URDF
 from isaaclab_hiveboard.mdp.events import (
     RandomizeValveHandlePoseEvent,
 )
