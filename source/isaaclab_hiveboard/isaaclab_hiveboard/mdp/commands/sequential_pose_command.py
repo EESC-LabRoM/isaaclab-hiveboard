@@ -909,7 +909,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
 class _CuroboPlannedRotateFrameHandler(
     _CuroboPlannedGoToFrameHandler, _RotateFrameHandler
 ):
-    """Execute a valve rotation endpoint through cuRobo joint waypoints."""
+    """Solve the complete valve arc as ordered cuRobo IK joint waypoints."""
 
     def __init__(
         self, cfg: "CuroboPlannedRotateFrameCfg", command_term: SequentialPoseCommand
@@ -939,6 +939,213 @@ class _CuroboPlannedRotateFrameHandler(
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return _RotateFrameHandler.get_target_in_base_frame(self, env_ids)
+
+    def _plan(self, env_ids: torch.Tensor) -> None:
+        """Retarget the complete Cartesian arc from the current grasp state."""
+        if len(env_ids) != 1:
+            raise RuntimeError(
+                "CuroboPlannedRotateFrameCfg currently supports one environment."
+            )
+
+        from isaaclab_hiveboard.assets import ASSET_DIR
+        from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
+        from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
+
+        with curobo_compatible_warp():
+            from curobo.motion_retargeter import (
+                MotionRetargeter,
+                MotionRetargeterCfg,
+                SequenceGoalToolPose,
+            )
+            from curobo.types import DeviceCfg, JointState, ToolPoseCriteria
+
+            robot_cfg = load_curobo_robot_cfg(
+                self.cfg.robot_curobo_yaml or f"{ASSET_DIR}/franka/cumotion/fr3.yaml",
+                self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
+            )
+            tool_frame = robot_cfg["robot_cfg"]["kinematics"]["tool_frames"][0]
+            with torch.inference_mode(False):
+                retargeter = MotionRetargeter(
+                    MotionRetargeterCfg.create(
+                        robot=robot_cfg,
+                        tool_pose_criteria={
+                            tool_frame: ToolPoseCriteria.track_position_and_orientation(
+                                xyz=[1.0, 1.0, 1.0],
+                                rpy=[1.0, 1.0, 1.0],
+                                non_terminal_scale=1.0,
+                            )
+                        },
+                        num_envs=1,
+                        use_mpc=False,
+                        self_collision_check=False,
+                        scene_model=None,
+                        load_collision_spheres=False,
+                        optimization_dt=self._dt,
+                        num_seeds_global=self.cfg.num_ik_seeds,
+                        num_seeds_local=1,
+                        position_tolerance=0.002,
+                        orientation_tolerance=0.02,
+                        device_cfg=DeviceCfg(),
+                    )
+                )
+
+            try:
+                if (
+                    self._command_term._offset_pos is None
+                    or self._command_term._offset_rot is None
+                ):
+                    raise ValueError(
+                        "CuroboPlannedRotateFrameCfg requires pose_command.body_offset"
+                    )
+
+                final_angle = self.angle_rad_tensor[env_ids][0]
+                step_angle = self.cfg.angular_velocity * self._dt
+                num_steps = max(
+                    1, int(math.ceil(abs(float(final_angle.item())) / step_angle))
+                )
+                num_waypoints = num_steps + 1
+                angles = torch.linspace(
+                    0.0,
+                    float(final_angle.item()),
+                    num_waypoints,
+                    device=self._device,
+                    dtype=torch.float32,
+                )
+                axis_b = self.rot_axis_b[env_ids].expand(num_waypoints, -1)
+                radius_b = self.radius_vec[env_ids].expand(num_waypoints, -1)
+                axis_pos_b = self.axis_pos_b[env_ids].expand(num_waypoints, -1)
+                tcp_pos_b = axis_pos_b + self._rodrigues_rotate(
+                    radius_b, axis_b, angles
+                )
+                delta_quat_b = math_utils.quat_from_angle_axis(angles, axis_b)
+                tcp_quat_b = math_utils.quat_mul(
+                    delta_quat_b,
+                    self.initial_quat_b[env_ids].expand(num_waypoints, -1),
+                )
+
+                offset_pos = self._command_term._offset_pos[env_ids].expand(
+                    num_waypoints, -1
+                )
+                offset_rot = self._command_term._offset_rot[env_ids].expand(
+                    num_waypoints, -1
+                )
+                tcp_to_flange_quat = math_utils.quat_inv(offset_rot)
+                tcp_to_flange_pos = -math_utils.quat_apply(
+                    tcp_to_flange_quat, offset_pos
+                )
+                flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
+                    tcp_pos_b,
+                    tcp_quat_b,
+                    tcp_to_flange_pos,
+                    tcp_to_flange_quat,
+                )
+
+                joint_ids, joint_names = self._asset.find_joints(
+                    self.cfg.robot_joint_names, preserve_order=True
+                )
+                current = JointState.from_position(
+                    self._asset.data.joint_pos[env_ids][:, joint_ids],
+                    joint_names=joint_names,
+                )
+
+                curobo_flange = retargeter.kinematics.compute_kinematics(
+                    current
+                ).tool_poses.get_link_pose(tool_frame)
+                isaac_flange_pos_b, isaac_flange_quat_b = (
+                    math_utils.subtract_frame_transforms(
+                        self._asset.data.root_pos_w[env_ids],
+                        self._asset.data.root_quat_w[env_ids],
+                        self._asset.data.body_pos_w[
+                            env_ids, self._command_term._body_idx
+                        ],
+                        self._asset.data.body_quat_w[
+                            env_ids, self._command_term._body_idx
+                        ],
+                    )
+                )
+                flange_quat_inv_c = math_utils.quat_inv(curobo_flange.quaternion)
+                flange_pos_inv_c = -math_utils.quat_apply(
+                    flange_quat_inv_c, curobo_flange.position
+                )
+                curobo_base_pos_b, curobo_base_quat_b = (
+                    math_utils.combine_frame_transforms(
+                        isaac_flange_pos_b,
+                        isaac_flange_quat_b,
+                        flange_pos_inv_c,
+                        flange_quat_inv_c,
+                    )
+                )
+                flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                    curobo_base_pos_b.expand(num_waypoints, -1),
+                    curobo_base_quat_b.expand(num_waypoints, -1),
+                    flange_pos_b,
+                    flange_quat_b,
+                )
+
+                with torch.inference_mode(False), torch.enable_grad():
+                    current = JointState.from_position(
+                        current.position.clone(), joint_names=joint_names
+                    )
+                    arc_targets = SequenceGoalToolPose(
+                        tool_frames=[tool_frame],
+                        position=flange_pos_c[:, None, None, None, :].clone(),
+                        quaternion=flange_quat_c[:, None, None, None, :].clone(),
+                    )
+                    if hasattr(retargeter, "_set_initial_joint_state"):
+                        result = retargeter.solve_sequence(
+                            arc_targets,
+                            initial_joint_state=current,
+                        )
+                        joint_waypoints = result.joint_state.reorder(
+                            joint_names
+                        ).position
+                    else:
+                        # Compatibility with installed cuRobo releases that
+                        # predate the initial_joint_state sequence API. This is
+                        # equivalent to solve_sequence(), but preserves the
+                        # measured grasp branch before calling solve_frame().
+                        retargeter.reset()
+                        retargeter._prev_solution = current.position.clone()
+                        retargeter._prev_velocity = current.velocity.clone()
+                        frame_solutions = [
+                            retargeter.solve_frame(arc_targets.get_frame(index))
+                            .joint_state.reorder(joint_names)
+                            .position
+                            for index in range(arc_targets.num_frames)
+                        ]
+                        joint_waypoints = torch.stack(frame_solutions, dim=1)
+
+                max_joint_step = torch.max(
+                    torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1])
+                )
+                if max_joint_step > self.cfg.max_joint_step:
+                    raise RuntimeError(
+                        "cuRobo retargeted arc contains a joint discontinuity: "
+                        f"max joint step={float(max_joint_step.item()):.3f} rad"
+                    )
+
+                self._waypoint_pos_b = tcp_pos_b.unsqueeze(0)
+                self._waypoint_quat_b = tcp_quat_b.unsqueeze(0)
+                self._joint_waypoints = joint_waypoints
+                self._joint_target = torch.zeros(
+                    self._num_envs,
+                    len(joint_names),
+                    device=self._device,
+                    dtype=self._joint_waypoints.dtype,
+                )
+                print(
+                    f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints "
+                    f"for the valve arc."
+                )
+            finally:
+                if hasattr(retargeter, "destroy"):
+                    retargeter.destroy()
+                else:
+                    retargeter._global_ik_solver.destroy()
+                    if retargeter._local_ik_solver is not None:
+                        retargeter._local_ik_solver.destroy()
+                    if retargeter._mpc_solver is not None:
+                        retargeter._mpc_solver.destroy()
 
 
 @configclass
@@ -1086,7 +1293,7 @@ class RotateFrameCfg(BaseCmd):
 
 @configclass
 class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
-    """A cuRobo-planned endpoint variant of :class:`RotateFrameCfg`."""
+    """A cuRobo-retargeted arc variant of :class:`RotateFrameCfg`."""
 
     class_type = _CuroboPlannedRotateFrameHandler
     robot_joint_names: list[str] = MISSING  # type: ignore
@@ -1094,3 +1301,5 @@ class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
     robot_urdf: str | None = None
     num_ik_seeds: int = 4
     interpolation_buffer_size: int = 128
+    max_joint_step: float = 0.15
+    """Maximum accepted change of any joint between arc waypoints [rad]."""

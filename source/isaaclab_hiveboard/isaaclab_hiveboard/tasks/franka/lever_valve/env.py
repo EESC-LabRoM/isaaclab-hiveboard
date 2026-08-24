@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import math
+
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
 
@@ -39,6 +41,34 @@ class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
     rewards = None
 
     def __post_init__(self):
+        # Give this environment its own TCP orientation while leaving the
+        # valve target and rotation frames unchanged. Rotating the TCP frame
+        # -90 deg makes the physical hand roll +90 deg about TCP +X, preserving
+        # the successful grasp orientation from the previous target-frame fix.
+        half_sqrt = math.sqrt(0.5)
+        tcp_roll_x_minus_90 = (
+            half_sqrt,
+            -half_sqrt,
+            0.0,
+            0.0,
+        )  # quaternion (w, x, y, z)
+        tcp_offsets = (
+            self.scene.ee_frame.target_frames[0].offset,
+            self.commands.pose_command.body_offset,
+            self.actions.arm_action.body_offset,
+        )
+        for offset in tcp_offsets:
+            if offset is None:
+                raise ValueError("Franka lever-valve TCP offsets must be configured")
+            w1, x1, y1, z1 = offset.rot
+            w2, x2, y2, z2 = tcp_roll_x_minus_90
+            offset.rot = (
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            )
+
         self.decimation = 5
         # 11 s = 440 environment steps. The scripted sequence needs 365 steps.
         self.episode_length_s = 11.0

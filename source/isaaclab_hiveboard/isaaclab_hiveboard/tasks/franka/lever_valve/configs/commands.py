@@ -4,6 +4,7 @@ from isaaclab_hiveboard.assets import FRANKA_EE, as_command_offset
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
     CuroboPlannedRotateFrameCfg,
+    GoToFrameCfg,
     GripperCommand,
     SequentialPoseCommandCfg,
 )
@@ -27,21 +28,27 @@ class FramePoseCommandsCfg:
                 target_frame_name="lever_pivot",
                 robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
             ),
+            GripperCommand(
+                open_gripper=False,
+                duration_s=0.3,
+            ),
             CuroboPlannedRotateFrameCfg(
                 frame_name="target_frame",
                 target_frame_name="rotate_frame",
-                axis=(1.0, 0.0, 0.0),  # Ball-valve URDF RevoluteJoint axis
+                # The Franka workspace rotates the valve root 180 deg about Z,
+                # so the URDF joint's local +X axis is base-frame -X.
+                axis=(-1.0, 0.0, 0.0),
                 angle_deg=-90,
                 gripper_open=False,
                 robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
+                num_ik_seeds=16,
             ),
-            CuroboPlannedGoToFrameCfg(
+            GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.03,
                 canonicalize_upward=False,
                 target_frame_name="approaching",
-                robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
             ),
         ],
         body_offset=as_command_offset(FRANKA_EE),

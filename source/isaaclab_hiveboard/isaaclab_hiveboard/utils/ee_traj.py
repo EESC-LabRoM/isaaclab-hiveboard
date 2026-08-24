@@ -15,10 +15,6 @@ from typing import Any
 import numpy as np
 import torch
 
-import isaaclab.utils.math as math_utils
-
-from isaaclab_hiveboard.mdp.commands.sequential_pose_command import RotateFrameCfg
-
 
 def _to_numpy(value: torch.Tensor) -> np.ndarray:
     return value.detach().float().cpu().numpy()
@@ -28,6 +24,13 @@ class EeTrajDumper:
     """Record TCP, command, rotation-axis, and valve joint traces for plotting."""
 
     def __init__(self, env, out_dir: str, env_index: int = 0):
+        global math_utils
+        import isaaclab.utils.math as math_utils
+
+        from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
+            RotateFrameCfg,
+        )
+
         self._env = env.unwrapped if hasattr(env, "unwrapped") else env
         self._out_dir = os.path.abspath(out_dir)
         self._i = int(env_index)
@@ -61,8 +64,17 @@ class EeTrajDumper:
                     self._valve_joint_idx = joint_ids[0]
                 break
 
-        wr1_ids, _ = self._robot.find_bodies("arm_link_wr1")
-        self._wr1_idx = wr1_ids[0] if wr1_ids else self._cmd._body_idx
+        self._wr1_idx = (
+            self._robot.body_names.index("arm_link_wr1")
+            if "arm_link_wr1" in self._robot.body_names
+            else self._cmd._body_idx
+        )
+        self._finger_indices: dict[str, int] = {}
+        for finger_name in ("fr3_leftfinger", "fr3_rightfinger"):
+            if finger_name in self._robot.body_names:
+                self._finger_indices[finger_name] = self._robot.body_names.index(
+                    finger_name
+                )
 
     def sample(
         self,
@@ -170,6 +182,45 @@ class EeTrajDumper:
             row[f"{name}_x_b"] = float(pos[0])
             row[f"{name}_y_b"] = float(pos[1])
             row[f"{name}_z_b"] = float(pos[2])
+
+        finger_positions_b: dict[str, torch.Tensor] = {}
+        for name, body_idx in self._finger_indices.items():
+            finger_pos_b, _ = math_utils.subtract_frame_transforms(
+                self._robot.data.root_pos_w[i : i + 1],
+                self._robot.data.root_quat_w[i : i + 1],
+                self._robot.data.body_pos_w[i : i + 1, body_idx],
+                self._robot.data.body_quat_w[i : i + 1, body_idx],
+            )
+            short_name = name.removeprefix("fr3_")
+            finger_positions_b[short_name] = finger_pos_b[0]
+            row[f"{short_name}_x_b"] = float(finger_pos_b[0, 0])
+            row[f"{short_name}_y_b"] = float(finger_pos_b[0, 1])
+            row[f"{short_name}_z_b"] = float(finger_pos_b[0, 2])
+
+        if "lever_pivot" in self._frame_names and finger_positions_b:
+            lever_idx = self._frame_names.index("lever_pivot")
+            handle_pos_b = frame_pos_b[lever_idx]
+            for name, position in finger_positions_b.items():
+                row[f"{name}_to_handle_m"] = float(
+                    torch.linalg.vector_norm(position - handle_pos_b).item()
+                )
+            if {"leftfinger", "rightfinger"} <= finger_positions_b.keys():
+                grasp_center = 0.5 * (
+                    finger_positions_b["leftfinger"]
+                    + finger_positions_b["rightfinger"]
+                )
+                row["grasp_center_x_b"] = float(grasp_center[0])
+                row["grasp_center_y_b"] = float(grasp_center[1])
+                row["grasp_center_z_b"] = float(grasp_center[2])
+                row["grasp_center_to_handle_m"] = float(
+                    torch.linalg.vector_norm(grasp_center - handle_pos_b).item()
+                )
+                row["finger_gap_m"] = float(
+                    torch.linalg.vector_norm(
+                        finger_positions_b["leftfinger"]
+                        - finger_positions_b["rightfinger"]
+                    ).item()
+                )
         self._rows.append(row)
 
     def save(self) -> str:
@@ -193,6 +244,21 @@ class EeTrajDumper:
         npz_path = os.path.join(self._out_dir, "ee_traj.npz")
         np.savez_compressed(npz_path, **arrays)
 
+        import h5py
+
+        hdf5_path = os.path.join(self._out_dir, "ee_traj.hdf5")
+        with h5py.File(hdf5_path, "w") as hdf5_file:
+            trajectory = hdf5_file.create_group("trajectory")
+            trajectory.attrs["metadata"] = json.dumps(meta)
+            for key, values in arrays.items():
+                if values.dtype == object:
+                    trajectory.create_dataset(
+                        key,
+                        data=values.astype(h5py.string_dtype(encoding="utf-8")),
+                    )
+                else:
+                    trajectory.create_dataset(key, data=values, compression="gzip")
+
         meta_path = os.path.join(self._out_dir, "ee_traj_meta.json")
         with open(meta_path, "w") as handle:
             json.dump(meta, handle, indent=2)
@@ -200,6 +266,7 @@ class EeTrajDumper:
         plot_paths = _plot_traj(arrays, self._out_dir)
         print(f"[INFO] Wrote EE trajectory dataset: {csv_path}")
         print(f"[INFO] NPZ: {npz_path}")
+        print(f"[INFO] HDF5: {hdf5_path}")
         for path in plot_paths:
             print(f"[INFO] Plot: {path}")
         return csv_path
@@ -247,6 +314,143 @@ def _plot_traj(data: dict[str, np.ndarray], out_dir: str) -> list[str]:
     fig.savefig(path, dpi=140)
     plt.close(fig)
     paths.append(path)
+
+    if "grasp_center_to_handle_m" in data:
+        rotate_starts = np.flatnonzero(
+            rotate_mask & np.concatenate(([True], ~rotate_mask[:-1]))
+        )
+        if rotate_starts.size:
+            rotate_start = int(rotate_starts[0])
+            following_non_rotate = np.flatnonzero(~rotate_mask[rotate_start:])
+            rotate_end = (
+                rotate_start + int(following_non_rotate[0])
+                if following_non_rotate.size
+                else len(t)
+            )
+            window_start = max(0, rotate_start - 10)
+            rotate_slice = slice(rotate_start, rotate_end)
+            window_slice = slice(window_start, rotate_end)
+
+            fig, axes = plt.subplots(3, 1, figsize=(9.0, 9.0))
+            axes[0].plot(
+                data["cmd_y_b"][rotate_slice],
+                data["cmd_z_b"][rotate_slice],
+                color="C1",
+                linestyle="--",
+                linewidth=2.0,
+                label="TCP command",
+            )
+            axes[0].plot(
+                data["ee_y_b"][rotate_slice],
+                data["ee_z_b"][rotate_slice],
+                color="C0",
+                label="measured TCP",
+            )
+            axes[0].plot(
+                data["lever_pivot_y_b"][rotate_slice],
+                data["lever_pivot_z_b"][rotate_slice],
+                color="C3",
+                linewidth=2.5,
+                label="lever grasp point",
+            )
+            axes[0].scatter(
+                data["axis_y_b"][rotate_start],
+                data["axis_z_b"][rotate_start],
+                color="black",
+                marker="x",
+                s=60,
+                label="rotation axis",
+            )
+            axes[0].set_aspect("equal", adjustable="box")
+            axes[0].set_xlabel("y base [m]")
+            axes[0].set_ylabel("z base [m]")
+            axes[0].legend(loc="best", fontsize=8)
+            axes[0].grid(True, alpha=0.3)
+
+            tw = t[window_slice]
+            axes[1].plot(
+                tw,
+                1.0e3 * data["finger_gap_m"][window_slice],
+                label="finger-body gap",
+            )
+            axes[1].plot(
+                tw,
+                1.0e3 * data["grasp_center_to_handle_m"][window_slice],
+                label="finger midpoint to handle",
+            )
+            axes[1].plot(
+                tw,
+                1.0e3 * data["pos_err_m"][window_slice],
+                linestyle="--",
+                label="TCP tracking error",
+            )
+            axes[1].set_ylabel("distance [mm]")
+            axes[1].legend(loc="best", fontsize=8)
+            axes[2].plot(
+                tw,
+                np.rad2deg(data["valve_joint_rad"][window_slice]),
+                color="C3",
+                label="measured valve angle",
+            )
+            axes[2].set_ylabel("valve angle [deg]")
+            axes[2].set_xlabel("time [s]")
+            axes[2].legend(loc="best", fontsize=8)
+            for ax in axes[1:]:
+                ax.axvline(t[rotate_start], color="black", linestyle=":", label="rotation starts")
+                ax.grid(True, alpha=0.3)
+            axes[0].set_title("First valve-rotation attempt: command, tracking, and contact")
+            path = os.path.join(out_dir, "rotation_contact_diagnostic.png")
+            fig.tight_layout()
+            fig.savefig(path, dpi=160)
+            plt.close(fig)
+            paths.append(path)
+
+        fig, axes = plt.subplots(3, 1, figsize=(9.0, 8.0), sharex=True)
+        axes[0].plot(
+            data["lever_pivot_y_b"],
+            data["lever_pivot_z_b"],
+            color="C3",
+            linewidth=2.5,
+            label="lever grasp point",
+        )
+        axes[0].plot(
+            data["grasp_center_y_b"],
+            data["grasp_center_z_b"],
+            color="C0",
+            label="finger midpoint",
+        )
+        axes[0].plot(
+            data["cmd_y_b"],
+            data["cmd_z_b"],
+            color="C1",
+            linestyle="--",
+            label="TCP command",
+        )
+        axes[0].set_aspect("equal", adjustable="box")
+        axes[0].set_ylabel("z base [m]")
+        axes[0].set_xlabel("y base [m]")
+        axes[0].legend(loc="best", fontsize=8)
+        axes[1].plot(t, 1.0e3 * data["grasp_center_to_handle_m"], label="finger midpoint to handle")
+        axes[1].plot(t, 1.0e3 * data["leftfinger_to_handle_m"], label="left finger to handle")
+        axes[1].plot(t, 1.0e3 * data["rightfinger_to_handle_m"], label="right finger to handle")
+        axes[1].plot(t, 1.0e3 * data["pos_err_m"], linestyle="--", label="TCP tracking error")
+        axes[1].set_ylabel("distance [mm]")
+        axes[1].legend(loc="best", fontsize=8)
+        axes[2].plot(t, 1.0e3 * data["finger_gap_m"], label="finger-body gap")
+        axes[2].plot(t, np.rad2deg(data["valve_joint_rad"]), label="valve angle [deg]")
+        axes[2].set_ylabel("gap [mm] / angle [deg]")
+        axes[2].set_xlabel("time [s]")
+        axes[2].legend(loc="best", fontsize=8)
+        for ax in axes[1:]:
+            ax.grid(True, alpha=0.3)
+            _shade_commands(ax, t, cmd_idx)
+        axes[0].grid(True, alpha=0.3)
+        axes[0].set_title("Franka fingers relative to moving lever grasp point")
+        path = os.path.join(out_dir, "gripper_lever_contact.png")
+        fig.tight_layout()
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths.append(path)
 
     fig, axes = plt.subplots(4, 1, figsize=(9.0, 9.0), sharex=True)
     axes[0].plot(t, data["ee_x_b"], label="TCP")
