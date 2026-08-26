@@ -81,6 +81,35 @@ class SpotBallValveEnvCfg_PLAY(SpotBallValveEnvCfg):
         self.decimation = 10  # 20 Hz
 
 
+@configclass
+class SpotBallValveEnvCfg_FAST_PLAY(SpotBallValveEnvCfg_PLAY):
+    """Headless-oriented PLAY environment optimized for demonstration collection."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # These assets are visual-only and do not contribute to observations,
+        # terminations, recording, or robot-valve contact dynamics.
+        self.scene.warehouse = None
+        self.scene.light = None
+        self.scene.honeycomb = None
+
+        # Preserve collisions while avoiding unused contact-reporting overhead.
+        self.scene.robot.spawn.activate_contact_sensors = False
+        self.scene.ball_valve.spawn.activate_contact_sensors = False
+        self.scene.robot.spawn.articulation_props.enabled_self_collisions = False
+
+        # The environments are structurally identical, so use the fastest clone
+        # path. No camera data is produced by this collection-only environment.
+        self.scene.replicate_physics = True
+        self.scene.clone_in_fabric = True
+        self.sim.render_interval = self.decimation
+
+        # A supplied reset-state cache should take precedence over per-reset IK.
+        # With no cache path, the event still falls back to on-the-fly generation.
+        self.events.reset_robot_joints.params["on_the_fly"] = False
+
+
 def _add_collection_cameras(cfg: ManagerBasedRLEnvCfg) -> None:
     """Wrist and third-person RGB cameras stored in the HDF5 dataset."""
     cfg.scene.wrist_cam = CameraCfg(

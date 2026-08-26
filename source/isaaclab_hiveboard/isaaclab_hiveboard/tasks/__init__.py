@@ -30,6 +30,18 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-BallValve-Fast-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            "isaaclab_hiveboard.tasks.spot.ball_valve.env:"
+            "SpotBallValveEnvCfg_FAST_PLAY"
+        ),
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Spot-BallValve-Play-Cameras-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

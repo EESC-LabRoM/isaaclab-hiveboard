@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Collect fixed-base Spot manipulation demos with relative EE pose control."""
+"""Collect fixed-base Spot lever-valve demos with absolute EE pose control."""
 
 """Launch Isaac Sim Simulator first."""
 
@@ -14,7 +14,7 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(
-    description="Collect successful Spot ball-valve demos using heuristic relative IK."
+    description="Collect successful Spot lever-valve demos using the PLAY environment."
 )
 parser.add_argument(
     "--num_envs", type=int, default=1, help="Number of environments to simulate."
@@ -61,22 +61,10 @@ parser.add_argument(
     help="Length of the recorded video in steps.",
 )
 parser.add_argument(
-    "--position_step",
-    type=float,
-    default=0.04,
-    help="Maximum translation commanded per environment step in meters.",
-)
-parser.add_argument(
-    "--rotation_step",
-    type=float,
-    default=0.2,
-    help="Maximum axis-angle rotation commanded per environment step in radians.",
-)
-parser.add_argument(
-    "--position_gain", type=float, default=1.0, help="Position error gain."
-)
-parser.add_argument(
-    "--rotation_gain", type=float, default=1.0, help="Orientation error gain."
+    "--task_direction",
+    choices=("open", "close", "both"),
+    default="open",
+    help="Valve direction to collect (default: open).",
 )
 parser.add_argument(
     "--max_steps",
@@ -94,10 +82,6 @@ if args_cli.num_envs <= 0:
     parser.error("--num_envs must be greater than zero")
 if args_cli.num_demos <= 0:
     parser.error("--num_demos must be greater than zero")
-if args_cli.position_step <= 0.0:
-    parser.error("--position_step must be greater than zero")
-if args_cli.rotation_step <= 0.0:
-    parser.error("--rotation_step must be greater than zero")
 if args_cli.video:
     args_cli.enable_cameras = True
 
@@ -115,29 +99,11 @@ from isaaclab.managers.recorder_manager import DatasetExportMode
 from isaaclab.utils.dict import print_dict
 
 from isaaclab_hiveboard.tasks.spot.ball_valve.env import (
-    SpotBallValveDeltaEnvCfg_PLAY,
-)
-from isaaclab_hiveboard.mdp.relative_ee_pose_controller import (
-    RelativeEePoseController,
+    SpotBallValveEnvCfg_FAST_PLAY,
 )
 
 
-TASK_ID = "Spot-Manipulation-Ball-Valve-Delta-Play"
-
-
-def _register_task() -> None:
-    if TASK_ID not in gym.registry:
-        gym.register(
-            id=TASK_ID,
-            entry_point="isaaclab.envs:ManagerBasedRLEnv",
-            disable_env_checker=True,
-            kwargs={
-                "env_cfg_entry_point": (
-                    "isaaclab_hiveboard.tasks.spot.ball_valve.env:"
-                    "SpotBallValveDeltaEnvCfg_PLAY"
-                )
-            },
-        )
+TASK_ID = "Isaac-HiveBoard-Spot-BallValve-Fast-Play-v0"
 
 
 def _dataset_path(dataset_dir: str, dataset_name: str) -> str:
@@ -147,18 +113,14 @@ def _dataset_path(dataset_dir: str, dataset_name: str) -> str:
 
 def main():
     """Collect successful heuristic demonstrations."""
-    _register_task()
-    env_cfg = SpotBallValveDeltaEnvCfg_PLAY()
+    env_cfg = SpotBallValveEnvCfg_FAST_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
-    env_cfg.actions.arm_action.scale = (
-        args_cli.position_step,
-        args_cli.position_step,
-        args_cli.position_step,
-        args_cli.rotation_step,
-        args_cli.rotation_step,
-        args_cli.rotation_step,
-    )
+    env_cfg.commands.pose_command.open_task_prob = {
+        "open": 1.0,
+        "close": 0.0,
+        "both": 0.5,
+    }[args_cli.task_direction]
     if args_cli.reset_state_cache_path is not None:
         env_cfg.events.reset_robot_joints.params["reset_state_cache_path"] = (
             os.path.abspath(args_cli.reset_state_cache_path)
@@ -198,21 +160,32 @@ def main():
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    env.reset()
-    controller = RelativeEePoseController(
-        env,
-        position_step=args_cli.position_step,
-        rotation_step=args_cli.rotation_step,
-        position_gain=args_cli.position_gain,
-        rotation_gain=args_cli.rotation_gain,
-    )
+    obs, _ = env.reset()
+
+    base_env = env.unwrapped
+    action_terms = list(base_env.action_manager.active_terms)
+    action_dims = list(base_env.action_manager.action_term_dim)
+    if action_terms == ["gripper_action", "arm_action"] and action_dims == [1, 7]:
+
+        def route_command(command: torch.Tensor) -> torch.Tensor:
+            return command
+
+    elif action_terms == ["arm_action", "gripper_action"] and action_dims == [7, 1]:
+
+        def route_command(command: torch.Tensor) -> torch.Tensor:
+            return torch.cat((command[:, 1:8], command[:, 0:1]), dim=-1)
+
+    else:
+        raise RuntimeError(
+            "Expected the newer absolute Spot action layout; "
+            f"received terms={action_terms}, dims={action_dims}."
+        )
 
     print(f"[INFO] Recording successful demonstrations to: {dataset_path}")
     print(
         f"[INFO] Control frequency: {1.0 / env.unwrapped.step_dt:.1f} Hz. "
-        "Relative EE limits: "
-        f"position={args_cli.position_step:.4f} m, "
-        f"rotation={args_cli.rotation_step:.4f} rad per step."
+        f"Task direction: {args_cli.task_direction}. "
+        "Actions: absolute TCP pose plus gripper command."
     )
 
     recorder = env.unwrapped.recorder_manager
@@ -223,8 +196,9 @@ def main():
     while simulation_app.is_running():
         start_time = time.time()
         with torch.inference_mode():
-            actions = controller.compute()
-            env.step(actions)
+            command = obs["policy"]["command"]
+            actions = route_command(command)
+            obs, _, _, _, _ = env.step(actions)
         step += 1
 
         successes = recorder.exported_successful_episode_count
@@ -265,16 +239,8 @@ def main():
     control_freq = 1.0 / env.unwrapped.step_dt
     env.close()
 
-    try:
-        from scripts.analyze_dataset import finalize_recorded_dataset
-    except ImportError:
-        from analyze_dataset import finalize_recorded_dataset
-
-    finalize_recorded_dataset(
-        dataset_path=dataset_path,
-        control_frequency_hz=control_freq,
-        generate_plots=True,
-        env_name=TASK_ID,
+    print(
+        f"[INFO] Dataset is ready for BC at {control_freq:.1f} Hz: {dataset_path}"
     )
 
 

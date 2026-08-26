@@ -7,6 +7,7 @@
 
 from .ball_valve.env import (
     SpotBallValveEnvCfg,
+    SpotBallValveEnvCfg_FAST_PLAY,
     SpotBallValveEnvCfg_PLAY,
     SpotBallValveEnvCfg_PLAY_CAMERAS,
 )
@@ -16,6 +17,7 @@ from .small_valve.env import SpotSmallValveEnvCfg
 
 __all__ = [
     "SpotBallValveEnvCfg",
+    "SpotBallValveEnvCfg_FAST_PLAY",
     "SpotBallValveEnvCfg_PLAY",
     "SpotBallValveEnvCfg_PLAY_CAMERAS",
     "SpotCircuitBreakerEnvCfg",

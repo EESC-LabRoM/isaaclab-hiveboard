@@ -6,6 +6,7 @@
 #   ./scripts/record_all_examples.sh --device cuda:0
 #   TASKS="Isaac-HiveBoard-Spot-BallValve-v0" ./scripts/record_all_examples.sh
 #   FAST=0 ./scripts/record_all_examples.sh
+#   STEP_RATE_INTERVAL=2 ./scripts/record_all_examples.sh
 #
 # Extra arguments are forwarded to scripts/play.py.
 # Each clip is a single demo: recording stops on success or timeout.
@@ -19,6 +20,7 @@ DEVICE="${DEVICE:-cuda:0}"
 FAST="${FAST:-1}"
 HEADLESS="${HEADLESS:-1}"
 FPS="${FPS:-30}"
+STEP_RATE_INTERVAL="${STEP_RATE_INTERVAL:-1}"
 
 DEFAULT_TASKS=(
     Isaac-HiveBoard-Spot-BallValve-v0
@@ -69,13 +71,18 @@ for task in "${TASK_LIST[@]}"; do
     log_file="$LOG_DIR/${slug}.log"
     echo "=== ${task} ==="
 
-    if uv run python scripts/play.py \
+    uv run python scripts/play.py \
         --task "$task" \
         --video_name "$slug" \
+        --step-rate-interval "$STEP_RATE_INTERVAL" \
         "${PLAY_ARGS[@]}" \
         "$@" \
-        >"$log_file" 2>&1
-    then
+        2>&1 \
+        | tee "$log_file" \
+        | sed -u -n 's/^\[STEP_RATE\]/  /p'
+    play_status=${PIPESTATUS[0]}
+
+    if [[ $play_status -eq 0 ]]; then
         video="$(find "$OUT_DIR" -maxdepth 1 -type f -name "${slug}*.mp4" -printf '%T@ %p\n' \
             | sort -nr | head -n1 | cut -d' ' -f2-)"
         if [[ -n "$video" ]]; then
@@ -86,8 +93,7 @@ for task in "${TASK_LIST[@]}"; do
             failed+=("$task")
         fi
     else
-        status=$?
-        echo "  fail  exit ${status}  (see ${log_file})"
+        echo "  fail  exit ${play_status}  (see ${log_file})"
         failed+=("$task")
     fi
     echo

@@ -9,6 +9,7 @@ import argparse
 import math
 import os
 import sys
+import time
 
 from isaaclab.app import AppLauncher
 
@@ -111,6 +112,18 @@ parser.add_argument(
     help="Stop after this many environment steps; useful for reproducible diagnostics.",
 )
 parser.add_argument(
+    "--step-rate-interval",
+    type=float,
+    default=None,
+    help="Print the rolling environment steps/second at this interval; disabled by default.",
+)
+parser.add_argument(
+    "--ee-traj-dir",
+    type=str,
+    default=None,
+    help="Write measured/commanded TCP and contact-geometry plots to this directory.",
+)
+parser.add_argument(
     "--franka-position-only",
     action="store_true",
     default=False,
@@ -205,13 +218,13 @@ def main():
         env_cfg.scene.num_envs = args_cli.num_envs
         env_cfg.sim.device = args_cli.device
 
-        if args_cli.pose_debug:
-            if hasattr(env_cfg.scene, "target_frame"):
-                env_cfg.scene.target_frame.debug_vis = True
-            if hasattr(env_cfg.scene, "ee_frame"):
-                env_cfg.scene.ee_frame.debug_vis = True
-            # if hasattr(env_cfg.commands, "pose_command"):
-            #     env_cfg.commands.pose_command.debug_vis = True
+        # if args_cli.pose_debug:
+        #     if hasattr(env_cfg.scene, "target_frame"):
+        #         env_cfg.scene.target_frame.debug_vis = True
+        #     if hasattr(env_cfg.scene, "ee_frame"):
+        #         env_cfg.scene.ee_frame.debug_vis = True
+        # if hasattr(env_cfg.commands, "pose_command"):
+        #     env_cfg.commands.pose_command.debug_vis = True
 
         if args_cli.franka_position_only:
             if not ("Franka" in args_cli.task):
@@ -288,7 +301,24 @@ def main():
 
     count = 0
     obs, _ = env.reset()
-    pbar = tqdm(total=record_steps) if args_cli.video else tqdm()
+    report_step_rate = args_cli.step_rate_interval is not None
+    if report_step_rate and args_cli.step_rate_interval <= 0:
+        raise ValueError("--step-rate-interval must be greater than zero")
+    pbar = (
+        tqdm(total=record_steps, disable=report_step_rate)
+        if args_cli.video
+        else tqdm(disable=report_step_rate)
+    )
+    rate_start_time = time.monotonic()
+    rate_start_step = 0
+
+    ee_traj_dumper = None
+    if args_cli.ee_traj_dir is not None:
+        from isaaclab_hiveboard.utils.ee_traj import EeTrajDumper
+
+        ee_traj_dumper = EeTrajDumper(
+            env, args_cli.ee_traj_dir, env_index=args_cli.pose_debug_env
+        )
 
     action_terms = list(base_env.action_manager.active_terms) if hasattr(base_env, "action_manager") else []
     action_term_dims = list(base_env.action_manager.action_term_dim) if hasattr(base_env, "action_manager") else []
@@ -362,19 +392,41 @@ def main():
 
             if relative_controller is not None:
                 action = relative_controller.compute()
-            elif (
-                isinstance(obs, dict)
-                and isinstance(obs.get("policy"), dict)
-                and "command" in obs["policy"]
-            ):
+                applied_pose_command = None
+            elif isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
                 command = obs["policy"]["command"]
                 action = _route_pose_command(command)
+                applied_pose_command = command.clone()
             else:
                 action = torch.zeros(env.action_space.shape, device=base_env.device)
+                applied_pose_command = None
+
+            command_idx = None
+            if ee_traj_dumper is not None:
+                command_idx = int(
+                    ee_traj_dumper._cmd._current_command_idx[
+                        args_cli.pose_debug_env
+                    ].item()
+                )
 
             obs, _, terminated, truncated, _ = env.step(action)
             count += 1
+            if ee_traj_dumper is not None:
+                ee_traj_dumper.sample(
+                    count,
+                    applied_command=applied_pose_command,
+                    command_idx=command_idx,
+                )
             pbar.update(1)
+
+            if report_step_rate:
+                now = time.monotonic()
+                elapsed = now - rate_start_time
+                if elapsed >= args_cli.step_rate_interval:
+                    rate = (count - rate_start_step) / elapsed
+                    print(f"[STEP_RATE] {rate:.1f} steps/s ({count} steps)", flush=True)
+                    rate_start_time = now
+                    rate_start_step = count
 
             term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
             trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
@@ -383,6 +435,8 @@ def main():
             if args_cli.max_steps is not None and count >= args_cli.max_steps:
                 break
 
+    if ee_traj_dumper is not None:
+        ee_traj_dumper.save()
     env.close()
 
 
