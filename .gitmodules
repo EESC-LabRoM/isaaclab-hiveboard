@@ -1,3 +1,6 @@
 [submodule "dependencies/HiveBoard"]
 	path = dependencies/HiveBoard
 	url = https://github.com/EESC-LabRoM/HiveBoard.git
+[submodule "dependencies/curobo"]
+	path = dependencies/curobo
+	url = https://github.com/NVlabs/curobo.git
