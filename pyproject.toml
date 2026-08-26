@@ -21,6 +21,8 @@ dependencies = [
     "zarr<3",
     "tqdm",
     "h5py",
+    "numpy",
+    "torch",
     "tabulate",
     "InquirerPy",
 ]
