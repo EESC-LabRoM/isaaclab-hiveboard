@@ -235,6 +235,41 @@ def ee_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     return ee_pos
 
 
+def sequential_command_index(
+    env: ManagerBasedRLEnv, command_name: str = "pose_command"
+) -> torch.Tensor:
+    """Current index in a :class:`SequentialPoseCommand` sequence, shape ``(N, 1)``."""
+    command = env.command_manager.get_term(command_name)
+    return command._current_command_idx.to(dtype=torch.float32).unsqueeze(-1)
+
+
+def target_frame_positions_w(
+    env: ManagerBasedRLEnv, frame_name: str = "target_frame"
+) -> torch.Tensor:
+    """World positions of every target on a frame transformer, flattened ``(N, 3F)``."""
+    frame_data: FrameTransformerData = env.scene[frame_name].data
+    return frame_data.target_pos_w.reshape(env.num_envs, -1)
+
+
+def ee_to_target_frame_distances(
+    env: ManagerBasedRLEnv,
+    ee_frame: str = "ee_frame",
+    frame_name: str = "target_frame",
+) -> torch.Tensor:
+    """TCP-to-each-target-frame distances, shape ``(N, F)``."""
+    ee_pos = env.scene[ee_frame].data.target_pos_w[:, 0]
+    frames = env.scene[frame_name].data.target_pos_w
+    return torch.linalg.vector_norm(frames - ee_pos.unsqueeze(1), dim=-1)
+
+
+def asset_body_positions_w(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """World positions of selected bodies, flattened ``(N, 3B)``."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return asset.data.body_pos_w[:, asset_cfg.body_ids].reshape(env.num_envs, -1)
+
+
 def ee_quat(env: ManagerBasedRLEnv, make_quat_unique: bool = True) -> torch.Tensor:
     """The orientation of the end-effector in the environment frame.
 

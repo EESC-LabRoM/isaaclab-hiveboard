@@ -170,6 +170,10 @@ def main():
         from isaaclab_hiveboard.tasks.spot.small_valve.env import SpotSmallValveEnvCfg
 
         env_cfg = SpotSmallValveEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Spot-Button-v0" or args_cli.task == "Spot-Manipulation-Button":
+        from isaaclab_hiveboard.tasks.spot.button.env import SpotButtonEnvCfg
+
+        env_cfg = SpotButtonEnvCfg()
     elif (
         args_cli.task == "Isaac-HiveBoard-Spot-CircuitBreaker-v0"
         or args_cli.task == "Spot-Manipulation-Circuit-Breaker"
@@ -236,10 +240,7 @@ def main():
                 f"{args_cli.franka_breaker_pitch_deg:.1f} deg."
             )
 
-        if args_cli.fast:
-            args_cli.video_width = 1280
-            args_cli.video_height = 720
-            args_cli.video_fps = 30
+        def _apply_fast_render() -> None:
             env_cfg.sim.render.antialiasing_mode = "DLSS"
             env_cfg.sim.render.dlss_mode = 0  # Performance
             env_cfg.sim.render.enable_reflections = False
@@ -250,10 +251,24 @@ def main():
             env_cfg.sim.render.enable_shadows = True
             env_cfg.sim.render.samples_per_pixel = 1
 
+        if args_cli.fast:
+            args_cli.video_width = 1280
+            args_cli.video_height = 720
+            args_cli.video_fps = 30
+            _apply_fast_render()
+
         if args_cli.video:
             env_cfg.decimation = max(1, round((1.0 / env_cfg.sim.dt) / args_cli.video_fps))
             env_cfg.sim.render_interval = env_cfg.decimation
             env_cfg.viewer.resolution = (args_cli.video_width, args_cli.video_height)
+        else:
+            # Default Isaac Lab render_interval is 1, so a 200 Hz sim draws the
+            # viewport five times per env step (and vsync-locks to a crawl).
+            env_cfg.sim.render_interval = env_cfg.decimation
+            if not getattr(args_cli, "headless", False):
+                env_cfg.viewer.resolution = (1280, 720)
+                if not args_cli.fast:
+                    _apply_fast_render()
 
         env = gym.make(
             id=args_cli.task,
@@ -289,6 +304,72 @@ def main():
     count = 0
     obs, _ = env.reset()
     pbar = tqdm(total=record_steps) if args_cli.video else tqdm()
+
+    diag_rows: list[dict] = []
+    diag_interval = max(1, int(args_cli.pose_debug_interval))
+    diag_names = None
+    if "button" in base_env.scene.keys():
+        button_asset = base_env.scene["button"]
+        print("[play] button joint_names=", list(button_asset.joint_names))
+        print("[play] button body_names=", list(button_asset.body_names))
+        print(
+            "[play] button root_pos=",
+            button_asset.data.root_pos_w[0].detach().cpu().tolist(),
+            "root_quat=",
+            button_asset.data.root_quat_w[0].detach().cpu().tolist(),
+        )
+        for body in ("World", "lid_pivot", "button_pivot"):
+            ids, names = button_asset.find_bodies(body)
+            if ids:
+                print(
+                    f"[play] body {names[0]} pos=",
+                    button_asset.data.body_pos_w[0, ids[0]].detach().cpu().tolist(),
+                )
+        frame = base_env.scene["target_frame"]
+        diag_names = list(frame.data.target_frame_names)
+        print("[play] target frames=", diag_names)
+        for i, name in enumerate(diag_names):
+            print(
+                f"[play] frame {name} pos=",
+                frame.data.target_pos_w[0, i].detach().cpu().tolist(),
+            )
+        ee = base_env.scene["ee_frame"]
+        print(
+            "[play] ee_tcp pos=",
+            ee.data.target_pos_w[0, 0].detach().cpu().tolist(),
+        )
+
+    def _capture_diagnostics(step: int) -> None:
+        diag = obs.get("diagnostics") if isinstance(obs, dict) else None
+        if not isinstance(diag, dict):
+            return
+        row: dict = {"step": step}
+        parts = [f"step={step}"]
+        for key, value in diag.items():
+            vals = value[0].detach().cpu().flatten().tolist()
+            if len(vals) == 1:
+                row[key] = vals[0]
+                parts.append(f"{key}={vals[0]:.4f}")
+            else:
+                for i, item in enumerate(vals):
+                    label = (
+                        f"{key}_{diag_names[i]}"
+                        if key == "ee_to_frames" and diag_names is not None and i < len(diag_names)
+                        else f"{key}_{i}"
+                    )
+                    row[label] = item
+                if key == "ee_to_frames" and diag_names is not None:
+                    dist = " ".join(
+                        f"{n}:{vals[i]:.3f}" for i, n in enumerate(diag_names) if i < len(vals)
+                    )
+                    parts.append(f"dist[{dist}]")
+                elif key in ("lid_joint_pos", "button_joint_pos", "command_index"):
+                    parts.append(f"{key}={vals}")
+        diag_rows.append(row)
+        if args_cli.pose_debug and (step % diag_interval == 0 or step <= 1):
+            print("[play] " + " ".join(parts))
+
+    _capture_diagnostics(0)
 
     action_terms = list(base_env.action_manager.active_terms) if hasattr(base_env, "action_manager") else []
     action_term_dims = list(base_env.action_manager.action_term_dim) if hasattr(base_env, "action_manager") else []
@@ -375,13 +456,49 @@ def main():
             obs, _, terminated, truncated, _ = env.step(action)
             count += 1
             pbar.update(1)
+            _capture_diagnostics(count)
 
             term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
             trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
+            if term or trunc:
+                print(f"[play] episode end at step {count} terminated={term} truncated={trunc}")
+                term_mgr = getattr(base_env, "termination_manager", None)
+                if term_mgr is not None:
+                    for name in term_mgr.active_terms:
+                        done = term_mgr.get_term(name)
+                        flag = done.any().item() if torch.is_tensor(done) else bool(done)
+                        print(f"[play]   termination.{name}={flag}")
+                if "button" in base_env.scene.keys():
+                    button = base_env.scene["button"]
+                    print(
+                        "[play]   button joint_pos=",
+                        button.data.joint_pos[0].detach().cpu().tolist(),
+                        "joint_names=",
+                        list(button.joint_names),
+                    )
+                cmd = base_env.command_manager.get_term("pose_command")
+                if hasattr(cmd, "_current_command_idx"):
+                    print(
+                        "[play]   command_index=",
+                        int(cmd._current_command_idx[0].item()),
+                        "/",
+                        len(cmd.cfg.commands),
+                    )
             if args_cli.video and (term or trunc or count >= record_steps):
                 break
             if args_cli.max_steps is not None and count >= args_cli.max_steps:
                 break
+
+    if diag_rows:
+        import csv
+
+        diag_path = os.path.join("logs", "spot_button_diag.csv")
+        os.makedirs("logs", exist_ok=True)
+        with open(diag_path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(diag_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(diag_rows)
+        print(f"[play] wrote {len(diag_rows)} diagnostic rows to {diag_path}")
 
     env.close()
 

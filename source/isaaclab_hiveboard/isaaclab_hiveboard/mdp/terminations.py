@@ -67,3 +67,33 @@ def valve_rotation_success(
     return command.is_done() & (
         torch.abs(joint_angle - command.valve_joint_des) <= threshold_rad
     )
+
+
+def button_task_success(
+    env: ManagerBasedRLEnv,
+    asset_name: str,
+    lid_joint_name: str,
+    button_joint_name: str,
+    lid_open_pos: float,
+    lid_open_threshold_rad: float,
+    button_press_threshold: float,
+) -> torch.Tensor:
+    """Succeed when the cover is open and the button is depressed.
+
+    The scripted pose sequence is only a heuristic; success is the HiveBoard
+    stage-2 criterion on the two button joints, looked up by name.
+    """
+    asset = env.scene[asset_name]
+    lid_ids, lid_found = asset.find_joints(lid_joint_name)
+    button_ids, button_found = asset.find_joints(button_joint_name)
+    if len(lid_ids) != 1 or len(button_ids) != 1:
+        raise ValueError(
+            f"Lid joint '{lid_joint_name}' -> {lid_found}, "
+            f"button joint '{button_joint_name}' -> {button_found}, "
+            f"available {list(asset.joint_names)}"
+        )
+    lid_angle = asset.data.joint_pos[:, lid_ids[0]]
+    button_travel = asset.data.joint_pos[:, button_ids[0]]
+    lid_open = torch.abs(lid_angle - lid_open_pos) <= lid_open_threshold_rad
+    button_pressed = button_travel <= button_press_threshold
+    return lid_open & button_pressed
