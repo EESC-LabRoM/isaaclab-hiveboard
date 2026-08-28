@@ -54,20 +54,6 @@ class FramePoseCommandsCfg:
                 velocity=0.20,
                 target_frame_name="lid_clear",
             ),
-            # GoToFrameCfg(
-            #     frame_name="target_frame",
-            #     gripper_open=False,
-            #     distance_threshold=0.03,
-            #     velocity=0.20,
-            #     target_frame_name="lid_safe",
-            # ),
-            # GoToFrameCfg(
-            #     frame_name="target_frame",
-            #     gripper_open=False,
-            #     distance_threshold=0.03,
-            #     orientation_threshold_deg=20.0,
-            #     target_frame_name="button_approach",
-            # ),
             GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=False,

@@ -31,7 +31,6 @@ _LID_CLOSED_POS = -1.56
 _APPROACH_POS = (0.120, 0.000, 0.0)
 _LID_PRE_CONTACT_POS = (0.020, -0.07, 0.0)
 _LID_CONTACT_POS = (0.010, -0.05, 0.0)
-_LID_PUSH_POS = (0.008, 0.120, 0.0)
 # After the hinge arc, raise off the cover first, then back toward Spot
 # at that height, then down to the button line.
 _LID_LIFT_POS = (0.070, 0.060, 0.040)
@@ -52,16 +51,16 @@ class ButtonSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING  # type: ignore
     ee_frame: FrameTransformerCfg = MISSING  # type: ignore
 
-    # warehouse = AssetBaseCfg(
-    #     prim_path="/World/Warehouse",
-    #     spawn=sim_utils.UsdFileCfg(
-    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
-    #         collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(pos=SPOT_WORKSPACE.warehouse_pos),
-    #     collision_group=-1,
-    # )
-    #
+    warehouse = AssetBaseCfg(
+        prim_path="/World/Warehouse",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=SPOT_WORKSPACE.warehouse_pos),
+        collision_group=-1,
+    )
+
     light = AssetBaseCfg(
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
@@ -124,21 +123,21 @@ class ButtonSceneCfg(InteractiveSceneCfg):
         },
     )
 
-    # honeycomb = AssetBaseCfg(
-    #     prim_path="{ENV_REGEX_NS}/Button/World/Honeycomb",
-    #     spawn=sim_utils.UsdFileCfg(
-    #         usd_path=HONEYCOMB_USD,
-    #         scale=(0.001, 0.001, 0.001),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
-    #         semantic_tags=[("class", "honeycomb")],
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(
-    #         pos=(-0.04, 0.0, 0.0),
-    #         rot=(1.0, 0.0, 0.0, 0.0),
-    #     ),
-    #     collision_group=-1,
-    # )
-    #
+    honeycomb = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Button/World/Honeycomb",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=HONEYCOMB_USD,
+            scale=(0.001, 0.001, 0.001),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            semantic_tags=[("class", "honeycomb")],
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(-0.04, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        collision_group=-1,
+    )
+
     target_frame = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Button/World",
         debug_vis=False,
@@ -176,14 +175,6 @@ class ButtonSceneCfg(InteractiveSceneCfg):
                     rot=_FRAME_ROT,
                 ),
             ),
-            # FrameTransformerCfg.FrameCfg(
-            #     prim_path="{ENV_REGEX_NS}/Button/World",
-            #     name="lid_push",
-            #     offset=OffsetCfg(
-            #         pos=_LID_PUSH_POS,
-            #         rot=_FRAME_ROT,
-            #     ),
-            # ),
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Button/World",
                 name="lid_lift",
