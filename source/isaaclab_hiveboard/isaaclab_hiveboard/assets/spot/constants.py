@@ -73,8 +73,7 @@ KNEE_STIFFNESS: float = 60.0
 KNEE_DAMPING: float = 1.5
 KNEE_FRICTION: float = 0.180
 
-# ARM_EFFORT_LIMIT: tuple[float, ...] = (90.9, 181.8, 90.9, 30.3, 30.3, 30.3, 15.32)
-ARM_EFFORT_LIMIT = (1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0)
+ARM_EFFORT_LIMIT: tuple[float, ...] = (90.9, 181.8, 90.9, 30.3, 30.3, 30.3, 15.32)
 # ARM_STIFFNESS: tuple[float, ...] = (120.0, 120.0, 120.0, 100.0, 100.0, 100.0, 16.0)
 
 # ARM_DAMPING: tuple[float, ...] = (2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.32)
