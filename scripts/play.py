@@ -6,9 +6,11 @@
 """Unified task player for HiveBoard manipulation environments (Spot, Franka)."""
 
 import argparse
+import csv
 import math
 import os
 import sys
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -103,6 +105,21 @@ parser.add_argument(
     default=0,
     help="Environment index to inspect with --pose-debug (default: 0).",
 )
+parser.add_argument(
+    "--lamp-distance-plot",
+    type=str,
+    default=None,
+    help=(
+        "Write a PNG and CSV trace of TCP distance from the lamp screw frame; "
+        "intended for the Spot lamp task."
+    ),
+)
+parser.add_argument(
+    "--contact-debug",
+    action="store_true",
+    default=False,
+    help="Draw red markers at gripper/lamp contact points; markers are included in --video output.",
+)
 
 parser.add_argument(
     "--max-steps",
@@ -142,6 +159,7 @@ import gymnasium as gym
 import torch
 from tqdm import tqdm
 
+import isaaclab.utils.math as math_utils
 import isaaclab_hiveboard  # noqa: F401
 
 
@@ -175,6 +193,13 @@ def main():
 
         env_cfg = SpotButtonEnvCfg()
     elif (
+        args_cli.task == "Isaac-HiveBoard-Spot-Lamp-v0"
+        or args_cli.task == "Spot-Manipulation-Lamp"
+    ):
+        from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg
+
+        env_cfg = SpotLampEnvCfg()
+    elif (
         args_cli.task == "Isaac-HiveBoard-Spot-CircuitBreaker-v0"
         or args_cli.task == "Spot-Manipulation-Circuit-Breaker"
     ):
@@ -200,6 +225,10 @@ def main():
         from isaaclab_hiveboard.tasks.franka.lever_valve.env import FrankaLeverValveEnvCfg
 
         env_cfg = FrankaLeverValveEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Franka-Lamp-v0":
+        from isaaclab_hiveboard.tasks.franka.lamp.env import FrankaLampEnvCfg
+
+        env_cfg = FrankaLampEnvCfg()
     else:
         # Fallback to standard Gym registration if task is not in the explicit list
         print(f"[INFO] Using standard Gym registration for task: {args_cli.task}")
@@ -216,6 +245,16 @@ def main():
                 env_cfg.scene.ee_frame.debug_vis = True
             # if hasattr(env_cfg.commands, "pose_command"):
             #     env_cfg.commands.pose_command.debug_vis = True
+
+        if args_cli.contact_debug:
+            contact_sensor_names = ("finger_contact", "jaw_contact")
+            missing = [name for name in contact_sensor_names if not hasattr(env_cfg.scene, name)]
+            if missing:
+                raise ValueError("--contact-debug is only supported by tasks with gripper contact sensors")
+            for name in contact_sensor_names:
+                sensor_cfg = getattr(env_cfg.scene, name)
+                sensor_cfg.track_contact_points = True
+                sensor_cfg.max_contact_data_count_per_prim = 16
 
         if args_cli.franka_position_only:
             if not ("Franka" in args_cli.task):
@@ -305,71 +344,51 @@ def main():
     obs, _ = env.reset()
     pbar = tqdm(total=record_steps) if args_cli.video else tqdm()
 
-    diag_rows: list[dict] = []
-    diag_interval = max(1, int(args_cli.pose_debug_interval))
-    diag_names = None
-    if "button" in base_env.scene.keys():
-        button_asset = base_env.scene["button"]
-        print("[play] button joint_names=", list(button_asset.joint_names))
-        print("[play] button body_names=", list(button_asset.body_names))
-        print(
-            "[play] button root_pos=",
-            button_asset.data.root_pos_w[0].detach().cpu().tolist(),
-            "root_quat=",
-            button_asset.data.root_quat_w[0].detach().cpu().tolist(),
-        )
-        for body in ("World", "lid_pivot", "button_pivot"):
-            ids, names = button_asset.find_bodies(body)
-            if ids:
-                print(
-                    f"[play] body {names[0]} pos=",
-                    button_asset.data.body_pos_w[0, ids[0]].detach().cpu().tolist(),
-                )
-        frame = base_env.scene["target_frame"]
-        diag_names = list(frame.data.target_frame_names)
-        print("[play] target frames=", diag_names)
-        for i, name in enumerate(diag_names):
-            print(
-                f"[play] frame {name} pos=",
-                frame.data.target_pos_w[0, i].detach().cpu().tolist(),
+    contact_visualizer = None
+    contact_sensors = ()
+    if args_cli.contact_debug:
+        import isaaclab.sim as sim_utils
+        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+
+        contact_visualizer = VisualizationMarkers(
+            VisualizationMarkersCfg(
+                prim_path="/Visuals/LampContactPoints",
+                markers={
+                    "contact": sim_utils.SphereCfg(
+                        radius=0.012,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(1.0, 0.0, 0.0),
+                            emissive_color=(1.0, 0.0, 0.0),
+                        ),
+                    ),
+                    "no_contact": sim_utils.SphereCfg(
+                        radius=0.012,
+                        visible=False,
+                    ),
+                },
             )
-        ee = base_env.scene["ee_frame"]
-        print(
-            "[play] ee_tcp pos=",
-            ee.data.target_pos_w[0, 0].detach().cpu().tolist(),
+        )
+        contact_sensors = tuple(
+            base_env.scene[name] for name in ("finger_contact", "jaw_contact")
         )
 
-    def _capture_diagnostics(step: int) -> None:
-        diag = obs.get("diagnostics") if isinstance(obs, dict) else None
-        if not isinstance(diag, dict):
+    def _update_contact_visualizer() -> None:
+        if contact_visualizer is None:
             return
-        row: dict = {"step": step}
-        parts = [f"step={step}"]
-        for key, value in diag.items():
-            vals = value[0].detach().cpu().flatten().tolist()
-            if len(vals) == 1:
-                row[key] = vals[0]
-                parts.append(f"{key}={vals[0]:.4f}")
-            else:
-                for i, item in enumerate(vals):
-                    label = (
-                        f"{key}_{diag_names[i]}"
-                        if key == "ee_to_frames" and diag_names is not None and i < len(diag_names)
-                        else f"{key}_{i}"
-                    )
-                    row[label] = item
-                if key == "ee_to_frames" and diag_names is not None:
-                    dist = " ".join(
-                        f"{n}:{vals[i]:.3f}" for i, n in enumerate(diag_names) if i < len(vals)
-                    )
-                    parts.append(f"dist[{dist}]")
-                elif key in ("lid_joint_pos", "button_joint_pos", "command_index"):
-                    parts.append(f"{key}={vals}")
-        diag_rows.append(row)
-        if args_cli.pose_debug and (step % diag_interval == 0 or step <= 1):
-            print("[play] " + " ".join(parts))
-
-    _capture_diagnostics(0)
+        positions = []
+        marker_indices = []
+        debug_env = min(args_cli.pose_debug_env, base_env.num_envs - 1)
+        for sensor in contact_sensors:
+            contact_pos_w = sensor.data.contact_pos_w[debug_env].reshape(-1, 3)
+            force_matrix_w = sensor.data.force_matrix_w[debug_env].reshape(-1, 3)
+            in_contact = torch.linalg.vector_norm(force_matrix_w, dim=-1) > 0.1
+            valid = in_contact & torch.isfinite(contact_pos_w).all(dim=-1)
+            positions.append(torch.nan_to_num(contact_pos_w))
+            marker_indices.append(torch.where(valid, 0, 1))
+        contact_visualizer.visualize(
+            torch.cat(positions, dim=0),
+            marker_indices=torch.cat(marker_indices, dim=0),
+        )
 
     action_terms = list(base_env.action_manager.active_terms) if hasattr(base_env, "action_manager") else []
     action_term_dims = list(base_env.action_manager.action_term_dim) if hasattr(base_env, "action_manager") else []
@@ -400,6 +419,33 @@ def main():
 
         def _route_pose_command(command: torch.Tensor) -> torch.Tensor:
             return command
+
+    lamp_distance_rows = []
+    lamp_trace = None
+    if args_cli.lamp_distance_plot is not None:
+        if "lamp" not in base_env.scene.keys() or "target_frame" not in base_env.scene.keys():
+            raise ValueError("--lamp-distance-plot is only supported by the lamp task")
+        command_term = base_env.command_manager.get_term("pose_command")
+        target_frame = base_env.scene["target_frame"]
+        screw_frame_idx = target_frame.data.target_frame_names.index("screw_frame")
+        lamp = base_env.scene["lamp"]
+        robot = base_env.scene["robot"]
+        revolute_idx = lamp.find_joints("RevoluteJoint")[0][0]
+        prismatic_idx = lamp.find_joints("PrismaticJoint")[0][0]
+        lamp_body_idx = lamp.find_bodies("lamp_pivot")[0][0]
+        gripper_joint_ids = robot.find_joints("arm_f1x")[0]
+        gripper_joint_idx = gripper_joint_ids[0] if gripper_joint_ids else None
+        lamp_trace = (
+            command_term,
+            target_frame,
+            screw_frame_idx,
+            lamp,
+            robot,
+            revolute_idx,
+            prismatic_idx,
+            lamp_body_idx,
+            gripper_joint_idx,
+        )
 
     cam = getattr(base_env, "viewport_camera_controller", None)
     start_eye = tuple(base_env.cfg.viewer.eye) if hasattr(base_env.cfg, "viewer") else (2.0, 2.0, 1.0)
@@ -438,6 +484,8 @@ def main():
 
     while simulation_app.is_running():
         with torch.inference_mode():
+            _update_contact_visualizer()
+
             if args_cli.orbit:
                 _apply_orbit(count)
 
@@ -457,6 +505,166 @@ def main():
             count += 1
             pbar.update(1)
             _capture_diagnostics(count)
+
+            if lamp_trace is not None:
+                (
+                    trace_command,
+                    target_frame,
+                    screw_frame_idx,
+                    lamp,
+                    robot,
+                    revolute_idx,
+                    prismatic_idx,
+                    lamp_body_idx,
+                    gripper_joint_idx,
+                ) = lamp_trace
+                trace_env = min(args_cli.pose_debug_env, base_env.num_envs - 1)
+                env_ids = torch.tensor([trace_env], device=base_env.device)
+                ee_pos_w, ee_quat_w = trace_command._get_ee_in_world_frame(env_ids)
+                lamp_pos_w = target_frame.data.target_pos_w[
+                    env_ids, screw_frame_idx
+                ]
+                lamp_quat_w = target_frame.data.target_quat_w[
+                    env_ids, screw_frame_idx
+                ]
+                ee_pos_l, _ = math_utils.subtract_frame_transforms(
+                    lamp_pos_w, lamp_quat_w, ee_pos_w, ee_quat_w
+                )
+                rel = ee_pos_l[0]
+                radial = torch.linalg.vector_norm(rel[1:])
+                total = torch.linalg.vector_norm(rel)
+                command_idx = int(trace_command._current_command_idx[trace_env].item())
+                handler_name = (
+                    type(trace_command._command_handlers[command_idx]).__name__
+                    if command_idx < len(trace_command._command_handlers)
+                    else "done"
+                )
+                lamp_lin_vel = float(
+                    torch.linalg.vector_norm(
+                        lamp.data.body_lin_vel_w[trace_env, lamp_body_idx]
+                    ).item()
+                )
+                lamp_ang_vel = float(
+                    torch.linalg.vector_norm(
+                        lamp.data.body_ang_vel_w[trace_env, lamp_body_idx]
+                    ).item()
+                )
+                finger_n = float("nan")
+                jaw_n = float("nan")
+                for name, key in (("finger_contact", "finger_n"), ("jaw_contact", "jaw_n")):
+                    if name not in base_env.scene.keys():
+                        continue
+                    force = torch.linalg.vector_norm(
+                        base_env.scene[name].data.force_matrix_w[trace_env], dim=-1
+                    ).max()
+                    if key == "finger_n":
+                        finger_n = float(force.item())
+                    else:
+                        jaw_n = float(force.item())
+                gripper_rad = float("nan")
+                if gripper_joint_idx is not None:
+                    gripper_rad = float(
+                        robot.data.joint_pos[trace_env, gripper_joint_idx].item()
+                    )
+                lamp_distance_rows.append(
+                    {
+                        "step": count,
+                        "time_s": count * float(base_env.step_dt),
+                        "command_idx": command_idx,
+                        "command_type": handler_name,
+                        "axial_mm": float(rel[0].item() * 1000.0),
+                        "radial_mm": float(radial.item() * 1000.0),
+                        "distance_mm": float(total.item() * 1000.0),
+                        "lamp_angle_rad": float(
+                            lamp.data.joint_pos[trace_env, revolute_idx].item()
+                        ),
+                        "lamp_insertion_mm": float(
+                            lamp.data.joint_pos[trace_env, prismatic_idx].item()
+                            * 1000.0
+                        ),
+                        "lamp_revolute_vel": float(
+                            lamp.data.joint_vel[trace_env, revolute_idx].item()
+                        ),
+                        "lamp_prismatic_vel": float(
+                            lamp.data.joint_vel[trace_env, prismatic_idx].item()
+                        ),
+                        "lamp_lin_vel": lamp_lin_vel,
+                        "lamp_ang_vel": lamp_ang_vel,
+                        "gripper_rad": gripper_rad,
+                        "finger_contact_N": finger_n,
+                        "jaw_contact_N": jaw_n,
+                        "finite": int(
+                            math.isfinite(lamp_lin_vel)
+                            and math.isfinite(float(total.item()))
+                        ),
+                    }
+                )
+
+            if args_cli.pose_debug and count % args_cli.pose_debug_interval == 0:
+                if contact_sensors:
+                    contact_force_text = {
+                        name: {
+                            "net_N": float(
+                                torch.linalg.vector_norm(sensor.data.net_forces_w[0], dim=-1)
+                                .max()
+                                .item()
+                            ),
+                            "lamp_N": float(
+                                torch.linalg.vector_norm(sensor.data.force_matrix_w[0], dim=-1)
+                                .max()
+                                .item()
+                            ),
+                        }
+                        for name, sensor in zip(
+                            ("finger", "jaw"), contact_sensors
+                        )
+                    }
+                    print(f"[CONTACT] step={count} {contact_force_text}", flush=True)
+                command_term = base_env.command_manager.get_term("pose_command")
+                command_idx = getattr(command_term, "_current_command_idx", None)
+                debug_env = min(args_cli.pose_debug_env, base_env.num_envs - 1)
+                tracked_name = getattr(base_env.cfg.viewer, "asset_name", None)
+                tracked = base_env.scene[tracked_name] if tracked_name in base_env.scene.keys() else None
+                command_text = (
+                    command_idx.detach().cpu().tolist() if command_idx is not None else None
+                )
+                joint_text = (
+                    tracked.data.joint_pos.detach().cpu().tolist()
+                    if tracked is not None and hasattr(tracked.data, "joint_pos")
+                    else None
+                )
+                screw_target = getattr(command_term, "_screw_revolute_target", None)
+                screw_target_text = (
+                    screw_target.detach().cpu().tolist()
+                    if screw_target is not None
+                    else None
+                )
+                print(
+                    f"[POSE] step={count} command_idx={command_text} "
+                    f"joint_pos={joint_text} "
+                    f"screw_target={screw_target_text}",
+                    flush=True,
+                )
+                if command_idx is not None:
+                    active_idx = int(command_idx[debug_env].item())
+                    handlers = getattr(command_term, "_command_handlers", ())
+                    if active_idx < len(handlers):
+                        env_ids = torch.tensor(
+                            [debug_env], device=base_env.device, dtype=torch.long
+                        )
+                        ee_pos_b, ee_quat_b = command_term._get_ee_in_base_frame(env_ids)
+                        target_pos_b, target_quat_b = handlers[
+                            active_idx
+                        ].get_target_in_base_frame(env_ids)
+                        pos_err = torch.linalg.vector_norm(ee_pos_b - target_pos_b, dim=-1)
+                        ori_err = math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)
+                        print(
+                            f"[POSE] env={debug_env} ee_pos_b={ee_pos_b.cpu().tolist()} "
+                            f"target_pos_b={target_pos_b.cpu().tolist()} "
+                            f"pos_err={pos_err.cpu().tolist()} "
+                            f"ori_err_deg={torch.rad2deg(ori_err).cpu().tolist()}",
+                            flush=True,
+                        )
 
             term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
             trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
@@ -501,6 +709,75 @@ def main():
         print(f"[play] wrote {len(diag_rows)} diagnostic rows to {diag_path}")
 
     env.close()
+
+    if args_cli.lamp_distance_plot is not None and lamp_distance_rows:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        plot_path = Path(args_cli.lamp_distance_plot).expanduser().resolve()
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_path = plot_path.with_suffix(".csv")
+        with csv_path.open("w", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=lamp_distance_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(lamp_distance_rows)
+
+        times = [row["time_s"] for row in lamp_distance_rows]
+        screw_mask = [row["command_type"] == "_ScrewFrameHandler" for row in lamp_distance_rows]
+        fig, (distance_ax, insertion_ax) = plt.subplots(
+            2, 1, figsize=(10, 7), sharex=True, constrained_layout=True
+        )
+        distance_ax.plot(
+            times,
+            [row["distance_mm"] for row in lamp_distance_rows],
+            label="Total distance",
+            linewidth=2.0,
+        )
+        distance_ax.plot(
+            times,
+            [row["radial_mm"] for row in lamp_distance_rows],
+            label="Radial offset",
+        )
+        distance_ax.plot(
+            times,
+            [row["axial_mm"] for row in lamp_distance_rows],
+            label="Signed axial offset",
+        )
+        screw_times = [time for time, active in zip(times, screw_mask) if active]
+        screw_distances = [
+            row["distance_mm"]
+            for row, active in zip(lamp_distance_rows, screw_mask)
+            if active
+        ]
+        distance_ax.scatter(
+            screw_times,
+            screw_distances,
+            s=8,
+            color="tab:orange",
+            label="Screw stage",
+            zorder=3,
+        )
+        distance_ax.axhline(0.0, color="black", linewidth=0.7)
+        distance_ax.set_ylabel("TCP relative to bulb [mm]")
+        distance_ax.grid(alpha=0.25)
+        distance_ax.legend(ncols=2)
+
+        insertion_ax.plot(
+            times,
+            [row["lamp_insertion_mm"] for row in lamp_distance_rows],
+            color="tab:green",
+            linewidth=2.0,
+        )
+        insertion_ax.set_xlabel("Simulation time [s]")
+        insertion_ax.set_ylabel("Prismatic position [mm]")
+        insertion_ax.grid(alpha=0.25)
+        fig.suptitle("Spot lamp grasp alignment during screw motion")
+        fig.savefig(plot_path, dpi=180)
+        plt.close(fig)
+        print(f"[INFO] Lamp distance trace: {csv_path}")
+        print(f"[INFO] Lamp distance plot: {plot_path}")
 
 
 if __name__ == "__main__":

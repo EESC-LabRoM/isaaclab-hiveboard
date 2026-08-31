@@ -97,3 +97,25 @@ def button_task_success(
     lid_open = torch.abs(lid_angle - lid_open_pos) <= lid_open_threshold_rad
     button_pressed = button_travel <= button_press_threshold
     return lid_open & button_pressed
+def articulation_joint_position_success(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg,
+    target: float,
+    tolerance: float,
+) -> torch.Tensor:
+    """Require sequence completion and one articulation joint near a target."""
+    command: CommandTerm = env.command_manager.get_term(command_name)
+    if not hasattr(command, "is_done"):
+        raise AttributeError(
+            f"The command term '{command_name}' does not have the method 'is_done'."
+        )
+
+    asset = env.scene[asset_cfg.name]
+    joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    if joint_pos.shape[-1] != 1:
+        raise ValueError(
+            "articulation_joint_position_success requires exactly one joint; "
+            f"received shape {tuple(joint_pos.shape)}."
+        )
+    return command.is_done() & (torch.abs(joint_pos[:, 0] - target) <= tolerance)

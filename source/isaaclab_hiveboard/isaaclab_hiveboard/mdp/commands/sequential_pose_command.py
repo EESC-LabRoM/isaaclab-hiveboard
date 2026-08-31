@@ -82,6 +82,17 @@ class SequentialPoseCommand(CommandTerm):
         self._valve_joint_idx: int | None = None
         self._initialize_valve_task()
 
+        # -- optional revolute/prismatic screw coupling
+        self._screw_asset: Articulation | None = None
+        self._screw_revolute_idx: int | None = None
+        self._screw_prismatic_idx: int | None = None
+        self._screw_prev_angle = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.float32
+        )
+        self._screw_axial_target = torch.zeros_like(self._screw_prev_angle)
+        self._screw_revolute_target = torch.zeros_like(self._screw_prev_angle)
+        self._initialize_screw_coupling()
+
         if self.cfg.debug_vis:
             self._target_pos_b = torch.zeros(
                 (self._env.num_envs, 3), device=self._env.device, dtype=torch.float32
@@ -114,6 +125,7 @@ class SequentialPoseCommand(CommandTerm):
             env_ids = torch.arange(self._env.num_envs, device=self.device)
         elif not isinstance(env_ids, torch.Tensor):
             env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        self._reset_screw_coupling(env_ids)
         self._sample_valve_task(env_ids)
         self._current_command_idx[env_ids] = 0
         for handler in self._command_handlers:
@@ -194,6 +206,134 @@ class SequentialPoseCommand(CommandTerm):
         self.valve_joint_des[env_ids] = q_des
         self.recompute_valve_rotate_angle(env_ids)
 
+    def _initialize_screw_coupling(self) -> None:
+        """Resolve the optional revolute-to-prismatic screw mechanism."""
+        coupling = self.cfg.screw_coupling
+        if coupling is None:
+            return
+        if coupling.asset_name not in self._env.scene.keys():
+            raise ValueError(
+                f"Screw asset '{coupling.asset_name}' not found in the scene."
+            )
+        if coupling.pitch_m_per_revolution == 0.0:
+            raise ValueError("Screw pitch must be non-zero")
+        if coupling.lower_limit >= coupling.upper_limit:
+            raise ValueError("Screw lower_limit must be less than upper_limit")
+        if coupling.velocity_epsilon <= 0.0:
+            raise ValueError("Screw velocity_epsilon must be positive")
+
+        self._screw_asset = self._env.scene[coupling.asset_name]
+        revolute_ids, _ = self._screw_asset.find_joints(coupling.revolute_joint_name)
+        prismatic_ids, _ = self._screw_asset.find_joints(coupling.prismatic_joint_name)
+        if len(revolute_ids) != 1 or len(prismatic_ids) != 1:
+            raise ValueError(
+                "Screw coupling requires exactly one revolute and one prismatic joint"
+            )
+        self._screw_revolute_idx = revolute_ids[0]
+        self._screw_prismatic_idx = prismatic_ids[0]
+
+    def _reset_screw_coupling(self, env_ids: torch.Tensor) -> None:
+        """Synchronize coupling state with the articulation after an episode reset."""
+        if (
+            self._screw_asset is None
+            or self._screw_revolute_idx is None
+            or self._screw_prismatic_idx is None
+        ):
+            return
+        self._screw_prev_angle[env_ids] = self._screw_asset.data.joint_pos[
+            env_ids, self._screw_revolute_idx
+        ]
+        self._screw_revolute_target[env_ids] = self._screw_prev_angle[env_ids]
+        self._screw_axial_target[env_ids] = self._screw_asset.data.joint_pos[
+            env_ids, self._screw_prismatic_idx
+        ]
+        self._write_screw_targets(env_ids)
+
+    def _write_screw_targets(self, env_ids: torch.Tensor) -> None:
+        """Apply the coupled linear target and USD-equivalent resistance torque."""
+        if (
+            self._screw_asset is None
+            or self._screw_revolute_idx is None
+            or self._screw_prismatic_idx is None
+            or self.cfg.screw_coupling is None
+        ):
+            return
+        coupling = self.cfg.screw_coupling
+        velocity = self._screw_asset.data.joint_vel[
+            env_ids, self._screw_revolute_idx
+        ]
+        speed = torch.abs(velocity)
+        coulomb = torch.where(
+            speed > coupling.velocity_epsilon,
+            -coupling.coulomb_friction * torch.sign(velocity),
+            torch.zeros_like(velocity),
+        )
+        stiction = torch.where(
+            speed < coupling.velocity_epsilon,
+            -coupling.stiction * velocity / coupling.velocity_epsilon,
+            torch.zeros_like(velocity),
+        )
+        friction = -coupling.viscous_friction * velocity + coulomb + stiction
+
+        distance_to_limit = torch.minimum(
+            self._screw_axial_target[env_ids] - coupling.lower_limit,
+            coupling.upper_limit - self._screw_axial_target[env_ids],
+        )
+        end_damping = torch.where(
+            distance_to_limit < coupling.end_stop_activation_distance,
+            coupling.end_stop_base_damping
+            + (
+                coupling.end_stop_scale
+                / (distance_to_limit.clamp_min(0.0) + 1.0e-3)
+            )
+            ** coupling.end_stop_power,
+            torch.zeros_like(distance_to_limit),
+        )
+        resistance = friction - end_damping * velocity
+
+        self._screw_asset.set_joint_position_target(
+            self._screw_axial_target[env_ids, None],
+            joint_ids=[self._screw_prismatic_idx],
+            env_ids=env_ids,
+        )
+        if coupling.command_joint_angle_scale != 0.0:
+            # Drive the revolute with a position target so the bulb turns with
+            # the commanded screw. Do not write_joint_state_to_sim: a kinematic
+            # teleport while the gripper is in contact explodes PhysX.
+            self._screw_asset.set_joint_position_target(
+                self._screw_revolute_target[env_ids, None],
+                joint_ids=[self._screw_revolute_idx],
+                env_ids=env_ids,
+            )
+        else:
+            self._screw_asset.set_joint_effort_target(
+                resistance[:, None],
+                joint_ids=[self._screw_revolute_idx],
+                env_ids=env_ids,
+            )
+
+    def _update_screw_coupling(self) -> None:
+        """Convert measured revolute travel into axial travel at the screw pitch."""
+        if (
+            self._screw_asset is None
+            or self._screw_revolute_idx is None
+            or self.cfg.screw_coupling is None
+        ):
+            return
+        coupling = self.cfg.screw_coupling
+        env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        angle = self._screw_asset.data.joint_pos[:, self._screw_revolute_idx]
+        raw_delta = angle - self._screw_prev_angle
+        angle_delta = torch.atan2(torch.sin(raw_delta), torch.cos(raw_delta))
+        self._screw_axial_target += (
+            angle_delta * coupling.pitch_m_per_revolution / (2.0 * math.pi)
+        )
+        self._screw_axial_target.clamp_(
+            min=coupling.lower_limit, max=coupling.upper_limit
+        )
+        self._screw_prev_angle.copy_(angle)
+        self._write_screw_targets(env_ids)
+
     def recompute_valve_rotate_angle(self, env_ids: torch.Tensor) -> None:
         """Update the EE arc angle from the valve's remaining joint error."""
         if self._valve_asset is None or self._valve_joint_idx is None:
@@ -233,6 +373,9 @@ class SequentialPoseCommand(CommandTerm):
                 )
                 self._target_pos_b[env_mask] = target_pos_b
                 self._target_quat_b[env_mask] = target_quat_b
+
+        # Apply after handlers so ScrewFrame can publish this step's revolute target.
+        self._update_screw_coupling()
 
     def is_done(self) -> torch.Tensor:
         """Check if all commands were finished."""
@@ -453,12 +596,15 @@ class _GoToFrameHandler(_BaseCmdHandler):
         self.command_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.command_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.command_quat_b[:, 0] = 1.0
+        self._held_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
+        self._held_quat_b[:, 0] = 1.0
         self._ori_threshold_rad = math.radians(self.cfg.orientation_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
         ee_pos_b, ee_quat_b = self._command_term._get_ee_in_base_frame(env_ids)
         self.command_pos_b[env_ids] = ee_pos_b
         self.command_quat_b[env_ids] = ee_quat_b
+        self._held_quat_b[env_ids] = ee_quat_b
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         env_ids = torch.where(env_mask)[0]
@@ -498,6 +644,12 @@ class _GoToFrameHandler(_BaseCmdHandler):
         )
         if self.cfg.canonicalize_upward:
             target_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
+        if self.cfg.hold_current_orientation:
+            target_quat_b = self._held_quat_b[env_ids]
+        if self.cfg.position_override_b is not None:
+            for axis, value in enumerate(self.cfg.position_override_b):
+                if value is not None:
+                    target_pos_b[:, axis] = float(value)
 
         return target_pos_b, target_quat_b
 
@@ -902,8 +1054,86 @@ class _RotateFrameHandler(_BaseCmdHandler):
             target_pos_w,
             target_quat_w,
         )
+        if self.cfg.axis_position_override_b is not None:
+            for axis, value in enumerate(self.cfg.axis_position_override_b):
+                if value is not None:
+                    target_pos_b[:, axis] = float(value)
 
         return target_pos_b, target_quat_b
+
+
+class _ScrewFrameHandler(_RotateFrameHandler):
+    """Rotate around a frame while translating along its rotation axis."""
+
+    def __init__(
+        self,
+        cfg: "ScrewFrameCfg",
+        command_term: SequentialPoseCommand,
+    ):
+        super().__init__(cfg, command_term)
+        self.cfg: ScrewFrameCfg
+        self._joint_start = torch.zeros(self._num_envs, device=self._device)
+
+    def reset(self, env_ids: torch.Tensor):
+        super().reset(env_ids)
+        command_term = self._command_term
+        if (
+            command_term._screw_asset is not None
+            and command_term._screw_revolute_idx is not None
+        ):
+            self._joint_start[env_ids] = command_term._screw_asset.data.joint_pos[
+                env_ids, command_term._screw_revolute_idx
+            ]
+
+    def _axial_offset(self, env_ids: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
+        total_angle = torch.abs(self.angle_rad_tensor[env_ids]).clamp_min(1.0e-8)
+        fraction = torch.abs(angle) / total_angle
+        return (
+            self.rot_axis_b[env_ids]
+            * (fraction * float(self.cfg.axial_distance))[:, None]
+        )
+
+    def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        final_pos_b, final_quat_b = super().get_target_in_base_frame(env_ids)
+        return (
+            final_pos_b
+            + self.rot_axis_b[env_ids] * float(self.cfg.axial_distance),
+            final_quat_b,
+        )
+
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        env_ids = torch.where(env_mask)[0]
+        abs_angle = torch.abs(self.angle_rad_tensor[env_ids])
+        self._progress_abs[env_ids] = torch.clamp(
+            self._progress_abs[env_ids] + self.cfg.angular_velocity * self._dt,
+            max=abs_angle,
+        )
+        angle = torch.copysign(
+            self._progress_abs[env_ids], self.angle_rad_tensor[env_ids]
+        )
+
+        coupling = self._command_term.cfg.screw_coupling
+        if coupling is not None and coupling.command_joint_angle_scale != 0.0:
+            self._command_term._screw_revolute_target[env_ids] = (
+                self._joint_start[env_ids]
+                + angle * float(coupling.command_joint_angle_scale)
+            )
+
+        v_rot = self._rodrigues_rotate(
+            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
+        )
+        target_pos_b = (
+            self.axis_pos_b[env_ids]
+            + v_rot
+            + self._axial_offset(env_ids, angle)
+        )
+        delta_q = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
+        target_quat_b = math_utils.quat_mul(
+            delta_q, self.initial_quat_b[env_ids]
+        )
+        return self._pack_command(
+            self.cfg.gripper_open, target_pos_b, target_quat_b
+        )
 
 
 class _CuroboPlannedRotateFrameHandler(
@@ -1149,6 +1379,27 @@ class _CuroboPlannedRotateFrameHandler(
 
 
 @configclass
+class ScrewJointCouplingCfg:
+    """Environment-side equivalent of the lamp USD's screw ActionGraph."""
+
+    asset_name: str = MISSING  # type: ignore
+    revolute_joint_name: str = "RevoluteJoint"
+    prismatic_joint_name: str = "PrismaticJoint"
+    pitch_m_per_revolution: float = 0.006
+    command_joint_angle_scale: float = 0.0
+    lower_limit: float = 0.0
+    upper_limit: float = 0.024
+    viscous_friction: float = 2.0
+    coulomb_friction: float = 1.0
+    stiction: float = 3.0
+    velocity_epsilon: float = 0.01
+    end_stop_base_damping: float = 10.0
+    end_stop_scale: float = 0.02
+    end_stop_power: float = 2.5
+    end_stop_activation_distance: float = 0.005
+
+
+@configclass
 class SequentialPoseCommandCfg(CommandTermCfg):
     """Configuration for the uniform velocity command generator."""
 
@@ -1180,6 +1431,9 @@ class SequentialPoseCommandCfg(CommandTermCfg):
 
     commands: Sequence[BaseCmd] = MISSING  # type: ignore
     """The sequence of commands to execute."""
+
+    screw_coupling: ScrewJointCouplingCfg | None = None
+    """Optional measured revolute-to-prismatic screw coupling."""
 
     valve_asset_name: str | None = None
     """Valve articulation to use for per-episode open/close tasks."""
@@ -1247,6 +1501,10 @@ class GoToFrameCfg(BaseCmd):
     +X hand-top — leave this False there so the authored frame rotation is
     used as-is.
     """
+    hold_current_orientation: bool = False
+    """Translate to the target while retaining the orientation captured at reset."""
+    position_override_b: tuple[float | None, float | None, float | None] | None = None
+    """Optional per-axis target-position overrides in the robot base frame."""
 
 
 @configclass
@@ -1289,6 +1547,18 @@ class RotateFrameCfg(BaseCmd):
     """Status of the gripper during the command."""
     angle_threshold_deg: float = 5.0
     """Remaining commanded arc at which the command is done [deg]."""
+    axis_position_override_b: tuple[float | None, float | None, float | None] | None = None
+    """Optional per-axis rotation-center overrides in the robot base frame."""
+
+
+@configclass
+class ScrewFrameCfg(RotateFrameCfg):
+    """Rotate around a frame while advancing along the configured axis."""
+
+    class_type = _ScrewFrameHandler
+
+    axial_distance: float = 0.0
+    """Signed translation along :attr:`axis` over the full rotation [m]."""
 
 
 @configclass
