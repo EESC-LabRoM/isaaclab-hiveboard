@@ -16,7 +16,7 @@
   <link name="dynaarm_base">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/base_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/base_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
       <material name="carbon_fiber">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -37,7 +37,7 @@
   <link name="dynaarm_shoulder">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/shoulder_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/shoulder_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>
@@ -62,7 +62,7 @@
   <link name="dynaarm_upperarm">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/upperarm_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/upperarm_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>
@@ -87,7 +87,7 @@
   <link name="dynaarm_elbow">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/elbow_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/elbow_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>
@@ -137,7 +137,7 @@
   <link name="dynaarm_forearm">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/forearm_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/forearm_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>
@@ -162,7 +162,7 @@
   <link name="dynaarm_wrist_1">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/wrist1_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/wrist1_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>
@@ -212,7 +212,7 @@
   <link name="dynaarm_wrist_2">
     <visual>
       <geometry>
-        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/wrist2_mesh.dae" scale="1.0 1.0 1.0" />
+        <mesh filename="package://duatic_dynaarm_description/meshes/corydoras12/wrist2_mesh.dae" scale="1.0 1.0 1.0" />
       </geometry>
     </visual>
     <inertial>

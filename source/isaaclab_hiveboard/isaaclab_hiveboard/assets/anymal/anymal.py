@@ -15,7 +15,9 @@ payload that Isaac Lab selects on the UR10e with
 from __future__ import annotations
 
 import os
+import re
 from contextlib import nullcontext
+from pathlib import Path
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
@@ -196,10 +198,48 @@ def _usd_stale(usd_dir: str, usd_name: str, urdf_path: str, *, mimic_to_normal: 
     return f"usd_file_name: {usd_name}" not in text
 
 
+def _duatic_description_dir() -> Path:
+    """Locate ``duatic_dynaarm_description`` by walking up from this file."""
+    current = Path(__file__).resolve().parent
+    for _ in range(8):
+        candidate = current / "dependencies" / "duatic_dynaarm" / "duatic_dynaarm_description"
+        if candidate.is_dir():
+            return candidate
+        current = current.parent
+    raise FileNotFoundError(
+        "Could not find dependencies/duatic_dynaarm/duatic_dynaarm_description. "
+        "Init the duatic_dynaarm git submodule."
+    )
+
+
+def _resolved_arm_urdf_path() -> str:
+    """Write a converter copy of the DynaArm URDF with mesh paths on this machine.
+
+    The committed URDF uses ``package://duatic_dynaarm_description/...``. Isaac Lab
+    2.3 does not resolve that scheme, so the USD converter gets absolute paths
+    under the submodule. pytorch-kinematics only needs the joint tree.
+    """
+    os.makedirs(DYNAARM_USD_DIR, exist_ok=True)
+    mesh_dir = _duatic_description_dir() / "meshes" / "corydoras12"
+    if not mesh_dir.is_dir():
+        raise FileNotFoundError(f"DynaArm meshes not found at '{mesh_dir}'.")
+    src = Path(DYNAARM_URDF).read_text(encoding="utf-8")
+
+    def _rewrite(match: re.Match[str]) -> str:
+        name = Path(match.group(1)).name
+        return f'filename="{mesh_dir / name}"'
+
+    dst = re.sub(r'filename="([^"]+)"', _rewrite, src)
+    out_path = os.path.join(DYNAARM_USD_DIR, "dynaarm.urdf")
+    if not os.path.exists(out_path) or Path(out_path).read_text(encoding="utf-8") != dst:
+        Path(out_path).write_text(dst, encoding="utf-8")
+    return out_path
+
+
 def _arm_usd_path() -> str:
     os.makedirs(DYNAARM_USD_DIR, exist_ok=True)
-    urdf_path = DYNAARM_URDF
-    force = _usd_stale(DYNAARM_USD_DIR, "dynaarm.usd", urdf_path, mimic_to_normal=False)
+    urdf_path = _resolved_arm_urdf_path()
+    force = _usd_stale(DYNAARM_USD_DIR, "dynaarm.usd", DYNAARM_URDF, mimic_to_normal=False)
     converter_cfg = UrdfConverterCfg(
         asset_path=urdf_path,
         usd_dir=DYNAARM_USD_DIR,
