@@ -54,8 +54,8 @@ SPOT_ARM_CFG = ArticulationCfg(
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
-            solver_position_iteration_count=4,
-            solver_velocity_iteration_count=0,
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=4,
         ),
         semantic_tags=[("class", "robot")],
         joint_drive=sim_utils.UrdfFileCfg.JointDriveCfg(

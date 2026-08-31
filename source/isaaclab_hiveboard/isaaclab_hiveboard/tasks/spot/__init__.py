@@ -12,6 +12,7 @@ from .ball_valve.env import (
 )
 from .circuit_breaker.env import SpotCircuitBreakerEnvCfg
 from .high_torque_valve.env import SpotHighTorqueValveEnvCfg
+from .lamp.env import SpotLampEnvCfg
 from .small_valve.env import SpotSmallValveEnvCfg
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "SpotBallValveEnvCfg_PLAY_CAMERAS",
     "SpotCircuitBreakerEnvCfg",
     "SpotHighTorqueValveEnvCfg",
+    "SpotLampEnvCfg",
     "SpotSmallValveEnvCfg",
 ]

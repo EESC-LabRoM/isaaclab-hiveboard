@@ -67,9 +67,25 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-HiveBoard-Spot-Lamp-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg",
+    },
+)
+
 ##
 # Franka Environments
 ##
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Lamp-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lamp.env:FrankaLampEnvCfg"},
+)
 
 gym.register(
     id="Isaac-HiveBoard-Franka-LeverValve-v0",
@@ -135,6 +151,15 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.small_valve.env:SpotSmallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Spot-Manipulation-Lamp",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg",
     },
 )
 
