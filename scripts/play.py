@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Unified task player for HiveBoard manipulation environments (Spot, Franka)."""
+"""Unified task player for HiveBoard manipulation environments (Spot, Franka, ANYmal)."""
 
 import argparse
 import csv
@@ -92,6 +92,12 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Draw object/target/TCP frames and report tracking and physical alignment.",
+)
+parser.add_argument(
+    "--ee-debug",
+    action="store_true",
+    default=False,
+    help="Print gripper-body vs offset-TCP axes once after reset (tune ANYMAL_EE.tcp_offset).",
 )
 parser.add_argument(
     "--pose-debug-interval",
@@ -213,6 +219,21 @@ def main():
         from isaaclab_hiveboard.tasks.franka.only_robot.env import FrankaOnlyRobotEnvCfg
 
         env_cfg = FrankaOnlyRobotEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Anymal-OnlyRobot-v0":
+        from isaaclab_hiveboard.tasks.anymal.only_robot.env import AnymalOnlyRobotEnvCfg
+
+        env_cfg = AnymalOnlyRobotEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Anymal-OnlyGripper-v0":
+        from isaaclab_hiveboard.tasks.anymal.only_gripper.env import AnymalOnlyGripperEnvCfg
+
+        env_cfg = AnymalOnlyGripperEnvCfg()
+    elif args_cli.task in (
+        "Isaac-HiveBoard-Anymal-BallValve-v0",
+        "Anymal-Manipulation-Ball-Valve",
+    ):
+        from isaaclab_hiveboard.tasks.anymal.ball_valve.env import AnymalBallValveEnvCfg
+
+        env_cfg = AnymalBallValveEnvCfg()
     elif args_cli.task in (
         "Isaac-HiveBoard-Franka-LeverValve-v0",
         "Franka-Manipulation-Lever-Valve",
@@ -327,6 +348,24 @@ def main():
 
     count = 0
     obs, _ = env.reset()
+    if args_cli.ee_debug or args_cli.pose_debug or "OnlyRobot" in args_cli.task or "OnlyGripper" in args_cli.task:
+        from isaaclab_hiveboard.assets.end_effector import (
+            ANYMAL_EE,
+            FRANKA_EE,
+            SPOT_EE,
+            print_ee_offset_report,
+        )
+
+        if "OnlyGripper" in args_cli.task:
+            from isaaclab_hiveboard.tasks.anymal.only_gripper.env import ROBOTIQ_DEBUG_EE
+
+            print_ee_offset_report(base_env, ROBOTIQ_DEBUG_EE)
+        elif "Anymal" in args_cli.task:
+            print_ee_offset_report(base_env, ANYMAL_EE)
+        elif "Franka" in args_cli.task:
+            print_ee_offset_report(base_env, FRANKA_EE)
+        elif "Spot" in args_cli.task:
+            print_ee_offset_report(base_env, SPOT_EE)
     pbar = tqdm(total=record_steps) if args_cli.video else tqdm()
 
     contact_visualizer = None
@@ -476,6 +515,23 @@ def main():
 
             if relative_controller is not None:
                 action = relative_controller.compute()
+            elif args_cli.task == "Isaac-HiveBoard-Anymal-OnlyGripper-v0":
+                from isaaclab_hiveboard.assets import ROBOTIQ_CLOSE_Q, ROBOTIQ_JOINT_GEAR, robotiq_joint_targets
+
+                # 4 s open→close→open. Closed is 0.7 rad. Inner fingers track -q.
+                period_s = 4.0
+                t = count * float(base_env.cfg.sim.dt) * float(base_env.cfg.decimation)
+                finger_cmd = 0.5 * ROBOTIQ_CLOSE_Q * (1.0 - math.cos(2.0 * math.pi * t / period_s))
+                targets = robotiq_joint_targets(finger_cmd)
+                action = torch.zeros(env.action_space.shape, device=base_env.device)
+                for i, name in enumerate(ROBOTIQ_JOINT_GEAR):
+                    action[:, i] = targets[name]
+                if count % 30 == 0:
+                    robot = base_env.scene["robot"]
+                    bits = [f"cmd={finger_cmd:.3f}"]
+                    for name, value in zip(robot.data.joint_names, robot.data.joint_pos[0], strict=True):
+                        bits.append(f"{name}={float(value):+.3f}")
+                    print("[gripper] " + "  ".join(bits))
             elif (
                 isinstance(obs, dict)
                 and isinstance(obs.get("policy"), dict)

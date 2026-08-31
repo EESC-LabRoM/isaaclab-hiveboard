@@ -115,6 +115,46 @@ gym.register(
 )
 
 ##
+# ANYmal Environments
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-OnlyRobot-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.only_robot.env:AnymalOnlyRobotEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-OnlyGripper-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.only_gripper.env:AnymalOnlyGripperEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Anymal-Manipulation-Ball-Valve",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg",
+    },
+)
+
+##
 # Backwards-compatibility aliases
 ##
 

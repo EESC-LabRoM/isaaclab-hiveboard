@@ -1315,3 +1315,130 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             env.scene.write_data_to_sim()
             env.sim.forward()
             env.scene.update(dt=0.0)
+
+
+class ResetDynaarmToFrameEvent(ManagerTermBase):
+    """Put the DynaArm TCP on a named scene frame using the arm URDF IK."""
+
+    def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self._asset: Articulation = env.scene[asset_cfg.name]
+        self._ee_offset = _resolve_ee_offset(cfg, env)
+        robot_urdf = cfg.params["robot_urdf"]
+        robot_root_link = cfg.params.get("robot_root_link", "arm_mount")
+        robot_ee_link = cfg.params.get("robot_ee_link", "dynaarm_flange")
+        self._arm_chain = pk.build_serial_chain_from_urdf(
+            open(robot_urdf, mode="rb").read(),
+            end_link_name=robot_ee_link,
+            root_link_name=robot_root_link,
+        ).to(dtype=torch.float32, device="cpu")
+        self._ik_joint_names = self._arm_chain.get_joint_parameter_names()
+        self._ik_joint_ids, resolved = self._asset.find_joints(
+            self._ik_joint_names, preserve_order=True
+        )
+        if list(resolved) != list(self._ik_joint_names):
+            raise ValueError(
+                "DynaArm IK joint order does not match the URDF chain: "
+                f"expected {self._ik_joint_names}, received {resolved}."
+            )
+        num_retries = int(cfg.params.get("num_ik_retries", 16))
+        joint_limits = torch.stack((self._arm_chain.low, self._arm_chain.high), dim=-1)
+        retry_configs = joint_limits[:, 0] + torch.rand(
+            num_retries, len(self._ik_joint_names)
+        ) * (joint_limits[:, 1] - joint_limits[:, 0])
+        retry_configs[0] = self._asset.data.default_joint_pos[0, self._ik_joint_ids].cpu()
+        self._ik_solver = pk.PseudoInverseIK(
+            self._arm_chain,
+            pos_tolerance=float(cfg.params.get("ik_position_tolerance", 0.01)),
+            rot_tolerance=float(cfg.params.get("ik_rotation_tolerance", 0.1)),
+            retry_configs=retry_configs,
+            joint_limits=joint_limits,
+            max_iterations=int(cfg.params.get("ik_max_iterations", 80)),
+            lr=0.5,
+            regularlization=1.0e-4,
+            lm_damping=0.1,
+            early_stopping_any_converged=True,
+        )
+        self._mount_pos = torch.tensor(
+            cfg.params.get("mount_pos", (0.0, 0.0, 0.12)), dtype=torch.float32
+        )
+        self._mount_quat = torch.tensor(
+            cfg.params.get("mount_rot", (0.0, 0.0, 0.0, 1.0)), dtype=torch.float32
+        )
+        self._ee_off_pos = torch.tensor(self._ee_offset.pos, dtype=torch.float32)
+        self._ee_off_quat = torch.tensor(self._ee_offset.rot, dtype=torch.float32)
+
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        env_ids: Sequence[int] | None,
+        asset_cfg: SceneEntityCfg,
+        frame_name: str = "target_frame",
+        target_frame_name: str = "approaching",
+        command_name: str = "pose_command",
+        robot_urdf: str | None = None,
+        robot_root_link: str = "arm_mount",
+        robot_ee_link: str = "dynaarm_flange",
+        mount_pos: tuple[float, float, float] | None = None,
+        mount_rot: tuple[float, float, float, float] | None = None,
+        num_ik_retries: int = 16,
+        ik_position_tolerance: float = 0.01,
+        ik_rotation_tolerance: float = 0.1,
+        ik_max_iterations: int = 80,
+    ) -> None:
+        if env_ids is None:
+            env_ids = torch.arange(env.scene.num_envs, device=env.device)
+        else:
+            env_ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+        if env_ids.numel() == 0:
+            return
+
+        frame = env.scene[frame_name]
+        target_idx = frame.data.target_frame_names.index(target_frame_name)
+        target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
+        target_quat_w = frame.data.target_quat_w[env_ids, target_idx]
+        tcp_pos_b, tcp_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            target_pos_w,
+            target_quat_w,
+        )
+        mount_pos = self._mount_pos.to(env.device).expand(len(env_ids), -1)
+        mount_quat = self._mount_quat.to(env.device).expand(len(env_ids), -1)
+        tcp_pos_m, tcp_quat_m = math_utils.subtract_frame_transforms(
+            mount_pos, mount_quat, tcp_pos_b, tcp_quat_b
+        )
+        off_pos = self._ee_off_pos.to(env.device).expand(len(env_ids), -1)
+        off_quat = self._ee_off_quat.to(env.device).expand(len(env_ids), -1)
+        # Pose of the gripper body in the TCP, then T_mount_body = T_mount_tcp * T_tcp_body.
+        inv_off_pos, inv_off_quat = math_utils.subtract_frame_transforms(
+            off_pos,
+            off_quat,
+            torch.zeros_like(off_pos),
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).expand(len(env_ids), -1),
+        )
+        body_pos_m, body_quat_m = math_utils.combine_frame_transforms(
+            tcp_pos_m, tcp_quat_m, inv_off_pos, inv_off_quat
+        )
+        ik_targets = pk.Transform3d(
+            pos=body_pos_m.cpu(), rot=body_quat_m.cpu()
+        )
+        result = self._ik_solver.solve(ik_targets)
+        q = self._asset.data.default_joint_pos[env_ids][:, self._ik_joint_ids].clone()
+        if torch.any(result.converged_any):
+            # Prefer the lowest pose error among converged retries (retry 0 is the
+            # default configuration). argmax on the bool mask picked an arbitrary success.
+            err = result.err_pos + result.err_rot
+            err = err.masked_fill(~result.converged, torch.finfo(err.dtype).max)
+            retry_ids = err[result.converged_any].argmin(dim=1)
+            q[result.converged_any] = result.solutions[result.converged_any, retry_ids].to(env.device)
+        else:
+            print("[WARN] ResetDynaarmToFrameEvent: IK did not converge; keeping default arm pose.")
+        self._asset.write_joint_state_to_sim(
+            q, torch.zeros_like(q), joint_ids=self._ik_joint_ids, env_ids=env_ids
+        )
+        self._asset.set_joint_position_target(q, joint_ids=self._ik_joint_ids, env_ids=env_ids)
+        env.scene.write_data_to_sim()
+        env.sim.forward()
+        env.scene.update(dt=0.0)

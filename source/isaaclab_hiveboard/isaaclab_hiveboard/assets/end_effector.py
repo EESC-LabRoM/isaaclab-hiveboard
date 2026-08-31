@@ -60,6 +60,46 @@ class EndEffectorCfg:
     """Optional finger frames appended after the TCP on ``ee_frame``."""
 
 
+def print_ee_offset_report(env, ee: EndEffectorCfg, *, env_id: int = 0) -> None:
+    """Print gripper-body vs offset-TCP axes so the offset can be checked by eye.
+
+    Canonical TCP: +X out of the fingers, +Y across the jaws, +Z jaw-up.
+    The RGB gizmo on ``ee_frame`` is the same frame (red/green/blue = X/Y/Z).
+    """
+    import isaaclab.utils.math as math_utils
+
+    robot = env.scene["robot"]
+    body_ids, body_names = robot.find_bodies(ee.body_name)
+    if not body_ids:
+        print(f"[EE] body {ee.body_name!r} not found")
+        return
+    bid = body_ids[0]
+    body_pos = robot.data.body_pos_w[env_id, bid]
+    body_quat = robot.data.body_quat_w[env_id, bid]
+    off_pos = body_pos.new_tensor(ee.tcp_offset.pos)
+    off_rot = body_quat.new_tensor(ee.tcp_offset.rot)
+    tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
+        body_pos.unsqueeze(0), body_quat.unsqueeze(0), off_pos.unsqueeze(0), off_rot.unsqueeze(0)
+    )
+    tcp_pos, tcp_quat = tcp_pos[0], tcp_quat[0]
+
+    def _ax(quat, vec):
+        v = math_utils.quat_apply(quat.unsqueeze(0), quat.new_tensor([vec]))[0]
+        return tuple(round(float(v[i]), 3) for i in range(3))
+
+    def _p(t):
+        return tuple(round(float(t[i]), 3) for i in range(3))
+
+    print("[EE] offset check  (canonical: +X approach, +Y across jaws, +Z up)")
+    print(f"[EE] body={body_names[0]!r}  pos_w={_p(body_pos)}")
+    print(f"[EE]   body +X={_ax(body_quat, [1, 0, 0])}  +Y={_ax(body_quat, [0, 1, 0])}  +Z={_ax(body_quat, [0, 0, 1])}")
+    print(f"[EE] tcp_offset pos={tuple(ee.tcp_offset.pos)}  rot(wxyz)={tuple(round(float(x), 4) for x in ee.tcp_offset.rot)}")
+    print(f"[EE] tcp  pos_w={_p(tcp_pos)}")
+    print(f"[EE]   tcp  +X={_ax(tcp_quat, [1, 0, 0])}  <- red, out of fingers")
+    print(f"[EE]   tcp  +Y={_ax(tcp_quat, [0, 1, 0])}  <- green, across jaws")
+    print(f"[EE]   tcp  +Z={_ax(tcp_quat, [0, 0, 1])}  <- blue, jaw up")
+
+
 def make_ee_frame(ee: EndEffectorCfg, *, debug_vis: bool = False) -> FrameTransformerCfg:
     """Build the scene ``ee_frame``. Target 0 is always the TCP."""
     from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
@@ -148,5 +188,27 @@ FRANKA_EE = EndEffectorCfg(
 FRANKA_WORKSPACE = WorkspaceCfg(
     warehouse_pos=(0.0, 0.0, 0.0),
     object_pos=(0.55, 0.0, 0.40),
+    object_rot=(0.0, 0.0, 0.0, 1.0),
+)
+
+# Isaac Lab 2F-140 (UR10e Robotiq_2f_140 payload): palm +Z is finger approach,
+# +Y across the jaws. Rotation -90 deg about Y: TCP +X = body +Z, TCP +Y =
+# body +Y, TCP +Z = body -X. Translation 0.20 m along body +Z puts the triad
+# on the pads (measured on the 2F-140 palm).
+ANYMAL_EE = EndEffectorCfg(
+    body_name="robotiq_base_link",
+    source_prim="base",
+    body_prim="robotiq_2f_140/robotiq_base_link",
+    tcp_offset=OffsetCfg(
+        pos=(0.0, 0.0, 0.20),
+        rot=(0.7071068, 0.0, -0.7071068, 0.0),
+    ),
+)
+"""ANYmal-D DynaArm + Isaac Lab 2F-140 transformed into the shared canonical TCP frame."""
+
+ANYMAL_WORKSPACE = WorkspaceCfg(
+    warehouse_pos=(0.0, 0.0, 0.0),
+    object_pos=(0.80, 0.0, 0.90),
+    # 180 deg yaw so the HiveBoard lever faces the robot, same as Franka.
     object_rot=(0.0, 0.0, 0.0, 1.0),
 )

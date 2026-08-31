@@ -1,0 +1,262 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="dynaarm">
+  <link name="arm_mount">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <mass value="0.001" />
+      <inertia ixx="1e-6" ixy="0.0" ixz="0.0" iyy="1e-6" iyz="0.0" izz="1e-6" />
+    </inertial>
+  </link>
+  <joint name="dynaarm_joint_base" type="fixed">
+    <parent link="arm_mount" />
+    <child link="dynaarm_base" />
+    <limit effort="2000" lower="0" upper="0" velocity="0" />
+    <origin rpy="0 0 0" xyz="0 0 0" />
+  </joint>
+  <link name="dynaarm_base">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/base_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+      <material name="carbon_fiber">
+        <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.1" radius="0.05" />
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0.05" />
+    </collision>
+    <inertial>
+      <mass value="1.94219788" />
+      <origin rpy="0 0 0" xyz="0.00243205 0.00250861 0.05299306" />
+      <inertia ixx="0.00434815" ixy="0.00028867" ixz="-0.00015925" iyy="0.00446542" iyz="-0.00015771" izz="0.00446174" />
+    </inertial>
+  </link>
+  <link name="dynaarm_shoulder">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/shoulder_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="2.825469" />
+      <origin rpy="0 0 0" xyz="0.000012 0.000480 0.039513" />
+      <inertia ixx="0.013069" ixy="0.000033" ixz="-0.000002" iyy="0.004793" iyz="-0.000046" izz="0.012242" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.25" radius="0.06" />
+      </geometry>
+      <origin rpy="1.570796326795 0 0" xyz="0 0 0.05" />
+    </collision>
+  </link>
+  <joint name="dynaarm_shoulder_rotation" type="revolute">
+    <parent link="dynaarm_base" />
+    <child link="dynaarm_shoulder" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="-4.312388980385" upper="4.312388980385" velocity="4" />
+    <origin rpy="0 0 0" xyz="0 0 0.1105" />
+  </joint>
+  <link name="dynaarm_upperarm">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/upperarm_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="2.12040464" />
+      <origin rpy="0 0 0" xyz="0.20391301 -0.00000528 -0.00015224" />
+      <inertia ixx="0.00155499" ixy="0.00000098" ixz="0.00004108" iyy="0.05067934" iyz="-0.00000143" izz="0.0507131" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.4" radius="0.05" />
+      </geometry>
+      <origin rpy="0 1.570796326795 0" xyz="0.15 0 0" />
+    </collision>
+  </link>
+  <joint name="dynaarm_shoulder_flexion" type="revolute">
+    <parent link="dynaarm_shoulder" />
+    <child link="dynaarm_upperarm" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="-1.720796326795" upper="1.720796326795" velocity="4" />
+    <origin rpy="1.570796326795 -1.570796326795 0" xyz="0 0 0.047" />
+  </joint>
+  <link name="dynaarm_elbow">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/elbow_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="0.82320237" />
+      <origin rpy="0 0 0" xyz="0.00383866 -0.07802638 -0.00026928" />
+      <inertia ixx="0.00107419" ixy="0.00004166" ixz="-0.00000398" iyy="0.00087121" iyz="-0.0000119" izz="0.00113856" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.2" radius="0.065" />
+      </geometry>
+      <origin rpy="1.570796326795 0 0" xyz="-0.01 -0.05 0" />
+    </collision>
+  </link>
+  <joint name="dynaarm_elbow_flexion" type="revolute">
+    <parent link="dynaarm_upperarm" />
+    <child link="dynaarm_elbow" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="0.0" upper="3.0915926535900002" velocity="4" />
+    <origin rpy="0 0 0" xyz="0.4127 0 0" />
+  </joint>
+  <link name="dynaarm_elbow_camera_mount">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0" />
+      <mass value="0.001" />
+      <inertia ixx="1e-07" ixy="0.0" ixz="0.0" iyy="1e-07" iyz="0.0" izz="1e-07" />
+    </inertial>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="dynaarm_elbow_camera" type="fixed">
+    <parent link="dynaarm_elbow" />
+    <child link="dynaarm_elbow_camera_mount" />
+    <limit effort="2000" lower="0" upper="0" velocity="0" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.0345 -0.1235 0" />
+  </joint>
+  <link name="dynaarm_forearm">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/forearm_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="1.237246" />
+      <origin rpy="0 0 0" xyz="-0.001568 0.000046 0.292163" />
+      <inertia ixx="0.033872" ixy="0.000002" ixz="-0.000276" iyy="0.033868" iyz="0.000018" izz="0.001041" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.4" radius="0.04" />
+      </geometry>
+      <origin rpy="0 0 0" xyz="0 0 0.2" />
+    </collision>
+  </link>
+  <joint name="dynaarm_forearm_rotation" type="revolute">
+    <parent link="dynaarm_elbow" />
+    <child link="dynaarm_forearm" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="-4.7123889803850005" upper="4.7123889803850005" velocity="4" />
+    <origin rpy="1.570796326795 1.570796326795 1.570796326795" xyz="0.0262 -0.0855 0" />
+  </joint>
+  <link name="dynaarm_wrist_1">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/wrist1_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="1.15007482" />
+      <origin rpy="0 0 0" xyz="0.07972553 -0.00005038 0.02334747" />
+      <inertia ixx="0.00065953" ixy="0.00000076" ixz="0.00011795" iyy="0.00088282" iyz="-0.00000079" izz="0.00078106" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.125" radius="0.05" />
+      </geometry>
+      <origin rpy="0 0 1.570796326795" xyz="0 0 0.025" />
+    </collision>
+  </link>
+  <joint name="dynaarm_wrist_flexion" type="revolute">
+    <parent link="dynaarm_forearm" />
+    <child link="dynaarm_wrist_1" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="-1.820796326795" upper="1.820796326795" velocity="4" />
+    <origin rpy="0 -1.570796326795 0" xyz="0.0295 0 0.4207" />
+  </joint>
+  <link name="dynaarm_wrist_1_camera_mount">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0" />
+      <mass value="0.001" />
+      <inertia ixx="1e-07" ixy="0.0" ixz="0.0" iyy="1e-07" iyz="0.0" izz="1e-07" />
+    </inertial>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="dynaarm_wrist_flexion_camera" type="fixed">
+    <parent link="dynaarm_wrist_1" />
+    <child link="dynaarm_wrist_1_camera_mount" />
+    <limit effort="2000" lower="0" upper="0" velocity="0" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.032 0 -0.017" />
+  </joint>
+  <link name="dynaarm_wrist_2">
+    <visual>
+      <geometry>
+        <mesh filename="/home/gonzales/Documents/repositories/isaaclab-hiveboard/dependencies/duatic_dynaarm/duatic_dynaarm_description/meshes/corydoras12/wrist2_mesh.dae" scale="1.0 1.0 1.0" />
+      </geometry>
+    </visual>
+    <inertial>
+      <mass value="0.0478406" />
+      <origin rpy="0 0 0" xyz="0.00045711 0.00000557 0.00344945" />
+      <inertia ixx="0.00001366" ixy="0" ixz="0.00000008" iyy="0.00001419" iyz="0" izz="0.00002702" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder length="0.09" radius="0.052" />
+      </geometry>
+      <origin rpy="0 0 0" xyz="0.005 0 -0.035" />
+    </collision>
+  </link>
+  <joint name="dynaarm_wrist_rotation" type="revolute">
+    <parent link="dynaarm_wrist_1" />
+    <child link="dynaarm_wrist_2" />
+    <axis xyz="0 0 1" />
+    <limit command_effort="40" current="10" effort="40" gear_velocity="4" lower="-1.570796326795" upper="4.7123889803850005" velocity="4" />
+    <origin rpy="-1.570796326795 1.570796326795 -1.570796326795" xyz="0.117 0.0 0.0295" />
+  </joint>
+  <link name="dynaarm_flange">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0" />
+      <mass value="0.001" />
+      <inertia ixx="1e-07" ixy="0.0" ixz="0.0" iyy="1e-07" iyz="0.0" izz="1e-07" />
+    </inertial>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.01 0.01 0.01" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="dynaarm_flange_fix_joint" type="fixed">
+    <parent link="dynaarm_wrist_2" />
+    <child link="dynaarm_flange" />
+    <limit effort="2000" lower="0" upper="0" velocity="0" />
+    <origin rpy="0.0 0.0 1.570796326795" xyz="0.0 0.0 0.009" />
+  </joint>
+</robot>

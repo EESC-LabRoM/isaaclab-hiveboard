@@ -31,6 +31,18 @@ play-franka-lever:
 play-franka-breaker:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
 
+# Inspect ANYmal-D + DynaArm + Robotiq 2F-140 TCP axes
+play-anymal-only:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-OnlyRobot-v0"
+
+# Sweep the standalone 2F-140 and print mimic-joint signs
+play-anymal-gripper:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-OnlyGripper-v0"
+
+# Play ANYmal-D opening the HiveBoard ball valve
+play-anymal-ball-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-BallValve-v0"
+
 # Precompute Spot reachable reset state cache
 precompute-cache:
     uv run python scripts/precompute_reset_states.py --headless --device cuda:0 --output_path logs/spot_reset_states.pt
