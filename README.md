@@ -11,7 +11,7 @@ An Isaac Lab extension package for simulating, controlling, and benchmarking var
 ## 🚀 Features
 
 - **Multi-Robot Support**:
-  - 🐕 **Boston Dynamics Spot with Arm**: Differential IK, CuRobo collision avoidance, and RMPFlow control for gate valves, lever valves, and circuit breakers.
+  - 🐕 **Boston Dynamics Spot with Arm**: Differential IK, CuRobo collision avoidance, and RMPFlow control for gate valves, lever valves, circuit breakers, and the hidden push button.
   - 🦾 **Franka Emika Panda**: Precision end-effector tracking with orientation alignments and real-time pose diagnostics.
 - **HiveBoard Submodule Integration**: Directly loads CAD/URDF/USD models from `dependencies/HiveBoard` (ball valves, high torque gate valves, small valves, circuit breakers, drawers, keys, buttons).
 - **Demonstration Collection**: Fixed-base relative TCP demonstration collector exporting HDF5 datasets compatible with Diffusion Policy.
@@ -48,6 +48,7 @@ uv sync
 | Task ID | Robot | Target Object | Controller / Action |
 | --- | --- | --- | --- |
 | `Isaac-HiveBoard-Spot-BallValve-v0` | Spot + Arm | Ball (Lever) Valve | Sequential Absolute / Relative IK |
+| `Isaac-HiveBoard-Spot-Button-v0` | Spot + Arm | Hidden Push Button | Sequential Pose IK (push cover, poke button) |
 | `Isaac-HiveBoard-Spot-CircuitBreaker-v0` | Spot + Arm | Circuit Breaker | Sequential Pose IK |
 | `Isaac-HiveBoard-Spot-HighTorqueValve-v0` | Spot + Arm | Gate Valve | Multi-revolution IK |
 | `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
@@ -70,6 +71,12 @@ Play Spot ball valve with camera orbit:
 
 ```bash
 uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0" --orbit
+```
+
+Play Spot hidden button (open the cover, then press the button):
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Button-v0" --orbit
 ```
 
 Play Franka lever valve with pose diagnostics overlay:

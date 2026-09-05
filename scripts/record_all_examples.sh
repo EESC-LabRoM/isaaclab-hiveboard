@@ -23,6 +23,7 @@ FPS="${FPS:-30}"
 DEFAULT_TASKS=(
     Isaac-HiveBoard-Spot-BallValve-v0
     Isaac-HiveBoard-Spot-BallValve-Play-v0
+    Isaac-HiveBoard-Spot-Button-v0
     Isaac-HiveBoard-Spot-CircuitBreaker-v0
     Isaac-HiveBoard-Spot-HighTorqueValve-v0
     Isaac-HiveBoard-Spot-SmallValve-v0

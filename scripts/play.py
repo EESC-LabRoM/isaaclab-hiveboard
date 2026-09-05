@@ -194,6 +194,10 @@ def main():
         from isaaclab_hiveboard.tasks.spot.small_valve.env import SpotSmallValveEnvCfg
 
         env_cfg = SpotSmallValveEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Spot-Button-v0" or args_cli.task == "Spot-Manipulation-Button":
+        from isaaclab_hiveboard.tasks.spot.button.env import SpotButtonEnvCfg
+
+        env_cfg = SpotButtonEnvCfg()
     elif (
         args_cli.task == "Isaac-HiveBoard-Spot-Lamp-v0"
         or args_cli.task == "Spot-Manipulation-Lamp"
@@ -296,10 +300,7 @@ def main():
                 f"{args_cli.franka_breaker_pitch_deg:.1f} deg."
             )
 
-        if args_cli.fast:
-            args_cli.video_width = 1280
-            args_cli.video_height = 720
-            args_cli.video_fps = 30
+        def _apply_fast_render() -> None:
             env_cfg.sim.render.antialiasing_mode = "DLSS"
             env_cfg.sim.render.dlss_mode = 0  # Performance
             env_cfg.sim.render.enable_reflections = False
@@ -310,10 +311,24 @@ def main():
             env_cfg.sim.render.enable_shadows = True
             env_cfg.sim.render.samples_per_pixel = 1
 
+        if args_cli.fast:
+            args_cli.video_width = 1280
+            args_cli.video_height = 720
+            args_cli.video_fps = 30
+            _apply_fast_render()
+
         if args_cli.video:
             env_cfg.decimation = max(1, round((1.0 / env_cfg.sim.dt) / args_cli.video_fps))
             env_cfg.sim.render_interval = env_cfg.decimation
             env_cfg.viewer.resolution = (args_cli.video_width, args_cli.video_height)
+        else:
+            # Default Isaac Lab render_interval is 1, so a 200 Hz sim draws the
+            # viewport five times per env step (and vsync-locks to a crawl).
+            env_cfg.sim.render_interval = env_cfg.decimation
+            if not getattr(args_cli, "headless", False):
+                env_cfg.viewer.resolution = (1280, 720)
+                if not args_cli.fast:
+                    _apply_fast_render()
 
         env = gym.make(
             id=args_cli.task,
@@ -545,6 +560,7 @@ def main():
             obs, _, terminated, truncated, _ = env.step(action)
             count += 1
             pbar.update(1)
+            _capture_diagnostics(count)
 
             if lamp_trace is not None:
                 (
@@ -708,10 +724,45 @@ def main():
 
             term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
             trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
+            if term or trunc:
+                print(f"[play] episode end at step {count} terminated={term} truncated={trunc}")
+                term_mgr = getattr(base_env, "termination_manager", None)
+                if term_mgr is not None:
+                    for name in term_mgr.active_terms:
+                        done = term_mgr.get_term(name)
+                        flag = done.any().item() if torch.is_tensor(done) else bool(done)
+                        print(f"[play]   termination.{name}={flag}")
+                if "button" in base_env.scene.keys():
+                    button = base_env.scene["button"]
+                    print(
+                        "[play]   button joint_pos=",
+                        button.data.joint_pos[0].detach().cpu().tolist(),
+                        "joint_names=",
+                        list(button.joint_names),
+                    )
+                cmd = base_env.command_manager.get_term("pose_command")
+                if hasattr(cmd, "_current_command_idx"):
+                    print(
+                        "[play]   command_index=",
+                        int(cmd._current_command_idx[0].item()),
+                        "/",
+                        len(cmd.cfg.commands),
+                    )
             if args_cli.video and (term or trunc or count >= record_steps):
                 break
             if args_cli.max_steps is not None and count >= args_cli.max_steps:
                 break
+
+    if diag_rows:
+        import csv
+
+        diag_path = os.path.join("logs", "spot_button_diag.csv")
+        os.makedirs("logs", exist_ok=True)
+        with open(diag_path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(diag_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(diag_rows)
+        print(f"[play] wrote {len(diag_rows)} diagnostic rows to {diag_path}")
 
     env.close()
 

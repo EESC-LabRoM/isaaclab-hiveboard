@@ -11,6 +11,10 @@ list-envs:
 play-spot-ball-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0"
 
+# Play Spot hidden-button task
+play-spot-button:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Button-v0"
+
 # Play Spot Circuit Breaker task
 play-spot-breaker:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-CircuitBreaker-v0"
