@@ -154,16 +154,19 @@ SPOT_ARM_CFG = ArticulationCfg(
 )
 
 
-# The Newton USD was converted with zero joint drives (see
-# assets/spot/usd/config.yaml: stiffness 0/damping 0), and Newton MJWarp ignores
-# runtime Implicit stiffness writes (JOINT_DOF_PROPERTIES is PhysX-only). Implicit
-# actuators are therefore passive on Newton and the arm free-falls. Use explicit
-# IdealPD so Lab computes torque (kp*err + kd*err_vel, clipped) and forwards it as
-# joint_f, which Newton honors. Keeping this separate preserves the legacy mobile
-# Spot config for environments that have not yet been validated on Isaac Lab 3.
+# Kitless urdf-usd-converter output (usd/uuc/). Nested under Geometry/body/...
+# Newton MJWarp ignores runtime Implicit stiffness writes, so this config uses
+# explicit IdealPD (Lab computes torque and forwards it as joint_f).
+SPOT_ARM_UUC_USD = f"{ASSET_DIR}/spot/usd/uuc/spot_with_arm.usda"
+SPOT_ARM_UUC_BODY_PRIM = (
+    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/"
+    "arm_link_wr0/arm_link_wr1"
+)
+SPOT_ARM_UUC_SOURCE_PRIM = "Geometry/body"
+
 SPOT_ARM_NEWTON_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_DIR}/spot/usd/spot_with_arm_newton.usda",
+        usd_path=SPOT_ARM_UUC_USD,
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

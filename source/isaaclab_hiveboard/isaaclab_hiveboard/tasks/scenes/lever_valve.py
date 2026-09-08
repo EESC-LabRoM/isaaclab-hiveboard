@@ -90,7 +90,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
     )
 
     honeycomb = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Valve/valvula_esfera/Honeycomb",
+        prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/Honeycomb",
         spawn=sim_utils.UsdFileCfg(
             usd_path=HONEYCOMB_USD,
             scale=(0.001, 0.001, 0.001),
@@ -105,14 +105,14 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
     )
 
     target_frame = FrameTransformerCfg(
-        prim_path="{ENV_REGEX_NS}/Valve/alavanca_pivot",
+        prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",
         debug_vis=False,
         visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
             prim_path="/Visuals/ValveTransformers"
         ),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/alavanca_pivot",
+                prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",
                 name="approaching",
                 offset=OffsetCfg(
                     pos=(0.12, 0.06, 0.0),
@@ -121,7 +121,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/alavanca_pivot",
+                prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",
                 name="lever_pivot",
                 offset=OffsetCfg(
                     pos=(0.03, 0.06, 0.0),
@@ -129,7 +129,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Valve/alavanca_pivot",
+                prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",
                 name="rotate_frame",
                 offset=OffsetCfg(
                     pos=(0.03, 0.0, 0.0),

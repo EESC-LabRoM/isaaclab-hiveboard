@@ -43,7 +43,7 @@ play-anymal-gripper:
 play-anymal-ball-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-BallValve-v0"
 
-# Regenerate Newton USD assets (verify/overlays kitless, URDF import needs Isaac Sim)
+# Regenerate Newton USD assets (UUC conversion + valve CoACD overlay)
 generate-newton-usd *args:
     uv run python scripts/generate_newton_usd.py {{args}}
 

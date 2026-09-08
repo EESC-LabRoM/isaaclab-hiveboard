@@ -48,7 +48,7 @@ class FramePoseCommandsCfg:
                 # Fallback only; the command term uses the remaining valve error.
                 angle_deg=-90,
                 angular_velocity=0.3,
-                gripper_open=False,
+                gripper_open=True,
             ),
             # Hold the finished pose so the end state reads on video.
             GripperCommand(open_gripper=False, duration_s=0.075),

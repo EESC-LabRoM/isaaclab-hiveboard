@@ -94,31 +94,30 @@ within the 15-degree success tolerance.
 ### Regenerating Newton USD assets
 
 The `*.usd*` files the Newton tasks load are gitignored build outputs, so a
-fresh clone must generate them once. `scripts/generate_newton_usd.py` is the
-committable record of how: pinned `UrdfConverter` settings produce the base
-USD, then a deterministic overlay (`*_newton.usda`) adds the Newton-only
-mesh-collision opinions and inertia fallbacks. Check what is missing:
+fresh clone must generate them once. `scripts/generate_newton_usd.py` converts
+the committed URDFs with [urdf-usd-converter](https://github.com/newton-physics/urdf-usd-converter)
+(kitless; needs a Python that can `import urdf_usd_converter`) and bakes the
+valve CoACD overlay. Check what is missing:
 
 ```bash
 uv run python scripts/generate_newton_usd.py --verify-only
 ```
 
-Rewrite just the overlays (kitless, safe to re-run — it reports
-`up to date` when nothing changed):
+Rewrite the valve overlay only (needs `coacd` + `trimesh` in the project venv):
 
 ```bash
 uv run python scripts/generate_newton_usd.py --skip-conversion
 # or: just generate-newton-usd --skip-conversion
 ```
 
-Full regeneration including the URDF import needs Isaac Sim:
+Full regeneration including URDF conversion:
 
 ```bash
-uv run python scripts/generate_newton_usd.py --force
+uv run python scripts/generate_newton_usd.py --uuc-python /path/to/uuc-venv/bin/python
 ```
 
-To change the assets, edit the specs/converter settings in that script —
-never hand-edit the generated USD — then re-run and commit the script.
+To change the assets, edit that script — never hand-edit the generated USD —
+then re-run and commit the script.
 
 ### Legacy Isaac Sim Play
 

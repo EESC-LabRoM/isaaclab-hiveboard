@@ -30,12 +30,12 @@ class SpotBallValvePhysicsCfg(PresetCfg):
             integrator="implicitfast",
             cone="elliptic",
             njmax=600,
-            nconmax=400,
+            nconmax=4000,
             iterations=100,
             ls_iterations=20,
             impratio=10.0,
             ccd_iterations=50,
-            use_mujoco_contacts=True,
+            use_mujoco_contacts=False,
         ),
         num_substeps=2,
         debug_mode=False,
@@ -57,9 +57,7 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
     terminations: DeltaCollectionTerminationsCfg = DeltaCollectionTerminationsCfg()  # type: ignore
     events: ValveEventCfg = ValveEventCfg()  # type: ignore
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
-    sim: SimulationCfg = SimulationCfg(
-        dt=1 / 600, render_interval=30, physics=SpotBallValvePhysicsCfg()
-    )  # type: ignore
+    sim: SimulationCfg = SimulationCfg(dt=1 / 600, render_interval=30, physics=SpotBallValvePhysicsCfg())  # type: ignore
     rewards = None
     recorders = None
 

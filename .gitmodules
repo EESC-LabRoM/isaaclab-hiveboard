@@ -13,3 +13,6 @@
 [submodule "dependencies/IsaacLab"]
 	path = dependencies/IsaacLab
 	url = https://github.com/isaac-sim/IsaacLab.git
+[submodule "dependencies/urdf-usd-converter"]
+	path = dependencies/urdf-usd-converter
+	url = https://github.com/newton-physics/urdf-usd-converter

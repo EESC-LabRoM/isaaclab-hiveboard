@@ -31,8 +31,10 @@ HONEYCOMB_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Honeycomb", "Honeycomb_Panel.u
 
 # HiveBoard Interactive Objects - Valves
 BALL_VALVE_URDF = os.path.join(ASSET_DIR, "hiveboard", "ball_valve", "Ball_Valve.urdf")
+# urdf-usd-converter base (usd/uuc/) + baked CoACD overlay. See
+# scripts/generate_newton_usd.py.
 BALL_VALVE_USD = os.path.join(
-    ASSET_DIR, "hiveboard", "ball_valve", "usd", "Ball_Valve_newton.usda"
+    ASSET_DIR, "hiveboard", "ball_valve", "usd", "Ball_Valve_uuc_newton.usda"
 )
 BALL_VALVE_FRICTION_RING_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Valves", "Lever Valve", "Ball Valve", "Ball_Valve_Friction_Ring_Set.urdf"
