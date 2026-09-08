@@ -105,7 +105,7 @@ class ValveEventCfg:
             "max_yaw": PI / 5,
             # Keep starts at least 0.35 rad from either endpoint so both open
             # and close tasks remain feasible. Each state has a matching IK pose.
-            "valve_joint_range": (-torch.pi / 2 + 0.35, -0.35),
+            "valve_joint_range": (-torch.pi, -torch.pi),
         },
     )
 

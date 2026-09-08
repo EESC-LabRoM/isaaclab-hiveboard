@@ -28,6 +28,6 @@ class DeltaCollectionTerminationsCfg(TerminationsCfg):
         params={
             "command_name": "pose_command",
             "asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"]),
-            "threshold_rad": math.radians(15.0),
+            "threshold_rad": math.radians(0.010),
         },
     )
