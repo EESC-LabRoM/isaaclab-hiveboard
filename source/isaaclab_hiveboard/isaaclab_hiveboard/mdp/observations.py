@@ -30,7 +30,7 @@ def ee_pose_b(
         frame_name: Frame transformer containing the TCP as its first target.
 
     Returns:
-        TCP position and unique ``wxyz`` quaternion, shape ``(num_envs, 7)``.
+        TCP position and unique ``xyzw`` quaternion, shape ``(num_envs, 7)``.
     """
     robot: BaseArticulation = env.scene[asset_cfg.name]
     frame_data: FrameTransformerData = env.scene[frame_name].data
@@ -56,7 +56,7 @@ def object_root_pose_b(
         object_cfg: Object scene entity whose root pose is observed.
 
     Returns:
-        Object position and unique ``wxyz`` quaternion, shape ``(num_envs, 7)``.
+        Object position and unique ``xyzw`` quaternion, shape ``(num_envs, 7)``.
     """
     robot: BaseArticulation = env.scene[robot_cfg.name]
     object_asset: BaseArticulation = env.scene[object_cfg.name]

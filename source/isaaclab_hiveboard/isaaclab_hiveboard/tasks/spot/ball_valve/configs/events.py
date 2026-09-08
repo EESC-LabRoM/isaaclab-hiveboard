@@ -81,9 +81,10 @@ class ValveEventCfg:
             # valve angle, the approach TCP is (1.02, 0.0, 0.154) with identity
             # orientation, matching Spot's nominal arm pose.  The pi yaw makes
             # the front of the HiveBoard valve face the robot.
+            # xyzw (0,0,1,0) = 180 deg yaw; was wxyz (0,0,0,1).
             "valve_root_pose": OffsetCfg(
                 pos=(1.0, 0.06, 0.154),
-                rot=(0.0, 0.0, 0.0, 1.0),
+                rot=(0.0, 0.0, 1.0, 0.0),
             ),
             # TCP offset comes from pose_command.body_offset. Spawn on the
             # approaching FrameCfg so the sequence only moves onto the lever.

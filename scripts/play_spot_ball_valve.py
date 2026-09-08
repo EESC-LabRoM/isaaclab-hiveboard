@@ -38,6 +38,26 @@ def _route_command(env, command: torch.Tensor) -> torch.Tensor:
     raise RuntimeError(f"Unexpected action layout: terms={terms}, dimensions={dims}")
 
 
+def _apply_collision_only(base) -> bool:
+    """Hide visual geometry so Newton viewers show only collision shapes.
+
+    Newton's viewer gates visual vs collision shapes independently
+    (``show_visual``/``show_collision``). IsaacLab's ``NewtonVisualizerCfg``
+    only exposes ``show_collision``, so the hide-visuals half has to be set
+    on the live viewer object. No-op when no Newton viewer exists (e.g.
+    ``--visualizer none``). Returns True if any viewer was switched.
+    """
+    switched = False
+    for viz in base.sim.visualizers:
+        viewer = getattr(viz, "_viewer", None)
+        if viewer is None or not hasattr(viewer, "show_visual"):
+            continue
+        viewer.show_visual = False
+        viewer.show_collision = True
+        switched = True
+    return switched
+
+
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK)
@@ -45,6 +65,12 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--log-every", type=int, default=0)
+    parser.add_argument(
+        "--collision-only",
+        action="store_true",
+        help="Newton visualizer shows only collision geometry (hides visual meshes). "
+        "Config-driven, so it works headless with no viewer UI. No-op with --visualizer none.",
+    )
     add_launcher_args(parser)
     args, hydra_args = setup_preset_cli(parser)
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
@@ -62,6 +88,15 @@ def main() -> int:
     env_cfg.seed = args.seed
     if args.device is not None:
         env_cfg.sim.device = args.device
+    if args.collision_only:
+        try:
+            from isaaclab_visualizers.newton import NewtonVisualizerCfg
+        except ImportError as err:
+            raise SystemExit(
+                "--collision-only needs the Newton visualizer backend "
+                "(pip install isaaclab_visualizers[newton])."
+            ) from err
+        env_cfg.sim.visualizer_cfgs = [NewtonVisualizerCfg(show_collision=True)]
 
     step_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
     max_steps = args.max_steps or math.ceil(float(env_cfg.episode_length_s) / step_dt)
@@ -70,6 +105,12 @@ def main() -> int:
     with launch_simulation(env_cfg, args):
         env = gym.make(args.task, cfg=env_cfg)
         base = env.unwrapped
+        if args.collision_only and not _apply_collision_only(base):
+            print(
+                "[WARN] --collision-only: no Newton viewer active "
+                "(use --visualizer newton, not none).",
+                file=sys.stderr,
+            )
         valve = base.scene["ball_valve"]
         valve_joint = valve.find_joints("RevoluteJoint")[0][0]
         obs, _ = env.reset(seed=args.seed)

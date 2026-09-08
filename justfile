@@ -43,6 +43,10 @@ play-anymal-gripper:
 play-anymal-ball-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-BallValve-v0"
 
+# Regenerate Newton USD assets (verify/overlays kitless, URDF import needs Isaac Sim)
+generate-newton-usd *args:
+    uv run python scripts/generate_newton_usd.py {{args}}
+
 # Precompute Spot reachable reset state cache
 precompute-cache:
     uv run python scripts/precompute_reset_states.py --headless --device cuda:0 --output_path logs/spot_reset_states.pt

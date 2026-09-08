@@ -14,7 +14,7 @@ Canonical TCP (right-handed):
     +Z  jaw "up"
     +Y  across the jaws
 
-Quaternions are Isaac Lab ``(w, x, y, z)``.
+Quaternions are Isaac Lab ``(x, y, z, w)``.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ class WorkspaceCfg:
     object_pos: tuple[float, float, float] = (1.0, 0.0, 0.0)
     """Default object root position in the env frame."""
 
-    object_rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
-    """Default object root quaternion ``(w, x, y, z)``."""
+    object_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    """Default object root quaternion ``(x, y, z, w)``."""
 
 
 @configclass
@@ -93,7 +93,7 @@ def print_ee_offset_report(env, ee: EndEffectorCfg, *, env_id: int = 0) -> None:
     print("[EE] offset check  (canonical: +X approach, +Y across jaws, +Z up)")
     print(f"[EE] body={body_names[0]!r}  pos_w={_p(body_pos)}")
     print(f"[EE]   body +X={_ax(body_quat, [1, 0, 0])}  +Y={_ax(body_quat, [0, 1, 0])}  +Z={_ax(body_quat, [0, 0, 1])}")
-    print(f"[EE] tcp_offset pos={tuple(ee.tcp_offset.pos)}  rot(wxyz)={tuple(round(float(x), 4) for x in ee.tcp_offset.rot)}")
+    print(f"[EE] tcp_offset pos={tuple(ee.tcp_offset.pos)}  rot(xyzw)={tuple(round(float(x), 4) for x in ee.tcp_offset.rot)}")
     print(f"[EE] tcp  pos_w={_p(tcp_pos)}")
     print(f"[EE]   tcp  +X={_ax(tcp_quat, [1, 0, 0])}  <- red, out of fingers")
     print(f"[EE]   tcp  +Y={_ax(tcp_quat, [0, 1, 0])}  <- green, across jaws")
@@ -147,7 +147,7 @@ SPOT_EE = EndEffectorCfg(
     body_name="arm_link_wr1",
     source_prim="body",
     body_prim="arm_link_wr1",
-    tcp_offset=OffsetCfg(pos=(0.21, 0.0, -0.03), rot=(1.0, 0.0, 0.0, 0.0)),
+    tcp_offset=OffsetCfg(pos=(0.21, 0.0, -0.03), rot=(0.0, 0.0, 0.0, 1.0)),
 )
 """Spot arm: ``arm_link_wr1`` +X is already the canonical approach axis."""
 
@@ -168,7 +168,8 @@ FRANKA_EE = EndEffectorCfg(
         pos=(0.0, 0.0, 0.1034),
         # A 180 deg roll about TCP X keeps the red X axis pointing forward
         # through the fingertips and flips the blue Z axis from down to up.
-        rot=(0.0, 0.7071068, 0.0, 0.7071068),
+        # Stored xyzw: wxyz (0.0, 0.7071, 0.0, 0.7071) -> xyzw (0.7071, 0.0, 0.7071, 0.0).
+        rot=(0.7071068, 0.0, 0.7071068, 0.0),
     ),
     finger_frames=(
         FrameTransformerCfg.FrameCfg(
@@ -201,7 +202,7 @@ ANYMAL_EE = EndEffectorCfg(
     body_prim="robotiq_2f_140/robotiq_base_link",
     tcp_offset=OffsetCfg(
         pos=(0.0, 0.0, 0.20),
-        rot=(0.7071068, 0.0, -0.7071068, 0.0),
+        rot=(0.0, -0.7071068, 0.0, 0.7071068),
     ),
 )
 """ANYmal-D DynaArm + Isaac Lab 2F-140 transformed into the shared canonical TCP frame."""

@@ -75,7 +75,7 @@ def canonicalize_ee_orientation_upward(quat_b: torch.Tensor) -> torch.Tensor:
     if not torch.any(inverted):
         return quat_b
 
-    flip_x = torch.tensor([0.0, 1.0, 0.0, 0.0], device=q.device).expand(q.shape[0], 4)
+    flip_x = torch.tensor([1.0, 0.0, 0.0, 0.0], device=q.device).expand(q.shape[0], 4)
     flipped_quat = math_utils.quat_mul(q, flip_x)
     result = torch.where(inverted.unsqueeze(-1), flipped_quat, q)
     return result.squeeze(0) if is_1d else result
@@ -161,6 +161,16 @@ def _squeeze_seed_dim(js: JointState) -> JointState:
 def _as_offset_cfg(offset) -> OffsetCfg:
     """Copy ``pos``/``rot`` into Isaac Lab's frame-transformer ``OffsetCfg``."""
     return OffsetCfg(pos=tuple(offset.pos), rot=tuple(offset.rot))
+
+
+def _xyzw_to_wxyz_tuple(rot) -> tuple[float, float, float, float]:
+    """Convert Isaac Lab xyzw offset to pytorch_kinematics wxyz order."""
+    return (float(rot[3]), float(rot[0]), float(rot[1]), float(rot[2]))
+
+
+def _xyzw_to_wxyz_tensor(quat: torch.Tensor) -> torch.Tensor:
+    """Convert xyzw quaternions to wxyz for ``pk.Transform3d``."""
+    return torch.cat((quat[..., 3:4], quat[..., :3]), dim=-1)
 
 
 def _resolve_ee_offset(cfg: EventTermCfg, env: ManagerBasedEnv) -> OffsetCfg:
@@ -416,7 +426,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             )
         root_to_handle = chain.forward_kinematics(th_cpu, end_only=True)
         handle_to_tcp = pk.Transform3d(
-            pos=self._valve_offset.pos, rot=self._valve_offset.rot
+            pos=self._valve_offset.pos,
+            rot=_xyzw_to_wxyz_tuple(self._valve_offset.rot),
         )
         root_to_tcp = root_to_handle.compose(handle_to_tcp)
         pos, rot = math_utils.unmake_pose(root_to_tcp.get_matrix().to(env.device))
@@ -700,7 +711,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             end = min(start + ik_batch_size, candidate_count)
             ik_targets = pk.Transform3d(
                 pos=flange_pos_b[start:end].cpu(),
-                rot=flange_quat_b[start:end].cpu(),
+                rot=_xyzw_to_wxyz_tensor(flange_quat_b[start:end].cpu()),
             )
             ik_result = self._ik_solver.solve(ik_targets)
             valid = ik_result.converged_any
@@ -844,7 +855,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         end_link_name: str,
         align_rotation: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return body-from-handle transforms ``(pos, quat_wxyz)`` for each valve angle."""
+        """Return body-from-handle transforms ``(pos, quat_xyzw)`` for each valve angle."""
         chain = pk.build_serial_chain_from_urdf(
             open(urdf_name, mode="rb").read(),
             end_link_name=end_link_name,
@@ -859,7 +870,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             pad = torch.zeros(th_cpu.shape[0], n_dof - th_cpu.shape[-1])
             th_cpu = torch.cat([th_cpu, pad], dim=-1)
         ret: pk.Transform3d = chain.forward_kinematics(th_cpu, end_only=True)  # type: ignore
-        offset_tf = pk.Transform3d(pos=offset.pos, rot=offset.rot)
+        offset_tf = pk.Transform3d(
+            pos=offset.pos, rot=_xyzw_to_wxyz_tuple(offset.rot)
+        )
 
         if align_rotation:
             offset_ = ret.compose(offset_tf).inverse()
@@ -871,7 +884,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             p_tcp_in_root = full_mat[:, :3, 3]  # [batch, 3]
 
             nom_inv_mat = (
-                pk.Transform3d(rot=offset.rot).inverse().get_matrix().to(env.device)
+                pk.Transform3d(
+                    rot=_xyzw_to_wxyz_tuple(offset.rot)
+                ).inverse().get_matrix().to(env.device)
             )  # [1, 4, 4]
             r_tcp_to_root = nom_inv_mat[:, :3, :3]  # [1, 3, 3]
             p_tcp_to_root = torch.bmm(
@@ -882,6 +897,26 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 r_tcp_to_root.expand(p_tcp_in_root.shape[0], -1, -1)
             )  # [batch, 4]
             return p_tcp_to_root, q_tcp_to_root
+
+    def _sync_joint_targets(
+        self, env: ManagerBasedEnv, env_ids: torch.Tensor, arm_pos: torch.Tensor
+    ) -> None:
+        """Pin PD targets to the reset state so uncommanded joints don't snap to zero.
+
+        Newton/PhysX initialize ``joint_pos_target`` to zeros. This reset term only
+        writes ``arm.*`` joint state, so leg DOFs would otherwise be driven toward
+        zero (snap + saturated torques + solver jitter). Fill full targets with
+        defaults and overwrite the reset arm columns with the IK solution.
+        """
+        full = self._asset.data.default_joint_pos.torch[env_ids].clone()
+        for k, gid in enumerate(self._joint_ids):
+            full[:, int(gid)] = arm_pos[:, k]
+        self._asset.set_joint_position_target_index(
+            target=full, joint_ids=None, env_ids=env_ids
+        )
+        self._asset.set_joint_velocity_target_index(
+            target=torch.zeros_like(full), joint_ids=None, env_ids=env_ids
+        )
 
     def _apply_valve_first_reset_on_the_fly(
         self, env: ManagerBasedEnv, env_ids: torch.Tensor
@@ -970,7 +1005,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 th_cpu, end_only=True
             )
             handle_to_tcp = pk.Transform3d(
-                pos=self._valve_offset.pos, rot=self._valve_offset.rot
+                pos=self._valve_offset.pos,
+                rot=_xyzw_to_wxyz_tuple(self._valve_offset.rot),
             )
             root_to_tcp = root_to_handle.compose(handle_to_tcp)
             tcp_pos_v, rot_v = math_utils.unmake_pose(
@@ -994,7 +1030,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             )
 
             ik_targets = pk.Transform3d(
-                pos=flange_pos_b.cpu(), rot=flange_quat_b.cpu()
+                pos=flange_pos_b.cpu(), rot=_xyzw_to_wxyz_tensor(flange_quat_b.cpu())
             )
             ik_result = self._ik_solver.solve(ik_targets)
             valid = ik_result.converged_any
@@ -1038,6 +1074,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             joint_ids=self._joint_ids,
             env_ids=env_ids,
         )
+        self._sync_joint_targets(env, env_ids, full_joint_states)
 
         default_valve_q = self._valve.data.default_joint_pos.torch[env_ids].clone()
         if final_valve_q.shape[-1] == default_valve_q.shape[-1]:
@@ -1118,6 +1155,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             joint_ids=self._joint_ids,
             env_ids=env_ids,
         )
+        self._sync_joint_targets(env, env_ids, robot_joint_pos)
 
         default_valve_q = self._valve.data.default_joint_pos.torch[env_ids].clone()
         selected_valve_q = self._paired_valve_joint_states[pair_ids]
@@ -1225,6 +1263,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 joint_ids=self._joint_ids,
                 env_ids=env_ids,
             )
+            self._sync_joint_targets(env, env_ids, default_joint_poses)
             return
 
         rand_indices = torch.randint(
@@ -1243,6 +1282,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             joint_ids=self._joint_ids,
             env_ids=env_ids,
         )
+        self._sync_joint_targets(env, env_ids, selected_joint_poses)
 
         # Position the valve body according to the offset
         rand_indices_valve = torch.randint(
@@ -1425,13 +1465,13 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
             off_pos,
             off_quat,
             torch.zeros_like(off_pos),
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).expand(len(env_ids), -1),
+            torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device).expand(len(env_ids), -1),
         )
         body_pos_m, body_quat_m = math_utils.combine_frame_transforms(
             tcp_pos_m, tcp_quat_m, inv_off_pos, inv_off_quat
         )
         ik_targets = pk.Transform3d(
-            pos=body_pos_m.cpu(), rot=body_quat_m.cpu()
+            pos=body_pos_m.cpu(), rot=_xyzw_to_wxyz_tensor(body_quat_m.cpu())
         )
         result = self._ik_solver.solve(ik_targets)
         q = self._asset.data.default_joint_pos.torch[env_ids][
@@ -1449,7 +1489,9 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
         self._asset.write_joint_state_to_sim(
             q, torch.zeros_like(q), joint_ids=self._ik_joint_ids, env_ids=env_ids
         )
-        self._asset.set_joint_position_target(q, joint_ids=self._ik_joint_ids, env_ids=env_ids)
+        self._asset.set_joint_position_target_index(
+            target=q, joint_ids=self._ik_joint_ids, env_ids=env_ids
+        )
         env.scene.write_data_to_sim()
         env.sim.forward()
         env.scene.update(dt=0.0)

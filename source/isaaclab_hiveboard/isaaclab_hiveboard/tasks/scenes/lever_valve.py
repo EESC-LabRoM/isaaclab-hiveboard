@@ -70,7 +70,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=SPOT_WORKSPACE.object_pos,
-            rot=(1.0, 0.0, 0.0, 0.0),
+            rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
                 "RevoluteJoint": 0.0,
             },
@@ -99,7 +99,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(-0.04, 0.0, 0.0),
-            rot=(1.0, 0.0, 0.0, 0.0),
+            rot=(0.0, 0.0, 0.0, 1.0),
         ),
         collision_group=-1,
     )
@@ -116,7 +116,8 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 name="approaching",
                 offset=OffsetCfg(
                     pos=(0.12, 0.06, 0.0),
-                    rot=(0.0, 0.0, 0.0, 1.0),
+                    # 180 deg yaw about Z (xyzw). Was wxyz (0,0,0,1).
+                    rot=(0.0, 0.0, 1.0, 0.0),
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
@@ -124,7 +125,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 name="lever_pivot",
                 offset=OffsetCfg(
                     pos=(0.03, 0.06, 0.0),
-                    rot=(0.0, 0.0, 0.0, 1.0),
+                    rot=(0.0, 0.0, 1.0, 0.0),
                 ),
             ),
             FrameTransformerCfg.FrameCfg(
@@ -132,7 +133,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 name="rotate_frame",
                 offset=OffsetCfg(
                     pos=(0.03, 0.0, 0.0),
-                    rot=(0.0, 0.0, 0.0, 1.0),
+                    rot=(0.0, 0.0, 1.0, 0.0),
                 ),
             ),
         ],

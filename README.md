@@ -91,6 +91,35 @@ uv run --python 3.12 python scripts/play_spot_ball_valve.py \
 The runner exits nonzero unless the physical valve joint reaches -90 degrees
 within the 15-degree success tolerance.
 
+### Regenerating Newton USD assets
+
+The `*.usd*` files the Newton tasks load are gitignored build outputs, so a
+fresh clone must generate them once. `scripts/generate_newton_usd.py` is the
+committable record of how: pinned `UrdfConverter` settings produce the base
+USD, then a deterministic overlay (`*_newton.usda`) adds the Newton-only
+mesh-collision opinions and inertia fallbacks. Check what is missing:
+
+```bash
+uv run python scripts/generate_newton_usd.py --verify-only
+```
+
+Rewrite just the overlays (kitless, safe to re-run — it reports
+`up to date` when nothing changed):
+
+```bash
+uv run python scripts/generate_newton_usd.py --skip-conversion
+# or: just generate-newton-usd --skip-conversion
+```
+
+Full regeneration including the URDF import needs Isaac Sim:
+
+```bash
+uv run python scripts/generate_newton_usd.py --force
+```
+
+To change the assets, edit the specs/converter settings in that script —
+never hand-edit the generated USD — then re-run and commit the script.
+
 ### Legacy Isaac Sim Play
 
 Play Spot ball valve with camera orbit:

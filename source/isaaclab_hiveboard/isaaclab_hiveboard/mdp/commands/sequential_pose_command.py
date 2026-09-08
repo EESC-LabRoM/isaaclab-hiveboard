@@ -52,7 +52,7 @@ class SequentialPoseCommand(CommandTerm):
             (self._env.num_envs, 8), device=self._env.device, dtype=torch.float32
         )
         self._command[:, 0] = 1  # Close gripper
-        self._command[:, 4] = 1.0  # (w,x,y,z) -> (1,0,0,0)
+        self._command[:, 7] = 1.0  # xyzw identity (0,0,0,1)
 
         # -- convert the fixed offsets to torch tensors of batched shape
         if self.cfg.body_offset is not None:
@@ -100,7 +100,7 @@ class SequentialPoseCommand(CommandTerm):
             self._target_quat_b = torch.zeros(
                 (self._env.num_envs, 4), device=self._env.device, dtype=torch.float32
             )
-            self._target_quat_b[:, 0] = 1.0  # (w,x,y,z) -> (1,0,0,0)
+            self._target_quat_b[:, 3] = 1.0  # xyzw identity (0,0,0,1)
 
     """
     Properties
@@ -599,9 +599,9 @@ class _GoToFrameHandler(_BaseCmdHandler):
         )
         self.command_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.command_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
-        self.command_quat_b[:, 0] = 1.0
+        self.command_quat_b[:, 3] = 1.0
         self._held_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
-        self._held_quat_b[:, 0] = 1.0
+        self._held_quat_b[:, 3] = 1.0
         self._ori_threshold_rad = math.radians(self.cfg.orientation_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
@@ -1428,8 +1428,8 @@ class SequentialPoseCommandCfg(CommandTermCfg):
 
         pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         """Translation w.r.t. the parent frame. Defaults to (0.0, 0.0, 0.0)."""
-        rot: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
-        """Quaternion rotation ``(w, x, y, z)`` w.r.t. the parent frame. Defaults to identity."""
+        rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+        """Quaternion rotation ``(x, y, z, w)`` w.r.t. the parent frame. Defaults to identity."""
 
     class_type: type = SequentialPoseCommand
 
