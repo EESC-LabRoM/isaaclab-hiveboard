@@ -43,6 +43,10 @@ play-anymal-gripper:
 play-anymal-ball-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-BallValve-v0"
 
+# Drop unused OBJ vertices (and CAD polylines) so urdf-usd-converter can import Spot meshes
+strip-obj-unused-verts:
+    uv run python scripts/generate_newton_usd.py --strip-obj
+
 # Regenerate Newton USD assets (UUC conversion + valve CoACD overlay)
 generate-newton-usd *args:
     uv run python scripts/generate_newton_usd.py {{args}}

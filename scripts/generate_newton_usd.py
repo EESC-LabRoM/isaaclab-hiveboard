@@ -22,6 +22,8 @@ Usage::
     uv run python scripts/generate_newton_usd.py --verify-only
     uv run python scripts/generate_newton_usd.py --skip-conversion
     uv run python scripts/generate_newton_usd.py --uuc-python /path/to/uuc-venv/bin/python
+    uv run python scripts/generate_newton_usd.py --strip-obj
+    # or: just strip-obj-unused-verts
 """
 
 from __future__ import annotations
@@ -50,14 +52,7 @@ VALVE_TARGETS: tuple[tuple[str, str, float], ...] = (
     ("Geometry/valvula_esfera/alavanca_pivot", "Mesh_1_1", 0.05),
 )
 
-# OBJs whose unused vertices make usdex definePolyMesh reject the mesh.
-SPOT_OBJ_CLEAN = (
-    EXT_ASSETS / "spot/meshes/arm/visual/arm_link_sh0.obj",
-    EXT_ASSETS / "spot/meshes/arm/visual/arm_link_wr0.obj",
-    EXT_ASSETS / "spot/meshes/base/collision/body_collision.obj",
-    EXT_ASSETS / "spot/meshes/base/collision/upper_leg_collision.obj",
-    EXT_ASSETS / "spot/meshes/base/collision/lower_leg_collision.obj",
-)
+SPOT_MESH_DIR = EXT_ASSETS / "spot/meshes"
 
 
 def urdf_link_collision_meshes(urdf: Path) -> dict[str, list[str]]:
@@ -217,6 +212,23 @@ def strip_unused_obj_topology(path: Path) -> bool:
         return False
     path.write_text(text)
     return True
+
+
+def spot_obj_files() -> list[Path]:
+    """All committed Spot OBJ meshes (visual + collision)."""
+    return sorted(SPOT_MESH_DIR.rglob("*.obj"))
+
+
+def strip_spot_obj_topology() -> int:
+    """Strip unused vertices from every Spot OBJ. Returns how many files changed."""
+    changed = 0
+    for obj in spot_obj_files():
+        if strip_unused_obj_topology(obj):
+            print(f"[OBJ] stripped unused topology: {obj.relative_to(EXT_ASSETS)}")
+            changed += 1
+        else:
+            print(f"[OBJ] already clean: {obj.relative_to(EXT_ASSETS)}")
+    return changed
 
 
 def run_uuc_conversion(urdf: Path, out_dir: Path, uuc_python: str) -> None:
@@ -394,6 +406,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not write anything; check generated USD with pxr.",
     )
+    parser.add_argument(
+        "--strip-obj",
+        action="store_true",
+        help="Only drop unused OBJ vertices/polylines on Spot meshes so UUC "
+        "usdex definePolyMesh will accept them. Does not convert USD.",
+    )
     return parser.parse_args(argv)
 
 
@@ -412,11 +430,14 @@ def main(argv: list[str] | None = None) -> int:
         print("[OK] Spot UUC + valve overlay resolve")
         return 0
 
+    if args.strip_obj:
+        n = strip_spot_obj_topology()
+        print(f"[OBJ] {n} file(s) changed")
+        return 0
+
     if not args.skip_conversion:
         if want_spot:
-            for obj in SPOT_OBJ_CLEAN:
-                if obj.exists() and strip_unused_obj_topology(obj):
-                    print(f"[OBJ] stripped unused topology: {obj.name}")
+            strip_spot_obj_topology()
             run_uuc_conversion(SPOT_URDF, SPOT_UUC_DIR, args.uuc_python)
             print(f"[UUC] spot: {SPOT_UUC_DIR / 'spot_with_arm.usda'}")
         if want_valve:

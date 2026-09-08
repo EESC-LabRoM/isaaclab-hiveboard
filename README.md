@@ -116,6 +116,13 @@ Full regeneration including URDF conversion:
 uv run python scripts/generate_newton_usd.py --uuc-python /path/to/uuc-venv/bin/python
 ```
 
+UUC rejects OBJ meshes that list vertices no face uses (leftover CAD
+polylines). Strip those before converting Spot:
+
+```bash
+just strip-obj-unused-verts
+```
+
 To change the assets, edit that script — never hand-edit the generated USD —
 then re-run and commit the script.
 
