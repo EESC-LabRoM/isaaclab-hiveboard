@@ -1,7 +1,7 @@
 # Isaac Lab - HiveBoard Multi-Robot Manipulation Suite
 
-[![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.3.2-blue.svg)](https://isaac-sim.github.io/IsaacLab/)
-[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
+[![Isaac Lab](https://img.shields.io/badge/IsaacLab-3-bffdce9-blue.svg)](https://github.com/isaac-sim/IsaacLab/commit/bffdce9d7467f349bfc8ab111fe633a0bb234851)
+[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 
 An Isaac Lab extension package for simulating, controlling, and benchmarking various robot platforms (**Boston Dynamics Spot with Arm**, **Franka Emika Panda**, and **ANYmal C/D**) performing manipulation tasks on the **[HiveBoard Benchmark](https://github.com/EESC-LabRoM/HiveBoard)**.
@@ -35,11 +35,15 @@ If already cloned without submodules, initialize HiveBoard:
 git submodule update --init --recursive
 ```
 
-Install editable package using `uv`:
+Create the Python 3.12 environment and install the local Isaac Lab 3 packages:
 
 ```bash
-uv sync
+uv sync --python 3.12
 ```
+
+The default install is kitless: Isaac Sim, camera support, and CuRobo are not
+required. Development extras remain available as `--extra cameras`, `--extra
+curobo`, and `--extra data`.
 
 ---
 
@@ -64,13 +68,42 @@ uv run python scripts/list_envs.py
 
 ## 🎮 Running Simulations
 
-### Interactive Play
+### Kitless Spot Ball-Valve Play
+
+The validated task uses Newton MJWarp at 600 Hz, a 20 Hz controller, a fixed
+Spot base, committed USD assets, and a simple local floor (no warehouse or
+Nucleus assets). Run the deterministic opening demo with the Newton visualizer:
+
+```bash
+uv run --python 3.12 python scripts/play_spot_ball_valve.py \
+  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
+  physics=newton_mjwarp --visualizer newton
+```
+
+Run without a window, or select the randomized task and seed:
+
+```bash
+uv run --python 3.12 python scripts/play_spot_ball_valve.py \
+  --task Isaac-HiveBoard-Spot-BallValve-v0 --seed 7 \
+  physics=newton_mjwarp --visualizer none
+```
+
+The runner exits nonzero unless the physical valve joint reaches -90 degrees
+within the 15-degree success tolerance.
+
+### Legacy Isaac Sim Play
 
 Play Spot ball valve with camera orbit:
 
 ```bash
 uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0" --orbit
 ```
+
+> [!WARNING]
+> Only `Isaac-HiveBoard-Spot-BallValve-v0` and its `-Play-v0` variant are
+> validated with Isaac Lab 3 and Newton. The remaining HiveBoard environments,
+> legacy player, cameras, recording, and training configurations still require
+> migration validation and may require the optional Isaac Sim dependencies.
 
 Play Franka lever valve with pose diagnostics overlay:
 

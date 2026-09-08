@@ -151,3 +151,68 @@ SPOT_ARM_CFG = ArticulationCfg(
         ),
     },
 )
+
+
+# The Newton task loads a preconverted USD and uses only backend-neutral implicit
+# actuators.  Keeping this separate preserves the legacy mobile Spot config for
+# environments that have not yet been validated on Isaac Lab 3.
+SPOT_ARM_NEWTON_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_DIR}/spot/usd/spot_with_arm_newton.usda",
+        activate_contact_sensors=True,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(enabled_self_collisions=True),
+        semantic_tags=[("class", "robot")],
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=SPOT_DEFAULT_POS,
+        joint_pos=SPOT_DEFAULT_JOINT_POS,
+        joint_vel={".*": 0.0},
+    ),
+    actuators={
+        "fixed_legs": ImplicitActuatorCfg(
+            joint_names_expr=["[fh][lr]_(hx|hy|kn)"],
+            effort_limit_sim=90.0,
+            stiffness=60.0,
+            damping=2.0,
+            friction=0.02,
+            armature=0.01,
+        ),
+        "arm_sh0": ImplicitActuatorCfg(
+            joint_names_expr=["arm_sh0"], effort_limit_sim=ARM_EFFORT_LIMIT[0], stiffness=ARM_STIFFNESS[0],
+            damping=ARM_DAMPING[0], armature=ARM_ARMATURE[0]
+        ),
+        "arm_sh1": ImplicitActuatorCfg(
+            joint_names_expr=["arm_sh1"], effort_limit_sim=ARM_EFFORT_LIMIT[1], stiffness=ARM_STIFFNESS[1],
+            damping=ARM_DAMPING[1], armature=ARM_ARMATURE[1]
+        ),
+        "arm_el0": ImplicitActuatorCfg(
+            joint_names_expr=["arm_el0"], effort_limit_sim=ARM_EFFORT_LIMIT[2], stiffness=ARM_STIFFNESS[2],
+            damping=ARM_DAMPING[2], armature=ARM_ARMATURE[2]
+        ),
+        "arm_el1": ImplicitActuatorCfg(
+            joint_names_expr=["arm_el1"], effort_limit_sim=ARM_EFFORT_LIMIT[3], stiffness=ARM_STIFFNESS[3],
+            damping=ARM_DAMPING[3], armature=ARM_ARMATURE[3]
+        ),
+        "arm_wr0": ImplicitActuatorCfg(
+            joint_names_expr=["arm_wr0"], effort_limit_sim=ARM_EFFORT_LIMIT[4], stiffness=ARM_STIFFNESS[4],
+            damping=ARM_DAMPING[4], armature=ARM_ARMATURE[4]
+        ),
+        "arm_wr1": ImplicitActuatorCfg(
+            joint_names_expr=["arm_wr1"], effort_limit_sim=ARM_EFFORT_LIMIT[5], stiffness=ARM_STIFFNESS[5],
+            damping=ARM_DAMPING[5], armature=ARM_ARMATURE[5]
+        ),
+        "gripper": ImplicitActuatorCfg(
+            joint_names_expr=["arm_f1x"], effort_limit_sim=ARM_EFFORT_LIMIT[6], stiffness=ARM_STIFFNESS[6],
+            damping=ARM_DAMPING[6], armature=ARM_ARMATURE[6]
+        ),
+    },
+)

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import isaaclab.utils.math as math_utils
 import torch
-from isaaclab.assets import Articulation, ArticulationData
+from isaaclab.assets import BaseArticulation, BaseArticulationData
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
 from isaaclab.sensors import FrameTransformerData
 
@@ -32,13 +32,13 @@ def ee_pose_b(
     Returns:
         TCP position and unique ``wxyz`` quaternion, shape ``(num_envs, 7)``.
     """
-    robot: Articulation = env.scene[asset_cfg.name]
+    robot: BaseArticulation = env.scene[asset_cfg.name]
     frame_data: FrameTransformerData = env.scene[frame_name].data
     position, orientation = math_utils.subtract_frame_transforms(
-        robot.data.root_pos_w,
-        robot.data.root_quat_w,
-        frame_data.target_pos_w[:, 0],
-        frame_data.target_quat_w[:, 0],
+        robot.data.root_pos_w.torch,
+        robot.data.root_quat_w.torch,
+        frame_data.target_pos_w.torch[:, 0],
+        frame_data.target_quat_w.torch[:, 0],
     )
     return torch.cat((position, math_utils.quat_unique(orientation)), dim=-1)
 
@@ -58,13 +58,13 @@ def object_root_pose_b(
     Returns:
         Object position and unique ``wxyz`` quaternion, shape ``(num_envs, 7)``.
     """
-    robot: Articulation = env.scene[robot_cfg.name]
-    object_asset: Articulation = env.scene[object_cfg.name]
+    robot: BaseArticulation = env.scene[robot_cfg.name]
+    object_asset: BaseArticulation = env.scene[object_cfg.name]
     position, orientation = math_utils.subtract_frame_transforms(
-        robot.data.root_pos_w,
-        robot.data.root_quat_w,
-        object_asset.data.root_pos_w,
-        object_asset.data.root_quat_w,
+        robot.data.root_pos_w.torch,
+        robot.data.root_quat_w.torch,
+        object_asset.data.root_pos_w.torch,
+        object_asset.data.root_quat_w.torch,
     )
     return torch.cat((position, math_utils.quat_unique(orientation)), dim=-1)
 
@@ -108,8 +108,8 @@ def valve_current_angle(
         Normalized current valve angle of shape ``(num_envs, 1)``.
     """
     command = env.command_manager.get_term(command_name)
-    valve: Articulation = env.scene[asset_cfg.name]
-    joint_pos = valve.data.joint_pos[:, asset_cfg.joint_ids]
+    valve: BaseArticulation = env.scene[asset_cfg.name]
+    joint_pos = valve.data.joint_pos.torch[:, asset_cfg.joint_ids]
     if joint_pos.shape[-1] != 1:
         raise ValueError("valve_current_angle requires exactly one selected valve joint")
     denominator = float(
@@ -189,7 +189,7 @@ def rel_ee_drawer_pose(
 
     # print("Pose: ", cabinet_tf_data.target_pos_w[..., 0, :])
 
-    asset: ArticulationData = env.scene[asset_cfg.name].data
+    asset: BaseArticulationData = env.scene[asset_cfg.name].data
     root_pos_w = asset.root_pos_w
     root_quat_w = asset.root_quat_w
 
@@ -204,7 +204,7 @@ def rel_ee_drawer_pose(
 def rel_ee_object_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
     """The distance between the end-effector and the object."""
     ee_tf_data: FrameTransformerData = env.scene["ee_frame"].data
-    object_data: ArticulationData = env.scene["object"].data
+    object_data: BaseArticulationData = env.scene["object"].data
 
     return object_data.root_pos_w - ee_tf_data.target_pos_w[..., 0, :]
 

@@ -1,4 +1,4 @@
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import SPOT_EE, as_command_offset
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
@@ -20,7 +20,7 @@ class FramePoseCommandsCfg:
         debug_vis=False,
         valve_asset_name="ball_valve",
         valve_joint_name="RevoluteJoint",
-        open_task_prob=0.5,
+        open_task_prob=1.0,
         # HiveBoard limits are [-pi/2, 0]: negative rotation opens the valve.
         valve_joint_closed=0.0,
         valve_joint_open=-1.5707963267948966,

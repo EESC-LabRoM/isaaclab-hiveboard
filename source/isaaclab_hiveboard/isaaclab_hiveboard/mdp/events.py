@@ -7,7 +7,7 @@ import isaaclab.utils.math as math_utils
 import numpy as np
 import pytorch_kinematics as pk
 import torch
-from isaaclab.assets import Articulation
+from isaaclab.assets import BaseArticulation
 from isaaclab.envs.manager_based_env import ManagerBasedEnv
 from isaaclab.managers import EventTermCfg, ManagerTermBase
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
@@ -88,7 +88,7 @@ def reset_joint_position(
     position: float = 0.0,
 ) -> None:
     """Write an absolute joint position (not an offset from the URDF default)."""
-    asset: Articulation = env.scene[asset_cfg.name]
+    asset: BaseArticulation = env.scene[asset_cfg.name]
     joint_ids = asset_cfg.joint_ids
     n_joints = asset.num_joints if joint_ids == slice(None) else len(joint_ids)
     pos = torch.full(
@@ -235,11 +235,11 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
 
         # extract the used quantities (to enable type-hinting)
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
-        self._asset: Articulation = env.scene[asset_cfg.name]
+        self._asset: BaseArticulation = env.scene[asset_cfg.name]
         self._valve_cfg: SceneEntityCfg = cfg.params["valve_cfg"]
         self._valve_offset: OffsetCfg = _resolve_valve_offset(cfg, env)
         self._ee_offset: OffsetCfg = _resolve_ee_offset(cfg, env)
-        self._valve: Articulation = env.scene[self._valve_cfg.name]
+        self._valve: BaseArticulation = env.scene[self._valve_cfg.name]
         self._valve_urdf: str = cfg.params.get(
             "valve_urdf", f"{ASSET_DIR}/ball_valve/ball_valve.urdf"
         )
@@ -257,7 +257,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         assert len(valve_body_idxs) == 1, "Expected exactly one valve body to be found."
         self.valve_body_idx = valve_body_idxs[0]
 
-        if not isinstance(self._asset, Articulation):
+        if not isinstance(self._asset, BaseArticulation):
             raise ValueError(
                 f"Randomization term 'RandomizeValveHandlePoseEvent' not supported for asset: '{asset_cfg.name}'"
                 f" with type: '{type(self._asset)}'."
@@ -594,7 +594,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             len(self._ik_joint_names),
             device="cpu",
         ) * (joint_limits[:, 1] - joint_limits[:, 0])
-        retry_configs[0] = self._asset.data.default_joint_pos[0, self._ik_joint_ids].cpu()
+        retry_configs[0] = self._asset.data.default_joint_pos.torch[
+            0, self._ik_joint_ids
+        ].cpu()
 
         self._ik_solver = pk.PseudoInverseIK(
             self._arm_chain,
@@ -715,7 +717,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         valid_problem_ids = torch.cat(valid_problem_ids_chunks)
         ik_solutions = torch.cat(ik_solution_chunks)
 
-        full_joint_states = self._asset.data.default_joint_pos[
+        full_joint_states = self._asset.data.default_joint_pos.torch[
             0, self._joint_ids
         ].repeat(len(valid_problem_ids), 1)
         joint_column_by_name = {
@@ -1019,7 +1021,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             final_root_quat_b[active_indices] = root_quat_b[~valid]
             final_valve_q[active_indices] = valve_q[~valid].unsqueeze(-1)
 
-        full_joint_states = self._asset.data.default_joint_pos[env_ids][
+        full_joint_states = self._asset.data.default_joint_pos.torch[env_ids][
             :, self._joint_ids
         ].clone()
         joint_column_by_name = {
@@ -1037,7 +1039,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             env_ids=env_ids,
         )
 
-        default_valve_q = self._valve.data.default_joint_pos[env_ids].clone()
+        default_valve_q = self._valve.data.default_joint_pos.torch[env_ids].clone()
         if final_valve_q.shape[-1] == default_valve_q.shape[-1]:
             valve_states_to_write = final_valve_q
         else:
@@ -1049,8 +1051,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         )
 
         valve_pos_w, valve_quat_w = math_utils.combine_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             final_root_pos_b,
             final_root_quat_b,
         )
@@ -1070,7 +1072,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         # the named reset target coincide with the robot TCP.
         target_frame_name = self.cfg.params.get("target_frame_name")
         frame_name = self.cfg.params.get("frame_name", "target_frame")
-        if target_frame_name is not None:
+        if target_frame_name is not None and self.cfg.params.get(
+            "correct_frame_residual", True
+        ):
             frame = env.scene[frame_name]
             try:
                 target_idx = frame.data.target_frame_names.index(target_frame_name)
@@ -1078,17 +1082,17 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 raise ValueError(
                     f"Frame '{target_frame_name}' is not provided by '{frame_name}'."
                 ) from error
-            ee_pos_w = self._asset.data.body_pos_w[env_ids, self._ee_body_idx]
-            ee_quat_w = self._asset.data.body_quat_w[env_ids, self._ee_body_idx]
+            ee_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._ee_body_idx]
+            ee_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._ee_body_idx]
             tcp_pos_w, _ = math_utils.combine_frame_transforms(
                 ee_pos_w,
                 ee_quat_w,
                 self._ee_offset_pos.expand(num_resets, -1),
                 self._ee_offset_quat.expand(num_resets, -1),
             )
-            target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
-            root_pos_w = self._valve.data.root_pos_w[env_ids]
-            root_quat_w = self._valve.data.root_quat_w[env_ids]
+            target_pos_w = frame.data.target_pos_w.torch[env_ids, target_idx]
+            root_pos_w = self._valve.data.root_pos_w.torch[env_ids]
+            root_quat_w = self._valve.data.root_quat_w.torch[env_ids]
             root_pos_w = root_pos_w + (tcp_pos_w - target_pos_w)
             self._valve.write_root_pose_to_sim(
                 torch.cat((root_pos_w, root_quat_w), dim=-1), env_ids=env_ids
@@ -1115,7 +1119,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             env_ids=env_ids,
         )
 
-        default_valve_q = self._valve.data.default_joint_pos[env_ids].clone()
+        default_valve_q = self._valve.data.default_joint_pos.torch[env_ids].clone()
         selected_valve_q = self._paired_valve_joint_states[pair_ids]
         if selected_valve_q.ndim == 1:
             selected_valve_q = selected_valve_q.unsqueeze(-1)
@@ -1132,8 +1136,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         )
 
         valve_pos_w, valve_quat_w = math_utils.combine_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             self._valve_root_pos_b[pair_ids],
             self._valve_root_quat_b[pair_ids],
         )
@@ -1185,6 +1189,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         show_reset_state_progress: bool = False,
         ik_batch_size: int = 2048,
         on_the_fly: bool = False,
+        correct_frame_residual: bool = True,
     ) -> None:
         """Randomize the valve handle pose by setting the joint positions.
 
@@ -1210,7 +1215,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             or self._robot_joint_states is None
             or self._num_valid_states == 0
         ):
-            default_joint_poses = self._asset.data.default_joint_pos[
+            default_joint_poses = self._asset.data.default_joint_pos.torch[
                 env_ids, self._joint_ids
             ]
             default_joint_vels = torch.zeros_like(default_joint_poses)
@@ -1246,7 +1251,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             size=(num_envs,),
             device=env.device,
         )
-        default_valve_q = self._valve.data.default_joint_pos[env_ids].clone()
+        default_valve_q = self._valve.data.default_joint_pos.torch[env_ids].clone()
         sample_valve_q = self._valve_joint_states[rand_indices_valve]
         if sample_valve_q.ndim == 1:
             sample_valve_q = sample_valve_q.unsqueeze(-1)
@@ -1267,8 +1272,8 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         env.scene.write_data_to_sim()
         env.sim.forward()
 
-        wr1_pos_w = self._asset.data.body_pos_w[env_ids, self._ee_body_idx]
-        wr1_quat_w = self._asset.data.body_quat_w[env_ids, self._ee_body_idx]
+        wr1_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._ee_body_idx]
+        wr1_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._ee_body_idx]
         tcp_pos_w, tcp_quat_w = math_utils.combine_frame_transforms(
             wr1_pos_w,
             wr1_quat_w,
@@ -1297,7 +1302,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
         # analytical valve-root transform above is only an initial estimate.
         target_frame_name = self.cfg.params.get("target_frame_name")
         frame_name = self.cfg.params.get("frame_name", "target_frame")
-        if target_frame_name is not None:
+        if target_frame_name is not None and self.cfg.params.get(
+            "correct_frame_residual", True
+        ):
             frame = env.scene[frame_name]
             try:
                 target_idx = frame.data.target_frame_names.index(target_frame_name)
@@ -1305,9 +1312,9 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 raise ValueError(
                     f"Frame '{target_frame_name}' is not provided by '{frame_name}'."
                 ) from error
-            target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
-            root_pos_w = self._valve.data.root_pos_w[env_ids]
-            root_quat_w = self._valve.data.root_quat_w[env_ids]
+            target_pos_w = frame.data.target_pos_w.torch[env_ids, target_idx]
+            root_pos_w = self._valve.data.root_pos_w.torch[env_ids]
+            root_quat_w = self._valve.data.root_quat_w.torch[env_ids]
             corrected_root_pos_w = root_pos_w + (tcp_pos_w - target_pos_w)
             self._valve.write_root_pose_to_sim(
                 torch.cat((corrected_root_pos_w, root_quat_w), dim=-1), env_ids=env_ids
@@ -1323,7 +1330,7 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
-        self._asset: Articulation = env.scene[asset_cfg.name]
+        self._asset: BaseArticulation = env.scene[asset_cfg.name]
         self._ee_offset = _resolve_ee_offset(cfg, env)
         robot_urdf = cfg.params["robot_urdf"]
         robot_root_link = cfg.params.get("robot_root_link", "arm_mount")
@@ -1347,7 +1354,9 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
         retry_configs = joint_limits[:, 0] + torch.rand(
             num_retries, len(self._ik_joint_names)
         ) * (joint_limits[:, 1] - joint_limits[:, 0])
-        retry_configs[0] = self._asset.data.default_joint_pos[0, self._ik_joint_ids].cpu()
+        retry_configs[0] = self._asset.data.default_joint_pos.torch[
+            0, self._ik_joint_ids
+        ].cpu()
         self._ik_solver = pk.PseudoInverseIK(
             self._arm_chain,
             pos_tolerance=float(cfg.params.get("ik_position_tolerance", 0.01)),
@@ -1396,11 +1405,11 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
 
         frame = env.scene[frame_name]
         target_idx = frame.data.target_frame_names.index(target_frame_name)
-        target_pos_w = frame.data.target_pos_w[env_ids, target_idx]
-        target_quat_w = frame.data.target_quat_w[env_ids, target_idx]
+        target_pos_w = frame.data.target_pos_w.torch[env_ids, target_idx]
+        target_quat_w = frame.data.target_quat_w.torch[env_ids, target_idx]
         tcp_pos_b, tcp_quat_b = math_utils.subtract_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             target_pos_w,
             target_quat_w,
         )
@@ -1425,7 +1434,9 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
             pos=body_pos_m.cpu(), rot=body_quat_m.cpu()
         )
         result = self._ik_solver.solve(ik_targets)
-        q = self._asset.data.default_joint_pos[env_ids][:, self._ik_joint_ids].clone()
+        q = self._asset.data.default_joint_pos.torch[env_ids][
+            :, self._ik_joint_ids
+        ].clone()
         if torch.any(result.converged_any):
             # Prefer the lowest pose error among converged retries (retry 0 is the
             # default configuration). argmax on the bool mask picked an arbitrary success.

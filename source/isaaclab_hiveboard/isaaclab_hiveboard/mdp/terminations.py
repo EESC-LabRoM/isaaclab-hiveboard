@@ -53,7 +53,7 @@ def valve_rotation_success(
     valve = env.scene[asset_cfg.name]
     # SceneEntityCfg collapses a selection covering every joint to ``slice(None)``.
     # Index the articulation first so this works for both slices and explicit lists.
-    selected_joint_pos = valve.data.joint_pos[:, asset_cfg.joint_ids]
+    selected_joint_pos = valve.data.joint_pos.torch[:, asset_cfg.joint_ids]
     if selected_joint_pos.shape[-1] != 1:
         raise ValueError(
             "valve_rotation_success requires exactly one selected valve joint; "
@@ -84,7 +84,7 @@ def articulation_joint_position_success(
         )
 
     asset = env.scene[asset_cfg.name]
-    joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    joint_pos = asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
     if joint_pos.shape[-1] != 1:
         raise ValueError(
             "articulation_joint_position_success requires exactly one joint; "

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from isaaclab.actuators.actuator_cfg import RemotizedPDActuatorCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets.spot.actuators.actuator_spot import SpotKneeActuator
 from isaaclab_hiveboard.assets.spot.constants import (

@@ -1,6 +1,6 @@
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.stack import mdp
 
 from isaaclab_hiveboard.assets import SPOT_EE, as_ik_offset

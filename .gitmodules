@@ -7,3 +7,9 @@
 [submodule "dependencies/duatic_dynaarm"]
 	path = dependencies/duatic_dynaarm
 	url = https://github.com/Duatic/duatic_dynaarm.git
+[submodule "dependencies/hiveboard-bench.github.io"]
+	path = dependencies/hiveboard-bench.github.io
+	url = https://github.com/hiveboard-bench/hiveboard-bench.github.io.git
+[submodule "dependencies/IsaacLab"]
+	path = dependencies/IsaacLab
+	url = https://github.com/isaac-sim/IsaacLab.git

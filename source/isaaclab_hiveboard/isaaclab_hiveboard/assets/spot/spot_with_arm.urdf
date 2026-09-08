@@ -110,6 +110,7 @@
 
   <!-- Front Left Foot -->
   <link name="fl_foot">
+    <inertial><mass value="1e-6"/><inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/></inertial>
     <collision>
       <geometry>
         <sphere radius="0.036"/>
@@ -202,6 +203,7 @@
 
   <!-- Front Right Foot -->
   <link name="fr_foot">
+    <inertial><mass value="1e-6"/><inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/></inertial>
     <collision>
       <geometry>
         <sphere radius="0.036"/>
@@ -293,6 +295,7 @@
 
   <!-- Hind Left Foot -->
   <link name="hl_foot">
+    <inertial><mass value="1e-6"/><inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/></inertial>
     <collision>
       <geometry>
         <sphere radius="0.036"/>
@@ -385,6 +388,7 @@
 
   <!-- Hind Right Foot -->
   <link name="hr_foot">
+    <inertial><mass value="1e-6"/><inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/></inertial>
     <collision>
       <geometry>
         <sphere radius="0.036"/>
@@ -636,6 +640,7 @@
   </joint>
 
   <link name="arm_link_jaw">
+    <inertial><mass value="1e-6"/><inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/></inertial>
     <collision>
       <geometry>
         <mesh filename="meshes/gripper/collision/front_jaw.obj" />

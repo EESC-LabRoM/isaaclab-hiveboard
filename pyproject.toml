@@ -8,21 +8,35 @@ name = "isaaclab-hiveboard"
 version = "0.1.0"
 description = "Isaac Lab simulation environments for multi-robot HiveBoard manipulation"
 readme = "README.md"
-requires-python = "==3.11.*"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "isaacsim[all,extscache]==5.1.0",
-    "isaaclab[all]==2.3.2.post1",
-    "setuptools<71.0.0",
+    "isaaclab",
+    "isaaclab-assets",
+    "isaaclab-contrib",
+    "isaaclab-newton[all]",
+    "isaaclab-physx[newton]",
+    "isaaclab-tasks",
+    "isaaclab-visualizers[newton]",
+    "hydra-core>=1.3,<1.4",
+    "pytorch-kinematics>=0.10.0",
+    "setuptools<82.0.0",
+    "tqdm",
+    # 3.0 bundles OpenUSD 26.8 and conflicts with Isaac Lab's usd-core 25.11.
+    "usd-exchange==2.3.0",
+    "imgui-bundle>=1.92.601",
+]
+
+[project.optional-dependencies]
+cameras = ["isaacsim[all,extscache]==6.0.1"]
+curobo = ["nvidia-curobo[cu12]"]
+data = [
     "diffusers>=0.36.0",
     "dill>=0.3.5.1",
-    "tensorboard>=2.20.0",
-    "pytorch-kinematics>=0.10.0",
-    "nvidia-curobo[cu12]",
-    "zarr<3",
-    "tqdm",
     "h5py",
+    "inquirerpy",
     "tabulate",
-    "InquirerPy",
+    "tensorboard>=2.20.0",
+    "zarr<3",
 ]
 
 [[tool.uv.index]]
@@ -30,6 +44,26 @@ url = "https://pypi.nvidia.com/"
 
 [tool.uv.sources]
 nvidia-curobo = { git = "https://github.com/NVlabs/curobo.git" }
+isaaclab = { path = "dependencies/IsaacLab/source/isaaclab", editable = true }
+isaaclab-assets = { path = "dependencies/IsaacLab/source/isaaclab_assets", editable = true }
+isaaclab-contrib = { path = "dependencies/IsaacLab/source/isaaclab_contrib", editable = true }
+isaaclab-newton = { path = "dependencies/IsaacLab/source/isaaclab_newton", editable = true }
+isaaclab-physx = { path = "dependencies/IsaacLab/source/isaaclab_physx", editable = true }
+isaaclab-tasks = { path = "dependencies/IsaacLab/source/isaaclab_tasks", editable = true }
+isaaclab-visualizers = { path = "dependencies/IsaacLab/source/isaaclab_visualizers", editable = true }
+
+[tool.uv]
+# Isaac Sim 6.0.1 pins 7.4.4 while this Isaac Lab snapshot pins 7.6.1 only
+# for its own tests. The runtime APIs used here do not depend on that delta.
+override-dependencies = ["coverage==7.4.4"]
+index-strategy = "unsafe-best-match"
+prerelease = "allow"
+conflicts = [
+    [
+        { extra = "cameras" },
+        { extra = "curobo" },
+    ],
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -39,9 +73,19 @@ build-backend = "setuptools.build_meta"
 where = ["source/isaaclab_hiveboard"]
 include = ["isaaclab_hiveboard*"]
 
+[tool.setuptools.package-data]
+isaaclab_hiveboard = [
+    "assets/**/*.mtl",
+    "assets/**/*.obj",
+    "assets/**/*.png",
+    "assets/**/*.urdf",
+    "assets/**/*.usd",
+    "assets/**/*.yaml",
+]
+
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 
 # Exclude directories
 extend-exclude = [
@@ -131,7 +175,7 @@ exclude = [
     ".vscode",
 ]
 typeCheckingMode = "basic"
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 pythonPlatform = "Linux"
 enableTypeIgnoreComments = true
 reportMissingImports = "none"

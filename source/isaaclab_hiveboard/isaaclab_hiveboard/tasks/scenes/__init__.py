@@ -5,10 +5,8 @@
 
 """Robot-agnostic HiveBoard scenes. Robot subclasses fill ``robot`` and ``ee_frame``."""
 
-from .circuit_breaker import CircuitBreakerSceneCfg
 from .lever_valve import LeverValveSceneCfg
 
 __all__ = [
-    "CircuitBreakerSceneCfg",
     "LeverValveSceneCfg",
 ]

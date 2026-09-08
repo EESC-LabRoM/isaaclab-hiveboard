@@ -6,7 +6,7 @@ from typing import Sequence, Type
 
 import isaaclab.utils.math as math_utils
 import torch
-from isaaclab.assets import Articulation
+from isaaclab.assets import BaseArticulation
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
 from isaaclab.managers import CommandTerm
 from isaaclab.managers.manager_term_cfg import CommandTermCfg
@@ -30,7 +30,7 @@ class SequentialPoseCommand(CommandTerm):
         super().__init__(cfg, env)
         # obtain the robot asset
         # -- robot
-        self._asset: Articulation = env.scene[cfg.asset_name]
+        self._asset: BaseArticulation = env.scene[cfg.asset_name]
         body_ids, body_names = self._asset.find_bodies(self.cfg.body_name)
         if not body_ids:
             raise ValueError(
@@ -78,12 +78,12 @@ class SequentialPoseCommand(CommandTerm):
         self.valve_rotate_angle_rad = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.float32
         )
-        self._valve_asset: Articulation | None = None
+        self._valve_asset: BaseArticulation | None = None
         self._valve_joint_idx: int | None = None
         self._initialize_valve_task()
 
         # -- optional revolute/prismatic screw coupling
-        self._screw_asset: Articulation | None = None
+        self._screw_asset: BaseArticulation | None = None
         self._screw_revolute_idx: int | None = None
         self._screw_prismatic_idx: int | None = None
         self._screw_prev_angle = torch.zeros(
@@ -178,7 +178,9 @@ class SequentialPoseCommand(CommandTerm):
         if self._valve_asset is None or self._valve_joint_idx is None:
             return
 
-        q_start = self._valve_asset.data.joint_pos[env_ids, self._valve_joint_idx]
+        q_start = self._valve_asset.data.joint_pos.torch[
+            env_ids, self._valve_joint_idx
+        ]
         q_open = torch.full_like(q_start, self.cfg.valve_joint_open)
         q_closed = torch.full_like(q_start, self.cfg.valve_joint_closed)
         min_delta = float(self.cfg.valve_min_delta_rad)
@@ -240,11 +242,11 @@ class SequentialPoseCommand(CommandTerm):
             or self._screw_prismatic_idx is None
         ):
             return
-        self._screw_prev_angle[env_ids] = self._screw_asset.data.joint_pos[
+        self._screw_prev_angle[env_ids] = self._screw_asset.data.joint_pos.torch[
             env_ids, self._screw_revolute_idx
         ]
         self._screw_revolute_target[env_ids] = self._screw_prev_angle[env_ids]
-        self._screw_axial_target[env_ids] = self._screw_asset.data.joint_pos[
+        self._screw_axial_target[env_ids] = self._screw_asset.data.joint_pos.torch[
             env_ids, self._screw_prismatic_idx
         ]
         self._write_screw_targets(env_ids)
@@ -259,7 +261,7 @@ class SequentialPoseCommand(CommandTerm):
         ):
             return
         coupling = self.cfg.screw_coupling
-        velocity = self._screw_asset.data.joint_vel[
+        velocity = self._screw_asset.data.joint_vel.torch[
             env_ids, self._screw_revolute_idx
         ]
         speed = torch.abs(velocity)
@@ -322,7 +324,7 @@ class SequentialPoseCommand(CommandTerm):
             return
         coupling = self.cfg.screw_coupling
         env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
-        angle = self._screw_asset.data.joint_pos[:, self._screw_revolute_idx]
+        angle = self._screw_asset.data.joint_pos.torch[:, self._screw_revolute_idx]
         raw_delta = angle - self._screw_prev_angle
         angle_delta = torch.atan2(torch.sin(raw_delta), torch.cos(raw_delta))
         self._screw_axial_target += (
@@ -338,7 +340,9 @@ class SequentialPoseCommand(CommandTerm):
         """Update the EE arc angle from the valve's remaining joint error."""
         if self._valve_asset is None or self._valve_joint_idx is None:
             return
-        q_current = self._valve_asset.data.joint_pos[env_ids, self._valve_joint_idx]
+        q_current = self._valve_asset.data.joint_pos.torch[
+            env_ids, self._valve_joint_idx
+        ]
         self.valve_rotate_angle_rad[env_ids] = (
             self.valve_joint_des[env_ids] - q_current
         ) * float(self.cfg.valve_ee_joint_angle_scale)
@@ -448,8 +452,8 @@ class SequentialPoseCommand(CommandTerm):
         if not self._asset.is_initialized:
             return
 
-        asset_pos = self._asset.data.root_pos_w
-        asset_quat = self._asset.data.root_quat_w
+        asset_pos = self._asset.data.root_pos_w.torch
+        asset_quat = self._asset.data.root_quat_w.torch
 
         # goal end-effector pose
         target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
@@ -473,12 +477,12 @@ class SequentialPoseCommand(CommandTerm):
         """
 
         # End-effector pose in base frame
-        ee_pos_w = self._asset.data.body_pos_w[env_ids, self._body_idx]
-        ee_quat_w = self._asset.data.body_quat_w[env_ids, self._body_idx]
+        ee_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._body_idx]
+        ee_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._body_idx]
 
         ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             ee_pos_w,
             ee_quat_w,
         )
@@ -497,8 +501,8 @@ class SequentialPoseCommand(CommandTerm):
         To convert the end-effector pose from world frame to world frame, we do:
         """
         # End-effector pose in world frame
-        ee_pos_w = self._asset.data.body_pos_w[env_ids, self._body_idx]
-        ee_quat_w = self._asset.data.body_quat_w[env_ids, self._body_idx]
+        ee_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._body_idx]
+        ee_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._body_idx]
 
         if self._offset_pos is not None and self._offset_rot is not None:
             ee_pos_w, ee_quat_w = math_utils.combine_frame_transforms(
@@ -633,12 +637,14 @@ class _GoToFrameHandler(_BaseCmdHandler):
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         # Target pose in base frame
-        target_pos_w = self._frame.data.target_pos_w[env_ids, self._frame_idx]
-        target_quat_w = self._frame.data.target_quat_w[env_ids, self._frame_idx]
+        target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
+        target_quat_w = self._frame.data.target_quat_w.torch[
+            env_ids, self._frame_idx
+        ]
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             target_pos_w,
             target_quat_w,
         )
@@ -726,7 +732,8 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     self.cfg.robot_joint_names, preserve_order=True
                 )
                 current = JointState.from_position(
-                    self._asset.data.joint_pos[env_ids][:, joint_ids], joint_names=joint_names
+                    self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
+                    joint_names=joint_names,
                 )
                 # The Isaac articulation root and the FR3 URDF root are not
                 # the same frame.  Calibrate the constant transform from the
@@ -736,10 +743,14 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     planner.tool_frames[0]
                 )
                 isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
-                    self._asset.data.root_pos_w[env_ids],
-                    self._asset.data.root_quat_w[env_ids],
-                    self._asset.data.body_pos_w[env_ids, self._command_term._body_idx],
-                    self._asset.data.body_quat_w[env_ids, self._command_term._body_idx],
+                    self._asset.data.root_pos_w.torch[env_ids],
+                    self._asset.data.root_quat_w.torch[env_ids],
+                    self._asset.data.body_pos_w.torch[
+                        env_ids, self._command_term._body_idx
+                    ],
+                    self._asset.data.body_quat_w.torch[
+                        env_ids, self._command_term._body_idx
+                    ],
                 )
                 flange_quat_inv_c = math_utils.quat_inv(curobo_flange.quaternion)
                 flange_pos_inv_c = -math_utils.quat_apply(
@@ -873,8 +884,8 @@ class _GripperHandler(_BaseCmdHandler):
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return (
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
         )
 
 
@@ -1045,12 +1056,14 @@ class _RotateFrameHandler(_BaseCmdHandler):
 
     def _get_rotation_axis_pose_b(self, env_ids: torch.Tensor):
         # Target pose in base frame
-        target_pos_w = self._frame.data.target_pos_w[env_ids, self._frame_idx]
-        target_quat_w = self._frame.data.target_quat_w[env_ids, self._frame_idx]
+        target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
+        target_quat_w = self._frame.data.target_quat_w.torch[
+            env_ids, self._frame_idx
+        ]
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
             target_pos_w,
             target_quat_w,
         )
@@ -1081,7 +1094,7 @@ class _ScrewFrameHandler(_RotateFrameHandler):
             command_term._screw_asset is not None
             and command_term._screw_revolute_idx is not None
         ):
-            self._joint_start[env_ids] = command_term._screw_asset.data.joint_pos[
+            self._joint_start[env_ids] = command_term._screw_asset.data.joint_pos.torch[
                 env_ids, command_term._screw_revolute_idx
             ]
 
@@ -1274,7 +1287,7 @@ class _CuroboPlannedRotateFrameHandler(
                     self.cfg.robot_joint_names, preserve_order=True
                 )
                 current = JointState.from_position(
-                    self._asset.data.joint_pos[env_ids][:, joint_ids],
+                    self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
                     joint_names=joint_names,
                 )
 
@@ -1283,12 +1296,12 @@ class _CuroboPlannedRotateFrameHandler(
                 ).tool_poses.get_link_pose(tool_frame)
                 isaac_flange_pos_b, isaac_flange_quat_b = (
                     math_utils.subtract_frame_transforms(
-                        self._asset.data.root_pos_w[env_ids],
-                        self._asset.data.root_quat_w[env_ids],
-                        self._asset.data.body_pos_w[
+                        self._asset.data.root_pos_w.torch[env_ids],
+                        self._asset.data.root_quat_w.torch[env_ids],
+                        self._asset.data.body_pos_w.torch[
                             env_ids, self._command_term._body_idx
                         ],
-                        self._asset.data.body_quat_w[
+                        self._asset.data.body_quat_w.torch[
                             env_ids, self._command_term._body_idx
                         ],
                     )

@@ -3,66 +3,85 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import os
+"""Lazy asset exports.
+
+Keeping these imports lazy is essential for kitless Newton tasks: legacy robot
+assets still use Isaac Sim's development-time URDF converter.
+"""
+
+from __future__ import annotations
+
+import importlib
 from pathlib import Path
 
-from .anymal import (
-    ANYMAL_D_DYNAARM_ROBOTIQ_CFG,
-    ANYMAL_D_DYNAARM_ROBOTIQ_HIGH_PD_CFG,
-    ARM_PRIM,
-    DYNAARM_EE_LINK,
-    DYNAARM_JOINT_NAMES,
-    DYNAARM_MOUNT_POS,
-    DYNAARM_MOUNT_ROT,
-    DYNAARM_URDF,
-    ROBOTIQ_2F140_CFG,
-    ROBOTIQ_CLOSE_Q,
-    ROBOTIQ_DRIVE_JOINT,
-    ROBOTIQ_INIT_JOINT_POS,
-    ROBOTIQ_JOINT_GEAR,
-    ROBOTIQ_OPEN_Q,
-    robotiq_joint_targets,
-)
-from .end_effector import (
-    ANYMAL_EE,
-    ANYMAL_WORKSPACE,
-    FRANKA_EE,
-    FRANKA_WORKSPACE,
-    SPOT_EE,
-    SPOT_WORKSPACE,
-    EndEffectorCfg,
-    WorkspaceCfg,
-    as_command_offset,
-    as_ik_offset,
-    make_ee_frame,
-)
-from .franka import FRANKA_FR3_CFG, FRANKA_FR3_HIGH_PD_CFG
-from .hiveboard import (
-    ASSET_DIR,
-    BALL_VALVE_FRICTION_RING_URDF,
-    BALL_VALVE_URDF,
-    BALL_VALVE_USD,
-    BUTTON_URDF,
-    BUTTON_USD,
-    CIRCUIT_BREAKER_URDF,
-    CIRCUIT_BREAKER_USD,
-    DRAWER_URDF,
-    DRAWER_USD,
-    HIGH_TORQUE_VALVE_URDF,
-    HIGH_TORQUE_VALVE_USD,
-    HIVEBOARD_DIR,
-    HIVEBOARD_SIM_DIR,
-    HONEYCOMB_URDF,
-    HONEYCOMB_USD,
-    KEY_URDF,
-    KEY_USD,
-    LAMP_URDF,
-    LAMP_USD,
-    SHOCK_ABSORBER_URDF,
-    SHOCK_ABSORBER_USD,
-    SMALL_VALVE_URDF,
-    SMALL_VALVE_USD,
-)
-
 REPO_DIR = Path(__file__).resolve().parents[4]
-SPOT_ASSET_DIR = os.path.join(ASSET_DIR, "spot")
+ASSET_DIR = str(Path(__file__).resolve().parent)
+SPOT_ASSET_DIR = str(Path(ASSET_DIR) / "spot")
+
+_EXPORT_MODULES = {
+    # Canonical end-effector profiles.
+    "ANYMAL_EE": ".end_effector",
+    "ANYMAL_WORKSPACE": ".end_effector",
+    "FRANKA_EE": ".end_effector",
+    "FRANKA_WORKSPACE": ".end_effector",
+    "SPOT_EE": ".end_effector",
+    "SPOT_WORKSPACE": ".end_effector",
+    "EndEffectorCfg": ".end_effector",
+    "WorkspaceCfg": ".end_effector",
+    "as_command_offset": ".end_effector",
+    "as_ik_offset": ".end_effector",
+    "make_ee_frame": ".end_effector",
+    # HiveBoard paths.
+    "BALL_VALVE_FRICTION_RING_URDF": ".hiveboard",
+    "BALL_VALVE_URDF": ".hiveboard",
+    "BALL_VALVE_USD": ".hiveboard",
+    "BUTTON_URDF": ".hiveboard",
+    "BUTTON_USD": ".hiveboard",
+    "CIRCUIT_BREAKER_URDF": ".hiveboard",
+    "CIRCUIT_BREAKER_USD": ".hiveboard",
+    "DRAWER_URDF": ".hiveboard",
+    "DRAWER_USD": ".hiveboard",
+    "HIGH_TORQUE_VALVE_URDF": ".hiveboard",
+    "HIGH_TORQUE_VALVE_USD": ".hiveboard",
+    "HIVEBOARD_DIR": ".hiveboard",
+    "HIVEBOARD_SIM_DIR": ".hiveboard",
+    "HONEYCOMB_URDF": ".hiveboard",
+    "HONEYCOMB_USD": ".hiveboard",
+    "KEY_URDF": ".hiveboard",
+    "KEY_USD": ".hiveboard",
+    "LAMP_URDF": ".hiveboard",
+    "LAMP_USD": ".hiveboard",
+    "SHOCK_ABSORBER_URDF": ".hiveboard",
+    "SHOCK_ABSORBER_USD": ".hiveboard",
+    "SMALL_VALVE_URDF": ".hiveboard",
+    "SMALL_VALVE_USD": ".hiveboard",
+    # Legacy robot assets, loaded only when requested.
+    "ANYMAL_D_DYNAARM_ROBOTIQ_CFG": ".anymal",
+    "ANYMAL_D_DYNAARM_ROBOTIQ_HIGH_PD_CFG": ".anymal",
+    "ARM_PRIM": ".anymal",
+    "DYNAARM_EE_LINK": ".anymal",
+    "DYNAARM_JOINT_NAMES": ".anymal",
+    "DYNAARM_MOUNT_POS": ".anymal",
+    "DYNAARM_MOUNT_ROT": ".anymal",
+    "DYNAARM_URDF": ".anymal",
+    "ROBOTIQ_2F140_CFG": ".anymal",
+    "ROBOTIQ_CLOSE_Q": ".anymal",
+    "ROBOTIQ_DRIVE_JOINT": ".anymal",
+    "ROBOTIQ_INIT_JOINT_POS": ".anymal",
+    "ROBOTIQ_JOINT_GEAR": ".anymal",
+    "ROBOTIQ_OPEN_Q": ".anymal",
+    "robotiq_joint_targets": ".anymal",
+    "FRANKA_FR3_CFG": ".franka",
+    "FRANKA_FR3_HIGH_PD_CFG": ".franka",
+}
+
+__all__ = ["ASSET_DIR", "REPO_DIR", "SPOT_ASSET_DIR", *_EXPORT_MODULES]
+
+
+def __getattr__(name: str):
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value

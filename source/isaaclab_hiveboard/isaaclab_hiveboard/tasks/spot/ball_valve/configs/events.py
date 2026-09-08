@@ -2,7 +2,7 @@ import torch
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
 from isaaclab_hiveboard.assets import BALL_VALVE_URDF
@@ -89,6 +89,10 @@ class ValveEventCfg:
             # approaching FrameCfg so the sequence only moves onto the lever.
             "frame_name": "target_frame",
             "target_frame_name": "approaching",
+            # Newton's FrameTransformer has not produced its first sample at
+            # this reset callback. The URDF-derived valve/root pose is already
+            # exact for Ball_Valve, so do not apply the legacy residual fix.
+            "correct_frame_residual": False,
             # Set on-the-fly to True to generate reachable reset states dynamically on each reset
             "on_the_fly": True,
             # Keep perturbations inside the tested Spot reachability margin.
@@ -103,3 +107,25 @@ class ValveEventCfg:
             "valve_joint_range": (-torch.pi / 2 + 0.35, -0.35),
         },
     )
+
+
+@configclass
+class ValvePlayEventCfg(ValveEventCfg):
+    """One fixed, reachable reset with no domain randomization."""
+
+    robot_physics_material = None
+    valve_actuator_gains = None
+    valve_joint_parameters = None
+    valve_physics_material = None
+
+    def __post_init__(self):
+        params = self.reset_robot_joints.params
+        params.update(
+            max_x=0.0,
+            max_y=0.0,
+            max_z=0.0,
+            max_roll=0.0,
+            max_pitch=0.0,
+            max_yaw=0.0,
+            valve_joint_range=(-0.35, -0.35),
+        )

@@ -1,7 +1,7 @@
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
 from isaaclab_hiveboard.assets.spot.constants import ARM_JOINT_NAMES

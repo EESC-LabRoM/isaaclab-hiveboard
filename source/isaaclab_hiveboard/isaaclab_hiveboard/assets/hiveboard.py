@@ -26,12 +26,14 @@ HIVEBOARD_DIR = os.getenv("HIVEBOARD_DIR", _find_hiveboard_dir())
 HIVEBOARD_SIM_DIR = os.path.join(HIVEBOARD_DIR, "Simulation")
 
 # HiveBoard Panel
-HONEYCOMB_USD = os.path.join(HIVEBOARD_SIM_DIR, "Honeycomb", "Honeycomb_Panel.usd")
+HONEYCOMB_USD = os.path.join(ASSET_DIR, "hiveboard", "honeycomb", "Honeycomb_Panel.usd")
 HONEYCOMB_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Honeycomb", "Honeycomb_Panel.urdf")
 
 # HiveBoard Interactive Objects - Valves
-BALL_VALVE_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Valves", "Lever Valve", "Ball Valve", "Ball_Valve.urdf")
-BALL_VALVE_USD = os.path.join(HIVEBOARD_SIM_DIR, "Valves", "Lever Valve", "Ball Valve", "Ball_Valve.usd")
+BALL_VALVE_URDF = os.path.join(ASSET_DIR, "hiveboard", "ball_valve", "Ball_Valve.urdf")
+BALL_VALVE_USD = os.path.join(
+    ASSET_DIR, "hiveboard", "ball_valve", "usd", "Ball_Valve_newton.usda"
+)
 BALL_VALVE_FRICTION_RING_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Valves", "Lever Valve", "Ball Valve", "Ball_Valve_Friction_Ring_Set.urdf"
 )

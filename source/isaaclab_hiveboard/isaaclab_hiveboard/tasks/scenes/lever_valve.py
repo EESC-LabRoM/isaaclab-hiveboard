@@ -9,7 +9,6 @@ from dataclasses import MISSING
 
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from isaaclab.sim.converters.urdf_converter_cfg import UrdfConverterCfg
 from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
     FRAME_MARKER_SMALL_CFG,
 )
@@ -19,10 +18,9 @@ from isaaclab.actuators.actuator_pd_cfg import ImplicitActuatorCfg
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.configclass import configclass
 
-from isaaclab_hiveboard.assets import BALL_VALVE_URDF, HONEYCOMB_USD, SPOT_WORKSPACE
+from isaaclab_hiveboard.assets import BALL_VALVE_USD, HONEYCOMB_USD, SPOT_WORKSPACE
 
 
 @configclass
@@ -36,13 +34,13 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING  # type: ignore
     ee_frame: FrameTransformerCfg = MISSING  # type: ignore
 
-    warehouse = AssetBaseCfg(
-        prim_path="/World/Warehouse",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+    ground = AssetBaseCfg(
+        prim_path="/World/Ground",
+        spawn=sim_utils.CuboidCfg(
+            size=(20.0, 20.0, 0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=SPOT_WORKSPACE.warehouse_pos),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
         collision_group=-1,
     )
 
@@ -53,17 +51,9 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
 
     ball_valve = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Valve",
-        spawn=sim_utils.UrdfFileCfg(
-            fix_base=True,
-            merge_fixed_joints=False,
-            make_instanceable=False,
-            link_density=1.0e-8,
-            asset_path=BALL_VALVE_URDF,
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=BALL_VALVE_USD,
             activate_contact_sensors=True,
-            joint_drive=UrdfConverterCfg.JointDriveCfg(
-                drive_type="force",
-                gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=None),  # type: ignore
-            ),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
                 retain_accelerations=False,
@@ -75,8 +65,6 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
-                solver_position_iteration_count=4,
-                solver_velocity_iteration_count=0,
             ),
             semantic_tags=[("class", "valve")],
         ),
@@ -94,7 +82,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 friction=0.02,
                 dynamic_friction=0.0,
                 viscous_friction=0.0,
-                effort_limit=2.0,
+                effort_limit_sim=2.0,
                 joint_names_expr=["RevoluteJoint"],
                 stiffness=0.0,
             ),
