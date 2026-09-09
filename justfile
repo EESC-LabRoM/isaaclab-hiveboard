@@ -11,6 +11,20 @@ list-envs:
 play-spot-ball-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0"
 
+# Play website Spot bench-valve joint clip
+play-spot-bench-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BenchValve-Play-v0"
+
+# Play robot-only Spot clip (PD gain eval)
+play-spot-gains:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Gains-Play-v0"
+
+# Search Spot arm/gripper PD gains on the robot-only clip
+optimize-spot-gains joints="all" num_envs="16" max_evals="80":
+    uv run python scripts/optimize_spot_gains.py --optimize \
+        --joints {{joints}} --num-envs {{num_envs}} --max-evals {{max_evals}} \
+        physics=newton_mjwarp --visualizer none
+
 # Play Spot Circuit Breaker task
 play-spot-breaker:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-CircuitBreaker-v0"

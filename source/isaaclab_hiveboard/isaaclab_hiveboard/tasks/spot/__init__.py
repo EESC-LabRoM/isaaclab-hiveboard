@@ -9,7 +9,19 @@ from .ball_valve.env import (
     SpotBallValveEnvCfg,
     SpotBallValveEnvCfg_PLAY,
 )
+from .bench_valve.env import (
+    SpotBenchValveEnvCfg,
+    SpotBenchValveEnvCfg_PLAY,
+)
+from .gains.env import (
+    SpotGainsEnvCfg,
+    SpotGainsEnvCfg_PLAY,
+)
 __all__ = [
     "SpotBallValveEnvCfg",
     "SpotBallValveEnvCfg_PLAY",
+    "SpotBenchValveEnvCfg",
+    "SpotBenchValveEnvCfg_PLAY",
+    "SpotGainsEnvCfg",
+    "SpotGainsEnvCfg_PLAY",
 ]

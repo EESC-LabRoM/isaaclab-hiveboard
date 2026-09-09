@@ -6,12 +6,14 @@
 """Isaac Lab 3 configuration for the kitless Spot ball-valve task."""
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers.recorder_manager import DatasetExportMode
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_tasks.utils import PresetCfg
 
+from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.actions import SpotIKAbsActionCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.commands import FramePoseCommandsCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.events import ValveEventCfg, ValvePlayEventCfg
@@ -59,7 +61,7 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
     sim: SimulationCfg = SimulationCfg(dt=1 / 600, render_interval=30, physics=SpotBallValvePhysicsCfg())  # type: ignore
     rewards = None
-    recorders = None
+    recorders: SpotManipulationRecorderCfg = SpotManipulationRecorderCfg()
 
     def __post_init__(self):
         # 600 Hz physics / 30 = 20 Hz command and action rate.
@@ -71,6 +73,8 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.env_index = 0
         self.viewer.eye = (-1.5, 1.5, 0.5)
         self.viewer.lookat = (0.0, 0.0, 0.0)
+        # Keep failed episodes so contact traces are available for debugging.
+        self.recorders.dataset_export_mode = DatasetExportMode.EXPORT_ALL
 
 
 @configclass

@@ -16,7 +16,7 @@ from isaaclab.managers.recorder_manager import (
     RecorderTerm,
     RecorderTermCfg,
 )
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.datasets import HDF5DatasetFileHandler
 
 
@@ -32,6 +32,13 @@ class PreStepDiffusionObservationsRecorder(RecorderTerm):
 
     def record_pre_step(self):
         return "observations", self._env.obs_buf["diffusion_policy"]
+
+
+class PreStepEvaluationObservationsRecorder(RecorderTerm):
+    """Record named evaluation observations, including contact forces."""
+
+    def record_pre_step(self):
+        return "evaluation", self._env.obs_buf["evaluation"]
 
 
 class PostStepProcessedActionsRecorder(RecorderTerm):
@@ -69,6 +76,11 @@ class PreStepDiffusionObservationsRecorderCfg(RecorderTermCfg):
     class_type: type[RecorderTerm] = PreStepDiffusionObservationsRecorder
 
 
+@configclass
+class PreStepEvaluationObservationsRecorderCfg(RecorderTermCfg):
+    class_type: type[RecorderTerm] = PreStepEvaluationObservationsRecorder
+
+
 # Compatibility aliases
 PreStepManipulationObservationsRecorder = PreStepDiffusionObservationsRecorder
 PreStepManipulationObservationsRecorderCfg = PreStepDiffusionObservationsRecorderCfg
@@ -97,6 +109,7 @@ class SpotManipulationRecorderCfg(RecorderManagerBaseCfg):
 
     record_actions = PreStepActionsRecorderCfg()
     record_observations = PreStepDiffusionObservationsRecorderCfg()
+    record_evaluation = PreStepEvaluationObservationsRecorderCfg()
     record_processed_actions = PostStepProcessedActionsRecorderCfg()
 
     dataset_file_handler_class_type: type = HDF5DatasetFileHandler

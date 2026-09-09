@@ -1656,6 +1656,7 @@ name = "isaaclab-hiveboard"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "h5py" },
     { name = "hydra-core" },
     { name = "imgui-bundle", version = "1.92.601", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-isaaclab-hiveboard-cameras'" },
     { name = "imgui-bundle", version = "1.92.900", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-isaaclab-hiveboard-curobo' or extra != 'extra-18-isaaclab-hiveboard-cameras'" },
@@ -1693,6 +1694,7 @@ data = [
 requires-dist = [
     { name = "diffusers", marker = "extra == 'data'", specifier = ">=0.36.0" },
     { name = "dill", marker = "extra == 'data'", specifier = ">=0.3.5.1" },
+    { name = "h5py", specifier = ">=3.16.0" },
     { name = "h5py", marker = "extra == 'data'" },
     { name = "hydra-core", specifier = ">=1.3,<1.4" },
     { name = "imgui-bundle", specifier = ">=1.92.601" },

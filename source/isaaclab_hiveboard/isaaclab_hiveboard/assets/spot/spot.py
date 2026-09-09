@@ -162,6 +162,15 @@ SPOT_ARM_UUC_BODY_PRIM = (
     "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/"
     "arm_link_wr0/arm_link_wr1"
 )
+SPOT_ARM_UUC_WR0_PRIM = (
+    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/arm_link_wr0"
+)
+SPOT_ARM_UUC_EL1_PRIM = (
+    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1"
+)
+SPOT_ARM_UUC_EL0_PRIM = "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0"
+SPOT_ARM_UUC_FNGR_PRIM = SPOT_ARM_UUC_BODY_PRIM + "/arm_link_fngr"
+SPOT_ARM_UUC_JAW_PRIM = SPOT_ARM_UUC_BODY_PRIM + "/arm_link_jaw"
 SPOT_ARM_UUC_SOURCE_PRIM = "Geometry/body"
 
 SPOT_ARM_NEWTON_CFG = ArticulationCfg(

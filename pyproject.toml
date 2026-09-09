@@ -24,6 +24,7 @@ dependencies = [
     # 3.0 bundles OpenUSD 26.8 and conflicts with Isaac Lab's usd-core 25.11.
     "usd-exchange==2.3.0",
     "imgui-bundle>=1.92.601",
+    "h5py>=3.16.0",
 ]
 
 [project.optional-dependencies]

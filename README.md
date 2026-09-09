@@ -52,6 +52,8 @@ curobo`, and `--extra data`.
 | Task ID | Robot | Target Object | Controller / Action |
 | --- | --- | --- | --- |
 | `Isaac-HiveBoard-Spot-BallValve-v0` | Spot + Arm | Ball (Lever) Valve | Sequential Absolute / Relative IK |
+| `Isaac-HiveBoard-Spot-BenchValve-Play-v0` | Spot + Arm | Ball (Lever) Valve | Fixed 50 Hz joint trajectory (website clip) |
+| `Isaac-HiveBoard-Spot-Gains-Play-v0` | Spot + Arm | none (robot only) | Same joint clip; PD gain eval / optimize |
 | `Isaac-HiveBoard-Spot-CircuitBreaker-v0` | Spot + Arm | Circuit Breaker | Sequential Pose IK |
 | `Isaac-HiveBoard-Spot-HighTorqueValve-v0` | Spot + Arm | Gate Valve | Multi-revolution IK |
 | `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
@@ -72,24 +74,83 @@ uv run python scripts/list_envs.py
 
 The validated task uses Newton MJWarp at 600 Hz, a 20 Hz controller, a fixed
 Spot base, committed USD assets, and a simple local floor (no warehouse or
-Nucleus assets). Run the deterministic opening demo with the Newton visualizer:
+Nucleus assets). Interactive play uses the Newton visualizer and does not
+launch Isaac Sim:
+
+```bash
+uv run --python 3.12 python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
+  --pose-debug --contact-debug \
+  physics=newton_mjwarp --visualizer newton
+```
+
+`--contact-debug` prints finger/jaw net force and valve-filtered force every
+`--pose-debug-interval` steps. HDF5 episode traces (including named
+`evaluation` contact terms) are written under `logs/recorded_datasets/`.
+
+Run without a window:
+
+```bash
+uv run --python 3.12 python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
+  physics=newton_mjwarp --visualizer none
+```
+
+`scripts/play_spot_ball_valve.py` is the pass/fail demo runner: it exits
+nonzero unless the physical valve joint reaches the sampled endpoint within
+the 15-degree success tolerance.
+
+### Website Spot valve playback
+
+`Isaac-HiveBoard-Spot-BenchValve-Play-v0` replays the HiveBoard website Spot
+clip: the same 50 Hz joint trajectory, home pose, upright board at chest
+height, and arm PD (`kp=500`, `kd=40`) as
+`dependencies/hiveboard-bench.github.io`. This is not the IK collection task.
+
+```bash
+uv run --python 3.12 python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-BenchValve-Play-v0 \
+  physics=newton_mjwarp --visualizer newton
+```
+
+Headless playback writes commanded vs measured arm joints to
+`logs/joint_tracking/<timestamp>/` (`joint_traj.csv`, error plots, RMS summary).
+The same log includes valve-filtered contact force and a hit flag for the
+finger, lower jaw, `wr1`, `wr0`, `el1`, and `el0`. Pass `--joint-log DIR` to
+choose the directory, or `--no-joint-log` to skip.
+
+### Robot-only gain baseline
+
+`Isaac-HiveBoard-Spot-Gains-Play-v0` is the same clip with no HiveBoard: ground,
+light, and Spot. Use it to tune PD without valve contact. CUDA graphs are off
+so live `kp`/`kd` writes take effect.
+
+```bash
+uv run --python 3.12 python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-Gains-Play-v0 \
+  physics=newton_mjwarp --visualizer newton --no-joint-log
+```
+
+Score the current bench gains, or search `kp`/`kd`. `--num-envs N` runs N
+copies in one physics step and scores a different gain set in each
+(`--optimize` uses a (1+λ) log-space search with λ = N):
+
+```bash
+uv run --python 3.12 python scripts/optimize_spot_gains.py \
+  --num-envs 16 physics=newton_mjwarp --visualizer none
+
+uv run --python 3.12 python scripts/optimize_spot_gains.py --optimize \
+  --joints all --num-envs 16 --max-evals 80 \
+  physics=newton_mjwarp --visualizer none
+```
+
+`--joints` can be `gripper`, `arm`, or `all`. Results go to `logs/gain_opt/`.
 
 ```bash
 uv run --python 3.12 python scripts/play_spot_ball_valve.py \
   --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
   physics=newton_mjwarp --visualizer newton
 ```
-
-Run without a window, or select the randomized task and seed:
-
-```bash
-uv run --python 3.12 python scripts/play_spot_ball_valve.py \
-  --task Isaac-HiveBoard-Spot-BallValve-v0 --seed 7 \
-  physics=newton_mjwarp --visualizer none
-```
-
-The runner exits nonzero unless the physical valve joint reaches -90 degrees
-within the 15-degree success tolerance.
 
 ### Regenerating Newton USD assets
 
@@ -126,31 +187,10 @@ just strip-obj-unused-verts
 To change the assets, edit that script — never hand-edit the generated USD —
 then re-run and commit the script.
 
-### Legacy Isaac Sim Play
-
-Play Spot ball valve with camera orbit:
-
-```bash
-uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BallValve-v0" --orbit
-```
-
 > [!WARNING]
 > Only `Isaac-HiveBoard-Spot-BallValve-v0` and its `-Play-v0` variant are
 > validated with Isaac Lab 3 and Newton. The remaining HiveBoard environments,
-> legacy player, cameras, recording, and training configurations still require
-> migration validation and may require the optional Isaac Sim dependencies.
-
-Play Franka lever valve with pose diagnostics overlay:
-
-```bash
-uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-LeverValve-v0" --pose-debug
-```
-
-Play Franka circuit breaker:
-
-```bash
-uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
-```
+> cameras, and training configurations still require migration validation.
 
 ### Collecting Demonstrations
 

@@ -29,3 +29,39 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-HiveBoard-Spot-BenchValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.bench_valve.env:SpotBenchValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-BenchValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.bench_valve.env:SpotBenchValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Gains-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.gains.env:SpotGainsEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Gains-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.gains.env:SpotGainsEnvCfg_PLAY",
+    },
+)
+

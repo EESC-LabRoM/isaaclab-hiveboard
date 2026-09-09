@@ -11,7 +11,7 @@ import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import BaseArticulation, BaseArticulationData
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
-from isaaclab.sensors import FrameTransformerData
+from isaaclab.sensors import ContactSensor, FrameTransformerData
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -154,6 +154,49 @@ def valve_goal_angle(
 valve_direction = valve_task_direction
 valve_task_current_angle = valve_current_angle
 valve_task_goal = valve_goal_angle
+
+
+def contact_net_forces_w(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Return net world-frame contact forces for a contact sensor.
+
+    Args:
+        env: Manager-based environment.
+        sensor_cfg: Scene entity for the contact sensor.
+
+    Returns:
+        Flattened net forces of shape ``(num_envs, num_bodies * 3)``.
+    """
+    sensor: ContactSensor = env.scene[sensor_cfg.name]
+    return sensor.data.net_forces_w.torch.reshape(env.num_envs, -1)
+
+
+def contact_force_matrix_w(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Return filtered world-frame contact forces for a contact sensor.
+
+    Requires ``filter_prim_paths_expr`` on the sensor so a force matrix exists.
+
+    Args:
+        env: Manager-based environment.
+        sensor_cfg: Scene entity for the contact sensor.
+
+    Returns:
+        Flattened filtered forces of shape
+        ``(num_envs, num_bodies * num_filter_bodies * 3)``.
+    """
+    sensor: ContactSensor = env.scene[sensor_cfg.name]
+    forces = sensor.data.force_matrix_w
+    if forces is None:
+        raise RuntimeError(
+            f"Contact sensor '{sensor_cfg.name}' has no force matrix. "
+            "Set filter_prim_paths_expr on the sensor configuration."
+        )
+    return forces.torch.reshape(env.num_envs, -1)
 
 
 def valve_task(
