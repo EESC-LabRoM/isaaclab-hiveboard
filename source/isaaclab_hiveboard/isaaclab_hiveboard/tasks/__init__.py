@@ -12,6 +12,15 @@ import gymnasium as gym
 ##
 
 gym.register(
+    id="validate_command_spot",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.validate_command_spot.env:ValidateCommandSpotEnvCfg",
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Spot-BallValve-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
@@ -64,4 +73,3 @@ gym.register(
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.gains.env:SpotGainsEnvCfg_PLAY",
     },
 )
-

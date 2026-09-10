@@ -119,6 +119,48 @@ The same log includes valve-filtered contact force and a hit flag for the
 finger, lower jaw, `wr1`, `wr0`, `el1`, and `el0`. Pass `--joint-log DIR` to
 choose the directory, or `--no-joint-log` to skip.
 
+### Editing the website clip
+
+`scripts/traj_edit.py` is the Newton / Isaac Lab port of the HiveBoard website
+`tools/traj_edit.py`. It loads `spot_bench_valve.json`, draws the same TCP
+beads the playback markers use, and re-solves damped-least-squares IK on this
+Spot instead of MuJoCo.
+
+```bash
+uv run python scripts/traj_edit.py physics=newton_mjwarp --visualizer none
+# or: just edit-spot-traj
+```
+
+This opens Newton's own ViewerGL (not the Isaac Lab visualizer wrapper). The
+editor is under **Example Options → Trajectory Editor** in the left panel
+(press **H** if the HUD is hidden). Pause, select a bead (cyan), nudge with
+**I/K J/L U/O** (Shift = 1 mm) or the xyz fields, then **Solve** / Enter.
+**Save** writes `q` and `keys` back to the JSON. Re-IK only a file without the
+viewer:
+
+```bash
+just retarget-spot-traj
+```
+
+### Single-position command validation
+
+`validate_command_spot` contains Spot, ground, and light. It continuously commands
+the TCP to `(0.9182, -0.0727, 0.8261)` metres relative to the environment origin,
+using the bench-valve sequential command and position IK. There is no automatic
+success termination or timeout. The wrist orientation is unconstrained.
+CUDA graph caching is disabled so the solver applies the gravity-compensation
+settings written at startup.
+
+```bash
+just validate-command-spot
+# Headless tracking check (prints TCP position error in metres):
+just validate-command-spot --headless --visualizer none --max-steps 350
+```
+
+Change `TARGET_POSITION_ENV` in
+`source/isaaclab_hiveboard/isaaclab_hiveboard/tasks/spot/validate_command_spot/env.py`
+to test another position. The target stays active after arrival.
+
 ### Robot-only gain baseline
 
 `Isaac-HiveBoard-Spot-Gains-Play-v0` is the same clip with no HiveBoard: ground,

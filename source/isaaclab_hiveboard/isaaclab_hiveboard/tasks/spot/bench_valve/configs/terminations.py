@@ -15,13 +15,13 @@ from isaaclab_hiveboard.mdp.terminations import valve_rotation_success
 
 @configclass
 class BenchValveTerminationsCfg:
-    """Episode ends on timeout or when the clip finishes with the valve at the stop."""
+    """Episode ends on timeout or when the key sequence finishes with the valve at the stop."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     success = DoneTerm(
         func=valve_rotation_success,
         params={
-            "command_name": "joint_command",
+            "command_name": "pose_command",
             "asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"]),
             "threshold_rad": math.radians(5.0),
         },

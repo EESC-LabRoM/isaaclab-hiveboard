@@ -1495,3 +1495,68 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
         env.scene.write_data_to_sim()
         env.sim.forward()
         env.scene.update(dt=0.0)
+
+
+def apply_articulation_gravcomp(
+    env: ManagerBasedEnv,
+    env_ids: Sequence[int] | torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    gravcomp: float = 1.0,
+) -> None:
+    """Set Newton ``mjc:gravcomp`` on every body of an articulation.
+
+    Isaac Lab ``modify_rigid_body_properties`` is ``@apply_nested`` and stops at
+    the first ``RigidBodyAPI`` prim (Spot's welded torso), so spawn-time
+    ``gravcomp=1`` never reaches the arm. This writes ``model.mujoco.gravcomp``
+    for all robot links and notifies MJWarp.
+    """
+    del env_ids
+    try:
+        from isaaclab_newton.physics import NewtonManager as SimulationManager
+        from newton.solvers import SolverNotifyFlags
+    except ImportError:
+        print("[WARN] apply_articulation_gravcomp: Newton manager not available.")
+        return
+
+    import warp as wp
+
+    asset = env.scene[asset_cfg.name]
+    model = SimulationManager.get_model()
+    mujoco = getattr(model, "mujoco", None)
+    gc = None if mujoco is None else getattr(mujoco, "gravcomp", None)
+    if gc is None:
+        print("[WARN] apply_articulation_gravcomp: model.mujoco.gravcomp is missing.")
+        return
+
+    labels = [str(label) for label in getattr(model, "body_label", [])]
+    if not labels:
+        print("[WARN] apply_articulation_gravcomp: model.body_label is empty.")
+        return
+    view_labels = {str(label) for label in getattr(asset.root_view, "link_labels", [])}
+    name_set = {str(name) for name in asset.body_names}
+    values = gc.numpy().copy()
+    matched: list[tuple[int, str, float]] = []
+    for index, label in enumerate(labels):
+        leaf = label.rsplit("/", 1)[-1]
+        if label not in view_labels and leaf not in name_set:
+            continue
+        matched.append((index, label, float(values[index])))
+        values[index] = float(gravcomp)
+    if not matched:
+        print(
+            "[WARN] apply_articulation_gravcomp: no bodies matched "
+            f"{asset_cfg.name} names={sorted(name_set)} "
+            f"model_bodies={labels[:24]}",
+            flush=True,
+        )
+        return
+    wp.copy(gc, wp.array(values.astype(np.float32), dtype=wp.float32, device=gc.device))
+    SimulationManager.add_model_change(SolverNotifyFlags.BODY_INERTIAL_PROPERTIES)
+    solver = getattr(SimulationManager, "_solver", None)
+    if solver is not None:
+        with wp.ScopedDevice(gc.device):
+            solver.notify_model_changed(SolverNotifyFlags.BODY_INERTIAL_PROPERTIES)
+    preview = ", ".join(f"{label}={old:.2f}->{gravcomp:g}" for _, label, old in matched[:16])
+    if len(matched) > 16:
+        preview += f", … ({len(matched)} bodies)"
+    print(f"[INFO] gravcomp={gravcomp:g} on {len(matched)} {asset_cfg.name} bodies [{preview}]", flush=True)

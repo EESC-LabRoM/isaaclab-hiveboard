@@ -3,6 +3,10 @@
 default:
     @just --list
 
+# Hold a known TCP position with only Spot in the scene
+validate-command-spot *args:
+    uv run python scripts/play.py --task validate_command_spot --pose-debug {{args}}
+
 # List all available registered HiveBoard environments
 list-envs:
     uv run python scripts/list_envs.py
@@ -18,6 +22,14 @@ play-spot-bench-valve:
 # Play robot-only Spot clip (PD gain eval)
 play-spot-gains:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Gains-Play-v0"
+
+# Rebuild bench Spot q from traj_edit beads using this robot's Jacobian IK
+retarget-spot-traj *args:
+    uv run python scripts/retarget_spot_traj.py {{args}} physics=newton_mjwarp --visualizer none
+
+# Edit bench Spot beads in Newton ViewerGL and re-solve Isaac Lab IK
+edit-spot-traj *args:
+    uv run python scripts/traj_edit.py {{args}} physics=newton_mjwarp --visualizer none
 
 # Search Spot arm/gripper PD gains on the robot-only clip
 optimize-spot-gains joints="all" num_envs="16" max_evals="80":

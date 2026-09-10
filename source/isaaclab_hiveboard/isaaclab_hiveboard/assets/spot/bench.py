@@ -47,7 +47,7 @@ ARM_DAMPING: tuple[float, ...] = (
 )
 
 # Website home: arm ``[0, -1.9, 2.0, 0, -0.6, 0]``, gripper ``-1.5``.
-# Body is welded at z=0.462321 with ``gravcomp=1``.
+# Body is welded at z=0.462321. Every Spot body has MuJoCo ``gravcomp=1``.
 BODY_POS: tuple[float, float, float] = (0.0, 0.0, 0.462321)
 HOME_ARM: tuple[float, ...] = (0.0, -1.9, 2.0, 0.0, -0.6, 0.0)
 HOME_GRIP = -1.5
@@ -76,6 +76,12 @@ STAND_FOOT_POS: tuple[float, float, float] = (1.11, 0.0, 0.01)
 STAND_FOOT_SIZE: tuple[float, float, float] = (0.34, 0.34, 0.02)
 
 TRAJECTORY_JSON = Path(__file__).with_name("trajectories") / "spot_bench_valve.json"
+# Website ``<site name="tcp">`` on ``arm_link_wr1`` (``spot.xml``). Key beads use this frame.
+TCP_SITE_POS: tuple[float, float, float] = (0.198984, 0.000566814, -0.037663)
+# MuJoCo wxyz ``(0.448024, 0.546678, 0.542338, 0.454189)`` as Isaac Lab xyzw.
+TCP_SITE_QUAT_XYZW: tuple[float, float, float, float] = (0.546678, 0.542338, 0.454189, 0.448024)
+# Upright board face: modules stick out −X, so approach into the board is +X.
+BOARD_INTO: tuple[float, float, float] = (1.0, 0.0, 0.0)
 
 BENCH_JOINT_POS: dict[str, float] = {
     "arm_sh0": HOME_ARM[0],
@@ -133,6 +139,8 @@ SPOT_ARM_BENCH_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=SPOT_ARM_UUC_USD,
         activate_contact_sensors=True,
+        # PhysX: disable_gravity on the root (nested-stop). Newton: per-body
+        # mjc:gravcomp is applied at startup on every robot link.
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             retain_accelerations=False,

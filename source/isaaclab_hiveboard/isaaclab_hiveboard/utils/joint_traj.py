@@ -105,6 +105,13 @@ class JointTrajDumper:
         np.savez_compressed(os.path.join(self._out_dir, "joint_traj.npz"), **arrays)
 
         summary = self._summary(arrays)
+        key_errors = self._key_errors()
+        if key_errors:
+            summary["key_errors"] = key_errors
+            key_path = os.path.join(self._out_dir, "key_errors.json")
+            with open(key_path, "w") as handle:
+                json.dump(key_errors, handle, indent=2)
+            print(f"[INFO] Keyframe TCP errors: {key_path}")
         with open(os.path.join(self._out_dir, "joint_traj_summary.json"), "w") as handle:
             json.dump(summary, handle, indent=2)
 
@@ -160,6 +167,15 @@ class JointTrajDumper:
             "joints": joints,
             "contacts": contacts,
         }
+
+    def _key_errors(self) -> list[dict[str, Any]]:
+        if "joint_command" not in self._env.command_manager.active_terms:
+            return []
+        term = self._env.command_manager.get_term("joint_command")
+        report = getattr(term, "key_error_report", None)
+        if report is None:
+            return []
+        return report(self._i)
 
 
 def _plot_joint_traj(

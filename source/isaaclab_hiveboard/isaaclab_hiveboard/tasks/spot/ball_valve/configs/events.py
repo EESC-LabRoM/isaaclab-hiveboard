@@ -8,6 +8,7 @@ from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 from isaaclab_hiveboard.assets import BALL_VALVE_URDF
 from isaaclab_hiveboard.mdp.events import (
     RandomizeValveHandlePoseEvent,
+    apply_articulation_gravcomp,
 )
 
 PI = 355 / 113
@@ -16,6 +17,12 @@ PI = 355 / 113
 @configclass
 class ValveEventCfg:
     """Configuration for events."""
+
+    robot_gravcomp = EventTerm(
+        func=apply_articulation_gravcomp,
+        mode="startup",
+        params={"asset_cfg": SceneEntityCfg("robot"), "gravcomp": 1.0},
+    )
 
     robot_physics_material = EventTerm(
         func=mdp.randomize_rigid_body_material,
@@ -105,7 +112,7 @@ class ValveEventCfg:
             "max_yaw": PI / 5,
             # Keep starts at least 0.35 rad from either endpoint so both open
             # and close tasks remain feasible. Each state has a matching IK pose.
-            "valve_joint_range": (-torch.pi, -torch.pi),
+            "valve_joint_range": (-torch.pi / 2 + 0.35, -0.35),
         },
     )
 

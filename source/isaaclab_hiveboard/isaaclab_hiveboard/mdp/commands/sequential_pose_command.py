@@ -593,10 +593,11 @@ class _GoToFrameHandler(_BaseCmdHandler):
                 "GoToFrameCfg.orientation_threshold_deg must be non-negative"
             )
 
-        self._frame = command_term._env.scene[cfg.frame_name]
-        self._frame_idx = self._frame.data.target_frame_names.index(
-            cfg.target_frame_name
-        )
+        if cfg.target_position_env is None:
+            self._frame = command_term._env.scene[cfg.frame_name]
+            self._frame_idx = self._frame.data.target_frame_names.index(
+                cfg.target_frame_name
+            )
         self.command_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.command_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.command_quat_b[:, 3] = 1.0
@@ -637,6 +638,24 @@ class _GoToFrameHandler(_BaseCmdHandler):
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         # Target pose in base frame
+        if self.cfg.target_position_env is not None:
+            target_pos_w = self._command_term._env.scene.env_origins[env_ids] + torch.tensor(
+                self.cfg.target_position_env, device=self._device
+            )
+            target_quat_w = None
+            if self.cfg.target_orientation_env is not None:
+                target_quat_w = torch.tensor(
+                    self.cfg.target_orientation_env, device=self._device
+                ).expand(len(env_ids), -1)
+            target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+                self._asset.data.root_pos_w.torch[env_ids],
+                self._asset.data.root_quat_w.torch[env_ids],
+                target_pos_w,
+                target_quat_w,
+            )
+            return target_pos_b, (
+                self._held_quat_b[env_ids] if target_quat_w is None else target_quat_b
+            )
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
         target_quat_w = self._frame.data.target_quat_w.torch[
             env_ids, self._frame_idx
@@ -884,8 +903,8 @@ class _GripperHandler(_BaseCmdHandler):
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return (
-            self._asset.data.root_pos_w.torch[env_ids],
-            self._asset.data.root_quat_w.torch[env_ids],
+            self._command_term.command[env_ids, 1:4],
+            self._command_term.command[env_ids, 4:8],
         )
 
 
@@ -1497,6 +1516,17 @@ class GoToFrameCfg(BaseCmd):
     """Name of the frame used for pose commands."""
     target_frame_name: str = MISSING  # type: ignore
     """Index of the frame used for pose commands."""
+    target_position_env: tuple[float, float, float] | None = None
+    """Optional fixed position relative to the environment origin.
+
+    When set, bypass the frame sensor and retain the orientation at reset.
+    Set both frame names to empty strings for this mode.
+    """
+    target_orientation_env: tuple[float, float, float, float] | None = None
+    """Fixed target quaternion (xyzw), used with target_position_env.
+
+    None retains the orientation at reset. Environment axes match world axes.
+    """
     gripper_open: bool = False
     """Status of the gripper during the command."""
     velocity: float = 0.2

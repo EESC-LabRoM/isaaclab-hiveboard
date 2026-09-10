@@ -41,6 +41,8 @@ class SpotBallValvePhysicsCfg(PresetCfg):
         ),
         num_substeps=2,
         debug_mode=False,
+        # Startup gravity-compensation changes must be evaluated by the solver.
+        use_cuda_graph=False,
     )
     default = newton_mjwarp
     physx = PhysxCfg(

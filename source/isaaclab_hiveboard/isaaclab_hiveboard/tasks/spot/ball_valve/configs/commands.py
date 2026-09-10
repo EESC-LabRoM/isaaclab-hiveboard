@@ -41,17 +41,18 @@ class FramePoseCommandsCfg:
                 target_frame_name="lever_pivot",
                 velocity=0.15,
             ),
-            # GripperCommand(open_gripper=False, duration_s=0.3),
+            GripperCommand(open_gripper=False, duration_s=0.3),
             RotateFrameCfg(
                 frame_name="target_frame",
                 target_frame_name="rotate_frame",
                 # Fallback only; the command term uses the remaining valve error.
                 angle_deg=-90,
                 angular_velocity=0.3,
-                gripper_open=True,
+                angle_threshold_deg=0.25,
+                gripper_open=False,
             ),
             # Hold the finished pose so the end state reads on video.
-            GripperCommand(open_gripper=False, duration_s=0.075),
+            GripperCommand(open_gripper=False, duration_s=0.5),
         ],
         body_offset=as_command_offset(SPOT_EE),
     )

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Isaac Lab 3 env that replays the HiveBoard website Spot valve clip."""
+"""Isaac Lab 3 env that follows the Spot valve TCP keys."""
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers.recorder_manager import DatasetExportMode
@@ -13,9 +13,9 @@ from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_tasks.utils import PresetCfg
 
-from isaaclab_hiveboard.assets.spot.bench import DECIMATION, PHYSICS_DT, TRAJ_RATE_HZ
+from isaaclab_hiveboard.assets.spot.bench import DECIMATION, PHYSICS_DT
 from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
-from isaaclab_hiveboard.tasks.spot.bench_valve.configs.actions import SpotBenchJointActionCfg
+from isaaclab_hiveboard.tasks.spot.bench_valve.configs.actions import SpotBenchPositionActionCfg
 from isaaclab_hiveboard.tasks.spot.bench_valve.configs.commands import BenchValveCommandsCfg
 from isaaclab_hiveboard.tasks.spot.bench_valve.configs.events import BenchValveEventCfg
 from isaaclab_hiveboard.tasks.spot.bench_valve.configs.observations import ObservationsCfg
@@ -42,6 +42,8 @@ class SpotBenchValvePhysicsCfg(PresetCfg):
         ),
         num_substeps=1,
         debug_mode=False,
+        # Apply startup gravity compensation without replaying a stale CUDA graph.
+        use_cuda_graph=False,
     )
     default = newton_mjwarp
     physx = PhysxCfg(
@@ -52,11 +54,11 @@ class SpotBenchValvePhysicsCfg(PresetCfg):
 
 @configclass
 class SpotBenchValveEnvCfg(ManagerBasedRLEnvCfg):
-    """Fixed-trajectory Spot valve playback matching the website demo."""
+    """Sequential Cartesian Spot valve key following."""
 
     scene: BenchValveSceneCfg = BenchValveSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
-    actions: SpotBenchJointActionCfg = SpotBenchJointActionCfg()  # type: ignore
+    actions: SpotBenchPositionActionCfg = SpotBenchPositionActionCfg()  # type: ignore
     terminations: BenchValveTerminationsCfg = BenchValveTerminationsCfg()  # type: ignore
     events: BenchValveEventCfg = BenchValveEventCfg()  # type: ignore
     commands: BenchValveCommandsCfg = BenchValveCommandsCfg()  # type: ignore
@@ -71,8 +73,8 @@ class SpotBenchValveEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         # 500 Hz physics / 10 = 50 Hz, matching the website clip.
         self.decimation = DECIMATION
-        # 636 samples at 50 Hz = 12.72 s, plus a beat on the stop.
-        self.episode_length_s = 636 / TRAJ_RATE_HZ + 0.28
+        # Allow feedback-driven moves and the authored gripper holds to finish.
+        self.episode_length_s = 30.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"

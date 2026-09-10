@@ -118,8 +118,7 @@ def _print_pose(base, step: int, env_index: int) -> None:
         joint_pos = _as_torch(valve.data.joint_pos)[debug_env].detach().cpu().tolist()
         command = _as_torch(base.command_manager.get_term("joint_command").command)[debug_env]
         print(
-            f"[POSE] step={step} valve_joint={joint_pos} "
-            f"joint_cmd={command.detach().cpu().tolist()}",
+            f"[POSE] step={step} valve_joint={joint_pos} joint_cmd={command.detach().cpu().tolist()}",
             flush=True,
         )
         return
@@ -244,6 +243,9 @@ def main() -> int:
             env_cfg.scene.target_frame.debug_vis = True
         if hasattr(env_cfg.scene, "ee_frame"):
             env_cfg.scene.ee_frame.debug_vis = True
+        joint_command = getattr(getattr(env_cfg, "commands", None), "joint_command", None)
+        if joint_command is not None and hasattr(joint_command, "debug_vis"):
+            joint_command.debug_vis = True
 
     if args.contact_debug:
         missing = [name for name in CONTACT_SENSOR_NAMES if not hasattr(env_cfg.scene, name)]
@@ -255,8 +257,7 @@ def main() -> int:
             from isaaclab_visualizers.newton import NewtonVisualizerCfg
         except ImportError as err:
             raise SystemExit(
-                "--collision-only needs the Newton visualizer backend "
-                "(pip install isaaclab_visualizers[newton])."
+                "--collision-only needs the Newton visualizer backend (pip install isaaclab_visualizers[newton])."
             ) from err
         env_cfg.sim.visualizer_cfgs = [NewtonVisualizerCfg(show_collision=True)]
 
@@ -265,25 +266,19 @@ def main() -> int:
     if getattr(env_cfg, "recorders", None) is not None:
         src = env_cfg.recorders
         rec = SpotManipulationRecorderCfg()
-        rec.dataset_export_dir_path = getattr(
-            src, "dataset_export_dir_path", rec.dataset_export_dir_path
-        )
+        rec.dataset_export_dir_path = getattr(src, "dataset_export_dir_path", rec.dataset_export_dir_path)
         rec.dataset_filename = getattr(src, "dataset_filename", rec.dataset_filename)
         rec.dataset_export_mode = DatasetExportMode.EXPORT_ALL
         rec.export_in_close = True
         env_cfg.recorders = rec
-        print(
-            "[INFO] Recording episodes to "
-            f"{rec.dataset_export_dir_path}/{rec.dataset_filename}.hdf5"
-        )
+        print(f"[INFO] Recording episodes to {rec.dataset_export_dir_path}/{rec.dataset_filename}.hdf5")
 
     with launch_simulation(env_cfg, args):
         env = gym.make(args.task, cfg=env_cfg)
         base = env.unwrapped
         if args.collision_only and not _apply_collision_only(base):
             print(
-                "[WARN] --collision-only: no Newton viewer active "
-                "(use --visualizer newton, not none).",
+                "[WARN] --collision-only: no Newton viewer active (use --visualizer newton, not none).",
                 file=sys.stderr,
             )
 
@@ -328,11 +323,7 @@ def main() -> int:
                 if not _all_finite(obs):
                     raise FloatingPointError(f"Non-finite observation at step {count}")
 
-                if (
-                    isinstance(obs, dict)
-                    and isinstance(obs.get("policy"), dict)
-                    and "command" in obs["policy"]
-                ):
+                if isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
                     action = _route_command(base, obs["policy"]["command"])
                 else:
                     action = torch.zeros(env.action_space.shape, device=base.device)
@@ -345,9 +336,7 @@ def main() -> int:
                 if joint_log is not None:
                     joint_log.sample(count, action)
 
-                log_now = (args.pose_debug or args.contact_debug) and (
-                    count % max(args.pose_debug_interval, 1) == 0
-                )
+                log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
                 if log_now and args.contact_debug:
                     _print_contact(base, count, args.pose_debug_env)
                 if log_now and args.pose_debug:
@@ -361,6 +350,10 @@ def main() -> int:
                         continue
                     break
         finally:
+            if "joint_command" in base.command_manager.active_terms:
+                joint_term = base.command_manager.get_term("joint_command")
+                if hasattr(joint_term, "print_key_errors"):
+                    joint_term.print_key_errors(args.pose_debug_env)
             if joint_log is not None and joint_log._rows:
                 joint_log.save()
             env.close()

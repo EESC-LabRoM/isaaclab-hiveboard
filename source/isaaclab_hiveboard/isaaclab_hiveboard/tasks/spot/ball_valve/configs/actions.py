@@ -4,6 +4,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.stack import mdp
 
 from isaaclab_hiveboard.assets import SPOT_EE, as_ik_offset
+from isaaclab_hiveboard.mdp.pose_actions import OffsetDifferentialIKAction
 
 
 @configclass
@@ -11,6 +12,7 @@ class SpotIKAbsActionCfg:
     """Action specifications for the MDP."""
 
     arm_action = DifferentialInverseKinematicsActionCfg(
+        class_type=OffsetDifferentialIKAction,
         asset_name="robot",
         joint_names=[
             "arm_sh0",
@@ -41,6 +43,7 @@ class SpotIKRelativeActionCfg:
     """Relative TCP-pose actions for fixed-base Spot manipulation."""
 
     arm_action = DifferentialInverseKinematicsActionCfg(
+        class_type=OffsetDifferentialIKAction,
         asset_name="robot",
         joint_names=[
             "arm_sh0",
