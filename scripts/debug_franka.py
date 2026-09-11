@@ -302,8 +302,12 @@ def main() -> None:
 
     breaker = None
     breaker_j = None
+    is_lever_valve = "ball_valve" in base.scene.keys()
     if "circuit_breaker" in base.scene.keys():
         breaker = base.scene["circuit_breaker"]
+    elif "ball_valve" in base.scene.keys():
+        breaker = base.scene["ball_valve"]
+    if breaker is not None:
         jids, _ = breaker.find_joints("RevoluteJoint")
         if jids:
             breaker_j = jids[0]
@@ -317,6 +321,7 @@ def main() -> None:
     os.makedirs(out_dir, exist_ok=True)
 
     rows: list[dict] = []
+    term = trunc = False
     obs, _ = env.reset()
     env_i = 0
     prev_q = robot.data.joint_pos[env_i, arm_ids].clone()
@@ -571,10 +576,17 @@ def main() -> None:
         ),
         "no_nan": bool(np.isfinite(pos).all() and np.isfinite(ori).all()),
     }
+    if is_lever_valve:
+        checks["sequence_completed"] = bool(term and not trunc)
+        checks["valve_at_minus_90_deg"] = bool(
+            abs(rows[active[-1]]["lever_rad"] + math.pi / 2) < math.radians(5.0)
+        )
     summary = {
         "task": args_cli.task,
         "position_only": bool(args_cli.position_only),
         "n_steps": len(rows),
+        "terminated": bool(term),
+        "truncated": bool(trunc),
         "last_command": rows[-1]["command_name"],
         "last_command_idx": rows[-1]["command_idx"],
         "max_root_drift_m": float(drift.max()),
@@ -670,5 +682,12 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except Exception:
+        # Report planning failures before Kit shutdown, which can otherwise
+        # delay the traceback indefinitely while releasing GPU resources.
+        import traceback
+
+        traceback.print_exc()
+        raise
     finally:
         simulation_app.close()
