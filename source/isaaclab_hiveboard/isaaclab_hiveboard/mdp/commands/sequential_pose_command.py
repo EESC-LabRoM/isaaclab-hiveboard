@@ -872,9 +872,11 @@ class _GripperHandler(_BaseCmdHandler):
         return self._elapsed_s[env_ids] >= self.cfg.duration_s
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
+        # Gripper-only phases hold the last commanded TCP pose. Reporting the
+        # robot root here creates a false pose error in --pose-debug.
         return (
-            self._asset.data.root_pos_w[env_ids],
-            self._asset.data.root_quat_w[env_ids],
+            self._command_term.command[env_ids, 1:4],
+            self._command_term.command[env_ids, 4:8],
         )
 
 

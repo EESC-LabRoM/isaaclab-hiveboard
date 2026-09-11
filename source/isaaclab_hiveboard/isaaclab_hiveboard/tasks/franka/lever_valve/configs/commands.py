@@ -43,12 +43,20 @@ class FramePoseCommandsCfg:
                 robot_joint_names=[f"fr3_joint{i}" for i in range(1, 8)],
                 num_ik_seeds=16,
             ),
+            # Release while holding the final TCP pose before withdrawing.
+            GripperCommand(
+                open_gripper=True,
+                duration_s=0.4,
+            ),
+            # Unwind the wrist after releasing: holding the rolled grasp
+            # orientation during withdrawal drives joints 6/7 into their limits.
             GoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.03,
                 canonicalize_upward=False,
-                target_frame_name="approaching",
+                target_frame_name="retreat",
+                velocity=0.1,
             ),
         ],
         body_offset=as_command_offset(FRANKA_EE),

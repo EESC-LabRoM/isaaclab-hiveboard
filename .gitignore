@@ -66,6 +66,9 @@ _build
 
 # Tests
 tests/
+!/tests/
+/tests/*
+!/tests/test_franka_lever_valve_ik.py
 
 # Docker history
 .isaac-lab-docker-history

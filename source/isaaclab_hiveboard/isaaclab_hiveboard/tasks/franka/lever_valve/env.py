@@ -8,14 +8,11 @@ import math
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
 
-from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.actions import (
-    FrankaIKAbsActionCfg,
-)
 from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.observations import (
     ObservationsCfg,
 )
-from isaaclab_hiveboard.tasks.franka.lever_valve.configs.terminations import (
-    TerminationsCfg,
+from isaaclab_hiveboard.tasks.franka.lever_valve.configs.actions import (
+    FrankaLeverValveActionsCfg,
 )
 from isaaclab_hiveboard.tasks.franka.lever_valve.configs.commands import (
     FramePoseCommandsCfg,
@@ -26,6 +23,9 @@ from isaaclab_hiveboard.tasks.franka.lever_valve.configs.events import (
 from isaaclab_hiveboard.tasks.franka.lever_valve.configs.scene import (
     FrankaLeverValveSceneCfg,
 )
+from isaaclab_hiveboard.tasks.franka.lever_valve.configs.terminations import (
+    TerminationsCfg,
+)
 
 
 @configclass
@@ -34,7 +34,7 @@ class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: FrankaLeverValveSceneCfg = FrankaLeverValveSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
-    actions: FrankaIKAbsActionCfg = FrankaIKAbsActionCfg()  # type: ignore
+    actions: FrankaLeverValveActionsCfg = FrankaLeverValveActionsCfg()  # type: ignore
     terminations: TerminationsCfg = TerminationsCfg()  # type: ignore
     events: FrankaLeverValveEventCfg = FrankaLeverValveEventCfg()  # type: ignore
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
@@ -70,7 +70,7 @@ class FrankaLeverValveEnvCfg(ManagerBasedRLEnvCfg):
             )
 
         self.decimation = 5
-        # 11 s = 440 environment steps. The scripted sequence needs 365 steps.
+        # Allow the approach, quarter-turn, release pause, and wrist-unwinding retreat.
         self.episode_length_s = 11.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"

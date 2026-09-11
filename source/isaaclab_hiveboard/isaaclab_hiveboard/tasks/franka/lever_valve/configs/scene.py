@@ -1,5 +1,6 @@
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sensors import FrameTransformerCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 
 from isaaclab_hiveboard.assets import (
@@ -47,3 +48,13 @@ class FrankaLeverValveSceneCfg(LeverValveSceneBase):
         self.warehouse.init_state.pos = FRANKA_WORKSPACE.warehouse_pos
         self.ball_valve.init_state.pos = FRANKA_WORKSPACE.object_pos
         self.ball_valve.init_state.rot = FRANKA_WORKSPACE.object_rot
+        # A fixed retreat pose above the lowered handle. Its orientation is
+        # the pre-grasp orientation, allowing the wrist to unwind after release.
+        # Attaching it to the housing prevents lever motion from moving the goal.
+        self.target_frame.target_frames.append(
+            FrameTransformerCfg.FrameCfg(
+                prim_path="{ENV_REGEX_NS}/Valve/valvula_esfera",
+                name="retreat",
+                offset=OffsetCfg(pos=(0.12, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)),
+            )
+        )
