@@ -42,7 +42,8 @@ class FrankaCircuitBreakerSceneCfg(CircuitBreakerSceneBase):
         self.circuit_breaker.init_state.rot = FRANKA_WORKSPACE.object_rot
         # Start DOWN so below → above actually drives the paddle up.
         self.circuit_breaker.init_state.joint_pos["RevoluteJoint"] = 0.0
-        # Keep the canonical target-frame offsets and orientation from the
-        # shared scene.  Its identity rotation makes +X point toward the
-        # circuit-breaker panel, matching Spot and preserving identical
-        # scenario goal poses for every robot.
+        # Move the Franka interaction stroke closer to the paddle. The shared
+        # targets are tuned for Spot and leave the Franka fingers in front of it.
+        for target_frame in self.target_frame.target_frames:
+            if target_frame.name in ("lever_pivot_below", "lever_pivot_above"):
+                target_frame.offset.pos = (0.03, target_frame.offset.pos[1], target_frame.offset.pos[2])
