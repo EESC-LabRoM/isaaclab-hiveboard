@@ -219,8 +219,13 @@ def _probe_curobo_plan(base, cmd_term, arm_names, env_i: int) -> None:
                 base.scene["robot"].data.joint_pos[env_i, :7].unsqueeze(0),
                 joint_names=arm_names,
             )
+            # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
             goal = GoalToolPose.from_poses(
-                {planner.tool_frames[0]: Pose(position=flange_pos, quaternion=flange_quat)},
+                {
+                    planner.tool_frames[0]: Pose(
+                        position=flange_pos, quaternion=flange_quat[:, [3, 0, 1, 2]]
+                    )
+                },
                 ordered_tool_frames=planner.tool_frames,
                 num_goalset=1,
             )

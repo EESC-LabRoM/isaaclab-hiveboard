@@ -24,9 +24,12 @@ from isaaclab_hiveboard.assets.spot.spot import SPOT_ARM_UUC_USD
 # Website ``<option timestep="0.002"/>`` and trajectory sample rate.
 PHYSICS_DT = 1.0 / 500.0
 TRAJ_RATE_HZ = 50
-DECIMATION = 10
+DECIMATION_HZ = 50
+DECIMATION = max(1, round((1.0 / DECIMATION_HZ) / PHYSICS_DT))
 
-# Per-joint explicit IdealPD (4x hardware-style kp/kd). Effort/armature match the URDF.
+# Per-joint explicit IdealPD (4x hardware-style kp/kd, except the gripper).
+# Gripper is a tuned open/close baseline (was 16.0 * 4 / 0.32 * 4, which rang
+# ~7 Hz on binary steps); see logs/gain_opt/2026-09-11_22-34-45. Effort/armature match the URDF.
 ARM_STIFFNESS: tuple[float, ...] = (
     120.0 * 4,
     120.0 * 4,
@@ -34,7 +37,7 @@ ARM_STIFFNESS: tuple[float, ...] = (
     100.0 * 4,
     100.0 * 4,
     100.0 * 4,
-    16.0 * 4,
+    30.5,
 )
 ARM_DAMPING: tuple[float, ...] = (
     2.0 * 4,
@@ -43,7 +46,7 @@ ARM_DAMPING: tuple[float, ...] = (
     2.0 * 4,
     2.0 * 4,
     2.0 * 4,
-    0.32 * 4,
+    0.35,
 )
 
 # Website home: arm ``[0, -1.9, 2.0, 0, -0.6, 0]``, gripper ``-1.5``.
@@ -76,6 +79,8 @@ STAND_FOOT_POS: tuple[float, float, float] = (1.11, 0.0, 0.01)
 STAND_FOOT_SIZE: tuple[float, float, float] = (0.34, 0.34, 0.02)
 
 TRAJECTORY_JSON = Path(__file__).with_name("trajectories") / "spot_bench_valve.json"
+# Gains validation clip: same arm motion, gripper snapped to open/close only.
+GAINS_TRAJECTORY_JSON = Path(__file__).with_name("trajectories") / "spot_bench_gains.json"
 # Website ``<site name="tcp">`` on ``arm_link_wr1`` (``spot.xml``). Key beads use this frame.
 TCP_SITE_POS: tuple[float, float, float] = (0.198984, 0.000566814, -0.037663)
 # MuJoCo wxyz ``(0.448024, 0.546678, 0.542338, 0.454189)`` as Isaac Lab xyzw.
@@ -151,7 +156,7 @@ SPOT_ARM_BENCH_CFG = ArticulationCfg(
             max_depenetration_velocity=1.0,
         ),
         # USD already has a root FixedJoint; do not set fix_root_link (PhysX-only writer).
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(enabled_self_collisions=True),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(enabled_self_collisions=False),
         semantic_tags=[("class", "robot")],
     ),
     init_state=ArticulationCfg.InitialStateCfg(

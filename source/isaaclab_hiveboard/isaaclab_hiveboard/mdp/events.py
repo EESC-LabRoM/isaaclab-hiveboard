@@ -807,9 +807,10 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             retract_state = ik_solver.compute_kinematics(ik_solver.default_joint_state)
             retract_pose = retract_state.tool_poses.get_link_pose(target_link)
             # Keep the retract wrist orientation and apply the sampled
-            # world-frame roll, pitch, and yaw perturbation.
+            # world-frame roll, pitch, and yaw perturbation. cuRobo
+            # quaternions are (w, x, y, z); math_utils is (x, y, z, w).
             goal_position = retract_pose.position[0] + position_grid_offset
-            retract_quat = retract_pose.quaternion[0].expand_as(orientation_quat)
+            retract_quat = retract_pose.quaternion[0][[1, 2, 3, 0]].expand_as(orientation_quat)
             goal_quaternion = math_utils.quat_mul(orientation_quat, retract_quat)
 
             joint_chunks: list[torch.Tensor] = []
@@ -818,7 +819,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
                 end = min(start + chunk_size, n_poses)
                 goal_poses = Pose(
                     position=goal_position[start:end],
-                    quaternion=goal_quaternion[start:end],
+                    quaternion=goal_quaternion[start:end][:, [3, 0, 1, 2]],
                 )
                 result = ik_solver.solve_pose(
                     GoalToolPose.from_poses(

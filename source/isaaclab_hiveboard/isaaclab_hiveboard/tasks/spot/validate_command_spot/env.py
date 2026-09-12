@@ -42,15 +42,17 @@ class CommandsCfg:
         body_offset=SequentialPoseCommandCfg.OffsetCfg(pos=TCP_SITE_POS),
         resampling_time_range=(1e9, 1e9),
         debug_vis=True,
-        commands=[GoToFrameCfg(
-            class_type=_HoldPositionHandler,
-            frame_name="",
-            target_frame_name="",
-            target_position_env=TARGET_POSITION_ENV,
-            gripper_open=True,
-            velocity=0.15,
-            canonicalize_upward=False,
-        )],
+        commands=[
+            GoToFrameCfg(
+                class_type=_HoldPositionHandler,
+                frame_name="",
+                target_frame_name="",
+                target_position_env=TARGET_POSITION_ENV,
+                gripper_open=True,
+                velocity=0.15,
+                canonicalize_upward=False,
+            )
+        ],
     )
 
 
@@ -58,9 +60,7 @@ class CommandsCfg:
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObservationGroupCfg):
-        command = ObservationTermCfg(
-            func=mdp.generated_commands, params={"command_name": "pose_command"}
-        )
+        command = ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "pose_command"})
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -79,9 +79,16 @@ class ValidationPhysicsCfg(PresetCfg):
     # Startup gravity-compensation changes must be evaluated by the solver.
     newton_mjwarp = NewtonCfg(
         solver_cfg=MJWarpSolverCfg(
-            solver="newton", integrator="implicitfast", cone="elliptic",
-            njmax=600, nconmax=400, iterations=100, ls_iterations=20,
-            impratio=10.0, ccd_iterations=50, use_mujoco_contacts=False,
+            solver="newton",
+            integrator="implicitfast",
+            cone="elliptic",
+            njmax=600,
+            nconmax=400,
+            iterations=100,
+            ls_iterations=20,
+            impratio=10.0,
+            ccd_iterations=50,
+            use_mujoco_contacts=False,
         ),
         num_substeps=1,
         use_cuda_graph=False,

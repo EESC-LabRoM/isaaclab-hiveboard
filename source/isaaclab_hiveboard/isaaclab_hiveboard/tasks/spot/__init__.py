@@ -13,6 +13,10 @@ from .bench_valve.env import (
     SpotBenchValveEnvCfg,
     SpotBenchValveEnvCfg_PLAY,
 )
+from .curobo_valve.env import (
+    SpotCuroboValveEnvCfg,
+    SpotCuroboValveEnvCfg_PLAY,
+)
 from .gains.env import (
     SpotGainsEnvCfg,
     SpotGainsEnvCfg_PLAY,
@@ -22,6 +26,8 @@ __all__ = [
     "SpotBallValveEnvCfg_PLAY",
     "SpotBenchValveEnvCfg",
     "SpotBenchValveEnvCfg_PLAY",
+    "SpotCuroboValveEnvCfg",
+    "SpotCuroboValveEnvCfg_PLAY",
     "SpotGainsEnvCfg",
     "SpotGainsEnvCfg_PLAY",
 ]

@@ -13,8 +13,8 @@ from isaaclab_physx.physics import PhysxCfg
 from isaaclab_tasks.utils import PresetCfg
 
 from isaaclab_hiveboard.assets.spot.bench import DECIMATION, PHYSICS_DT, TRAJ_RATE_HZ
-from isaaclab_hiveboard.tasks.spot.bench_valve.configs.actions import SpotBenchJointActionCfg
-from isaaclab_hiveboard.tasks.spot.bench_valve.configs.commands import BenchValveCommandsCfg
+from isaaclab_hiveboard.tasks.spot.gains.configs.actions import SpotGainsActionCfg
+from isaaclab_hiveboard.tasks.spot.gains.configs.commands import SpotGainsCommandsCfg
 from isaaclab_hiveboard.tasks.spot.bench_valve.configs.events import BenchValveEventCfg
 from isaaclab_hiveboard.tasks.spot.gains.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.spot.gains.configs.scene import SpotGainsSceneCfg
@@ -38,7 +38,7 @@ class SpotGainsPhysicsCfg(PresetCfg):
             ccd_iterations=50,
             use_mujoco_contacts=False,
         ),
-        num_substeps=1,
+        num_substeps=2,
         debug_mode=False,
         use_cuda_graph=False,
     )
@@ -55,10 +55,10 @@ class SpotGainsEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: SpotGainsSceneCfg = SpotGainsSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
-    actions: SpotBenchJointActionCfg = SpotBenchJointActionCfg()  # type: ignore
+    actions: SpotGainsActionCfg = SpotGainsActionCfg()  # type: ignore
     terminations: SpotGainsTerminationsCfg = SpotGainsTerminationsCfg()  # type: ignore
     events: BenchValveEventCfg = BenchValveEventCfg()  # type: ignore
-    commands: BenchValveCommandsCfg = BenchValveCommandsCfg()  # type: ignore
+    commands: SpotGainsCommandsCfg = SpotGainsCommandsCfg()  # type: ignore
     sim: SimulationCfg = SimulationCfg(
         dt=PHYSICS_DT,
         render_interval=DECIMATION,

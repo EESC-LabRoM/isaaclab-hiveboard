@@ -142,7 +142,9 @@ def rollout_batch(env, stiffness: np.ndarray, damping: np.ndarray) -> list[dict]
     apply_spot_arm_gains(base.scene["robot"], stiffness, damping)
     obs, _ = env.reset()
     action_term = base.action_manager.get_term("arm_action")
-    joint_ids = action_term._joint_ids
+    joint_ids = list(action_term._joint_ids)
+    if "gripper_action" in base.action_manager.active_terms:
+        joint_ids.extend(base.action_manager.get_term("gripper_action")._joint_ids)
     robot = base.scene["robot"]
     steps = int(getattr(base, "max_episode_length", 0) or 0)
     if steps <= 0:

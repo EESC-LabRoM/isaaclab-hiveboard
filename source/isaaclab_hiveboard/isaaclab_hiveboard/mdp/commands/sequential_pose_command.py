@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import MISSING
 from typing import Sequence, Type
 
+import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import BaseArticulation
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
 from isaaclab.managers import CommandTerm
 from isaaclab.managers.manager_term_cfg import CommandTermCfg
@@ -19,6 +22,47 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_hiveboard.mdp.events import (
     canonicalize_ee_orientation_upward,
 )
+
+CUROBO_PATH_MARKER_CFG = VisualizationMarkersCfg(
+    markers={
+        "path": sim_utils.SphereCfg(
+            radius=0.008,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.85, 0.1)),
+        ),
+        "next": sim_utils.SphereCfg(
+            radius=0.018,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 1.0, 0.3)),
+        ),
+        "frame": sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
+            scale=(0.05, 0.05, 0.05),
+        ),
+    }
+)
+"""Plan path: yellow spheres per waypoint, green sphere for the next goal.
+
+RGB frames on sampled waypoints (plus the next goal) show the planned
+orientation: red +X is the TCP approach axis, blue +Z is jaw-up.
+"""
+
+
+def _xyzw_to_wxyz(q: torch.Tensor) -> torch.Tensor:
+    """Reorder Isaac Lab (x, y, z, w) quaternions to cuRobo (w, x, y, z)."""
+    return q[..., [3, 0, 1, 2]]
+
+
+def _wxyz_to_xyzw(q: torch.Tensor) -> torch.Tensor:
+    """Reorder cuRobo (w, x, y, z) quaternions to Isaac Lab (x, y, z, w)."""
+    return q[..., [1, 2, 3, 0]]
+
+
+def _pose_str(p: torch.Tensor, q: torch.Tensor) -> str:
+    """Compact position + RPY (deg) rendering for plan audit logs."""
+    rpy = torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(q), dim=-1))
+    return (
+        f"pos={[round(float(v), 4) for v in p[0].detach().cpu().tolist()]} "
+        f"rpy={[round(float(v), 1) for v in rpy[0].detach().cpu().tolist()]}"
+    )
 
 
 class SequentialPoseCommand(CommandTerm):
@@ -33,51 +77,42 @@ class SequentialPoseCommand(CommandTerm):
         self._asset: BaseArticulation = env.scene[cfg.asset_name]
         body_ids, body_names = self._asset.find_bodies(self.cfg.body_name)
         if not body_ids:
-            raise ValueError(
-                f"Body with name '{self.cfg.body_name}' not found in asset '{self.cfg.asset_name}'."
-            )
+            raise ValueError(f"Body with name '{self.cfg.body_name}' not found in asset '{self.cfg.asset_name}'.")
         self._body_idx = body_ids[0]
         self._body_name = body_names[0]
 
         # -- command sequence
-        self._current_command_idx = torch.zeros(
-            self._env.num_envs, device=self._env.device, dtype=torch.long
-        )
-        self._command_handlers = [
-            cmd.class_type(cmd, self) for cmd in self.cfg.commands
-        ]
+        self._current_command_idx = torch.zeros(self._env.num_envs, device=self._env.device, dtype=torch.long)
+        self._command_handlers = [cmd.class_type(cmd, self) for cmd in self.cfg.commands]
+
+        # -- cuRobo solver cache: planner/retargeter construction (kinematics,
+        # IK/trajopt solvers, PRM) costs seconds, while solves are sub-second
+        # and warm-start from the previous call. Keyed by build config, shared
+        # by all handlers so each solver is built once per process lifetime.
+        self._curobo_solver_cache: dict = {}
+
+        # -- stuck-segment diagnostics (watchdog + transition log)
+        self._seg_time = torch.zeros(self._env.num_envs, device=self._env.device)
+        self._seg_warned = torch.zeros(self._env.num_envs, device=self._env.device, dtype=torch.bool)
+        self._prev_command_idx = torch.zeros(self._env.num_envs, device=self._env.device, dtype=torch.long)
 
         # -- build default command, quat can't be 0s
-        self._command = torch.zeros(
-            (self._env.num_envs, 8), device=self._env.device, dtype=torch.float32
-        )
+        self._command = torch.zeros((self._env.num_envs, 8), device=self._env.device, dtype=torch.float32)
         self._command[:, 0] = 1  # Close gripper
         self._command[:, 7] = 1.0  # xyzw identity (0,0,0,1)
 
         # -- convert the fixed offsets to torch tensors of batched shape
         if self.cfg.body_offset is not None:
-            self._offset_pos = torch.tensor(
-                self.cfg.body_offset.pos, device=self.device
-            ).repeat(self.num_envs, 1)
-            self._offset_rot = torch.tensor(
-                self.cfg.body_offset.rot, device=self.device
-            ).repeat(self.num_envs, 1)
+            self._offset_pos = torch.tensor(self.cfg.body_offset.pos, device=self.device).repeat(self.num_envs, 1)
+            self._offset_rot = torch.tensor(self.cfg.body_offset.rot, device=self.device).repeat(self.num_envs, 1)
         else:
             self._offset_pos, self._offset_rot = None, None
 
         # -- optional valve task state
-        self.valve_task_goal = torch.ones(
-            self.num_envs, device=self.device, dtype=torch.float32
-        )
-        self.valve_joint_start = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float32
-        )
-        self.valve_joint_des = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float32
-        )
-        self.valve_rotate_angle_rad = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float32
-        )
+        self.valve_task_goal = torch.ones(self.num_envs, device=self.device, dtype=torch.float32)
+        self.valve_joint_start = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self.valve_joint_des = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self.valve_rotate_angle_rad = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._valve_asset: BaseArticulation | None = None
         self._valve_joint_idx: int | None = None
         self._initialize_valve_task()
@@ -86,21 +121,17 @@ class SequentialPoseCommand(CommandTerm):
         self._screw_asset: BaseArticulation | None = None
         self._screw_revolute_idx: int | None = None
         self._screw_prismatic_idx: int | None = None
-        self._screw_prev_angle = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float32
-        )
+        self._screw_prev_angle = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._screw_axial_target = torch.zeros_like(self._screw_prev_angle)
         self._screw_revolute_target = torch.zeros_like(self._screw_prev_angle)
         self._initialize_screw_coupling()
 
         if self.cfg.debug_vis:
-            self._target_pos_b = torch.zeros(
-                (self._env.num_envs, 3), device=self._env.device, dtype=torch.float32
-            )
-            self._target_quat_b = torch.zeros(
-                (self._env.num_envs, 4), device=self._env.device, dtype=torch.float32
-            )
+            self._target_pos_b = torch.zeros((self._env.num_envs, 3), device=self._env.device, dtype=torch.float32)
+            self._target_quat_b = torch.zeros((self._env.num_envs, 4), device=self._env.device, dtype=torch.float32)
             self._target_quat_b[:, 3] = 1.0  # xyzw identity (0,0,0,1)
+
+        self._path_markers_visible = False
 
     """
     Properties
@@ -117,9 +148,7 @@ class SequentialPoseCommand(CommandTerm):
         """
         return self._command
 
-    def _resample_command(
-        self, env_ids: Sequence[int] | slice | None | torch.Tensor = None
-    ):
+    def _resample_command(self, env_ids: Sequence[int] | slice | None | torch.Tensor = None):
         """Resets the command sequence for the specified environments."""
         if isinstance(env_ids, slice) or env_ids is None:
             env_ids = torch.arange(self._env.num_envs, device=self.device)
@@ -128,6 +157,9 @@ class SequentialPoseCommand(CommandTerm):
         self._reset_screw_coupling(env_ids)
         self._sample_valve_task(env_ids)
         self._current_command_idx[env_ids] = 0
+        self._seg_time[env_ids] = 0.0
+        self._seg_warned[env_ids] = False
+        self._prev_command_idx[env_ids] = 0
         for handler in self._command_handlers:
             handler.reset(env_ids)
         # Isaac Lab's reset() observes the command *before* the first
@@ -147,9 +179,7 @@ class SequentialPoseCommand(CommandTerm):
         if self.cfg.valve_asset_name is None:
             return
         if self.cfg.valve_asset_name not in self._env.scene.keys():
-            raise ValueError(
-                f"Valve asset '{self.cfg.valve_asset_name}' not found in scene."
-            )
+            raise ValueError(f"Valve asset '{self.cfg.valve_asset_name}' not found in scene.")
         if not 0.0 <= self.cfg.open_task_prob <= 1.0:
             raise ValueError("open_task_prob must be in [0, 1]")
         valve_span = abs(self.cfg.valve_joint_open - self.cfg.valve_joint_closed)
@@ -178,9 +208,7 @@ class SequentialPoseCommand(CommandTerm):
         if self._valve_asset is None or self._valve_joint_idx is None:
             return
 
-        q_start = self._valve_asset.data.joint_pos.torch[
-            env_ids, self._valve_joint_idx
-        ]
+        q_start = self._valve_asset.data.joint_pos.torch[env_ids, self._valve_joint_idx]
         q_open = torch.full_like(q_start, self.cfg.valve_joint_open)
         q_closed = torch.full_like(q_start, self.cfg.valve_joint_closed)
         min_delta = float(self.cfg.valve_min_delta_rad)
@@ -189,18 +217,13 @@ class SequentialPoseCommand(CommandTerm):
         if torch.any(~(can_open | can_close)):
             bad_q = q_start[~(can_open | can_close)].detach().cpu().tolist()
             raise RuntimeError(
-                "Reset valve states leave no endpoint satisfying "
-                f"valve_min_delta_rad={min_delta}: {bad_q}"
+                f"Reset valve states leave no endpoint satisfying valve_min_delta_rad={min_delta}: {bad_q}"
             )
 
-        open_mask = (
-            torch.rand(len(env_ids), device=self.device) < self.cfg.open_task_prob
-        )
+        open_mask = torch.rand(len(env_ids), device=self.device) < self.cfg.open_task_prob
         open_mask = torch.where(can_open & ~can_close, True, open_mask)
         open_mask = torch.where(can_close & ~can_open, False, open_mask)
-        goal = torch.where(
-            open_mask, torch.ones_like(q_start), -torch.ones_like(q_start)
-        )
+        goal = torch.where(open_mask, torch.ones_like(q_start), -torch.ones_like(q_start))
         q_des = torch.where(open_mask, q_open, q_closed)
 
         self.valve_task_goal[env_ids] = goal
@@ -214,9 +237,7 @@ class SequentialPoseCommand(CommandTerm):
         if coupling is None:
             return
         if coupling.asset_name not in self._env.scene.keys():
-            raise ValueError(
-                f"Screw asset '{coupling.asset_name}' not found in the scene."
-            )
+            raise ValueError(f"Screw asset '{coupling.asset_name}' not found in the scene.")
         if coupling.pitch_m_per_revolution == 0.0:
             raise ValueError("Screw pitch must be non-zero")
         if coupling.lower_limit >= coupling.upper_limit:
@@ -228,27 +249,17 @@ class SequentialPoseCommand(CommandTerm):
         revolute_ids, _ = self._screw_asset.find_joints(coupling.revolute_joint_name)
         prismatic_ids, _ = self._screw_asset.find_joints(coupling.prismatic_joint_name)
         if len(revolute_ids) != 1 or len(prismatic_ids) != 1:
-            raise ValueError(
-                "Screw coupling requires exactly one revolute and one prismatic joint"
-            )
+            raise ValueError("Screw coupling requires exactly one revolute and one prismatic joint")
         self._screw_revolute_idx = revolute_ids[0]
         self._screw_prismatic_idx = prismatic_ids[0]
 
     def _reset_screw_coupling(self, env_ids: torch.Tensor) -> None:
         """Synchronize coupling state with the articulation after an episode reset."""
-        if (
-            self._screw_asset is None
-            or self._screw_revolute_idx is None
-            or self._screw_prismatic_idx is None
-        ):
+        if self._screw_asset is None or self._screw_revolute_idx is None or self._screw_prismatic_idx is None:
             return
-        self._screw_prev_angle[env_ids] = self._screw_asset.data.joint_pos.torch[
-            env_ids, self._screw_revolute_idx
-        ]
+        self._screw_prev_angle[env_ids] = self._screw_asset.data.joint_pos.torch[env_ids, self._screw_revolute_idx]
         self._screw_revolute_target[env_ids] = self._screw_prev_angle[env_ids]
-        self._screw_axial_target[env_ids] = self._screw_asset.data.joint_pos.torch[
-            env_ids, self._screw_prismatic_idx
-        ]
+        self._screw_axial_target[env_ids] = self._screw_asset.data.joint_pos.torch[env_ids, self._screw_prismatic_idx]
         self._write_screw_targets(env_ids)
 
     def _write_screw_targets(self, env_ids: torch.Tensor) -> None:
@@ -261,9 +272,7 @@ class SequentialPoseCommand(CommandTerm):
         ):
             return
         coupling = self.cfg.screw_coupling
-        velocity = self._screw_asset.data.joint_vel.torch[
-            env_ids, self._screw_revolute_idx
-        ]
+        velocity = self._screw_asset.data.joint_vel.torch[env_ids, self._screw_revolute_idx]
         speed = torch.abs(velocity)
         coulomb = torch.where(
             speed > coupling.velocity_epsilon,
@@ -284,11 +293,7 @@ class SequentialPoseCommand(CommandTerm):
         end_damping = torch.where(
             distance_to_limit < coupling.end_stop_activation_distance,
             coupling.end_stop_base_damping
-            + (
-                coupling.end_stop_scale
-                / (distance_to_limit.clamp_min(0.0) + 1.0e-3)
-            )
-            ** coupling.end_stop_power,
+            + (coupling.end_stop_scale / (distance_to_limit.clamp_min(0.0) + 1.0e-3)) ** coupling.end_stop_power,
             torch.zeros_like(distance_to_limit),
         )
         resistance = friction - end_damping * velocity
@@ -316,23 +321,15 @@ class SequentialPoseCommand(CommandTerm):
 
     def _update_screw_coupling(self) -> None:
         """Convert measured revolute travel into axial travel at the screw pitch."""
-        if (
-            self._screw_asset is None
-            or self._screw_revolute_idx is None
-            or self.cfg.screw_coupling is None
-        ):
+        if self._screw_asset is None or self._screw_revolute_idx is None or self.cfg.screw_coupling is None:
             return
         coupling = self.cfg.screw_coupling
         env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
         angle = self._screw_asset.data.joint_pos.torch[:, self._screw_revolute_idx]
         raw_delta = angle - self._screw_prev_angle
         angle_delta = torch.atan2(torch.sin(raw_delta), torch.cos(raw_delta))
-        self._screw_axial_target += (
-            angle_delta * coupling.pitch_m_per_revolution / (2.0 * math.pi)
-        )
-        self._screw_axial_target.clamp_(
-            min=coupling.lower_limit, max=coupling.upper_limit
-        )
+        self._screw_axial_target += angle_delta * coupling.pitch_m_per_revolution / (2.0 * math.pi)
+        self._screw_axial_target.clamp_(min=coupling.lower_limit, max=coupling.upper_limit)
         self._screw_prev_angle.copy_(angle)
         self._write_screw_targets(env_ids)
 
@@ -340,15 +337,88 @@ class SequentialPoseCommand(CommandTerm):
         """Update the EE arc angle from the valve's remaining joint error."""
         if self._valve_asset is None or self._valve_joint_idx is None:
             return
-        q_current = self._valve_asset.data.joint_pos.torch[
-            env_ids, self._valve_joint_idx
-        ]
-        self.valve_rotate_angle_rad[env_ids] = (
-            self.valve_joint_des[env_ids] - q_current
-        ) * float(self.cfg.valve_ee_joint_angle_scale)
+        q_current = self._valve_asset.data.joint_pos.torch[env_ids, self._valve_joint_idx]
+        self.valve_rotate_angle_rad[env_ids] = (self.valve_joint_des[env_ids] - q_current) * float(
+            self.cfg.valve_ee_joint_angle_scale
+        )
+
+    def _handler_label(self, idx: int) -> str:
+        if idx >= len(self._command_handlers):
+            return "done"
+        return type(self._command_handlers[idx]).__name__
+
+    def _dump_stall(self, env_index: int) -> None:
+        """Print everything needed to see why segment ``env_index`` is stuck."""
+        idx = int(self._current_command_idx[env_index].item())
+        handler = self._command_handlers[idx]
+        print(
+            f"[STALL] env={env_index} stuck on seg {idx}/{len(self._command_handlers)} "
+            f"({type(handler).__name__}) for >={float(self.cfg.stall_timeout_s):.1f}s "
+            f"(seg_time={float(self._seg_time[env_index].item()):.1f}s)",
+            flush=True,
+        )
+        env_ids = torch.tensor([env_index], device=self.device, dtype=torch.long)
+        try:
+            target_pos_b, target_quat_b = handler.get_target_in_base_frame(env_ids)
+            ee_pos_b, ee_quat_b = self._get_ee_in_base_frame(env_ids)
+            pos_err = float(torch.linalg.vector_norm(ee_pos_b[0] - target_pos_b[0]).item())
+            ori_err = float(math.degrees(math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)[0].item()))
+            print(
+                f"[STALL] target_pos_b={target_pos_b[0].detach().cpu().tolist()} "
+                f"ee_pos_b={ee_pos_b[0].detach().cpu().tolist()} pos_err_m={pos_err:.4f} "
+                f"ori_err_deg={ori_err:.2f} gripper_cmd={float(self._command[env_index, 0].item()):+.1f}",
+                flush=True,
+            )
+        except Exception as err:  # Gripper holds have no Cartesian target
+            print(f"[STALL] (no Cartesian target readout: {err})", flush=True)
+        if isinstance(handler, _CuroboPlannedGoToFrameHandler):
+            if handler._fallback:
+                print("[STALL] curobo: plan failed, running fallback direct servo", flush=True)
+            elif handler._waypoint_pos_b is None:
+                print("[STALL] curobo: waypoints not planned yet", flush=True)
+            else:
+                wi = int(handler._waypoint_index[env_ids].item())
+                total = int(handler._waypoint_pos_b.shape[1])
+                print(f"[STALL] curobo: waypoint {wi}/{total}", flush=True)
+        try:
+            q = self._asset.data.joint_pos[env_index].detach().cpu().tolist()
+            print(f"[STALL] joint_pos={[round(v, 3) for v in q]}", flush=True)
+        except Exception as err:
+            print(f"[STALL] (no joint readout: {err})", flush=True)
+        if self._valve_asset is not None and self._valve_joint_idx is not None:
+            qv = float(self._valve_asset.data.joint_pos[env_index, self._valve_joint_idx].item())
+            qd = float(self.valve_joint_des[env_index].item())
+            print(f"[STALL] valve_q={qv:.4f} valve_des={qd:.4f}", flush=True)
 
     def _update_command(self):
         """Updates the command based on the current state of the command sequence."""
+        step_dt = float(getattr(self._env, "step_dt", 0.02))
+        changed = self._current_command_idx != self._prev_command_idx
+        if torch.any(changed):
+            if self.cfg.log_transitions:
+                for e in torch.where(changed)[0].tolist():
+                    prev = int(self._prev_command_idx[e].item())
+                    new = int(self._current_command_idx[e].item())
+                    print(
+                        f"[SEQ] env={e} seg {prev} ({self._handler_label(prev)}) done "
+                        f"in {float(self._seg_time[e].item()):.2f}s "
+                        f"-> seg {new} ({self._handler_label(new)})",
+                        flush=True,
+                    )
+            self._seg_time[changed] = 0.0
+            self._seg_warned[changed] = False
+            self._prev_command_idx[changed] = self._current_command_idx[changed]
+        self._seg_time += step_dt
+        if float(self.cfg.stall_timeout_s) > 0.0:
+            stalled = (
+                (self._seg_time >= float(self.cfg.stall_timeout_s))
+                & ~self._seg_warned
+                & (self._current_command_idx < len(self._command_handlers))
+            )
+            if torch.any(stalled):
+                for e in torch.where(stalled)[0].tolist():
+                    self._dump_stall(e)
+                self._seg_warned[stalled] = True
         # Update the command from the current handler
         for i, handler in enumerate(self._command_handlers):
             env_mask = self._current_command_idx == i
@@ -362,9 +432,7 @@ class SequentialPoseCommand(CommandTerm):
             done_env_ids = env_ids[are_done]
 
             if len(done_env_ids) > 0:
-                self._current_command_idx[done_env_ids] = (
-                    self._current_command_idx[done_env_ids] + 1
-                )
+                self._current_command_idx[done_env_ids] = self._current_command_idx[done_env_ids] + 1
                 if i < (len(self._command_handlers) - 1):
                     self._command_handlers[i + 1].reset(done_env_ids)
 
@@ -372,9 +440,7 @@ class SequentialPoseCommand(CommandTerm):
             self._command[env_mask] = handler.update(env_mask)
 
             if self.cfg.debug_vis:
-                target_pos_b, target_quat_b = handler.get_target_in_base_frame(
-                    torch.where(env_mask)[0]
-                )
+                target_pos_b, target_quat_b = handler.get_target_in_base_frame(torch.where(env_mask)[0])
                 self._target_pos_b[env_mask] = target_pos_b
                 self._target_quat_b[env_mask] = target_quat_b
 
@@ -395,9 +461,7 @@ class SequentialPoseCommand(CommandTerm):
         action term uses this method to apply the planner's exact joint
         waypoint instead.
         """
-        targets = torch.zeros(
-            self.num_envs, 0, device=self.device, dtype=self._command.dtype
-        )
+        targets = torch.zeros(self.num_envs, 0, device=self.device, dtype=self._command.dtype)
         active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         for command_idx, handler in enumerate(self._command_handlers):
             if not isinstance(handler, _CuroboPlannedGoToFrameHandler):
@@ -422,6 +486,28 @@ class SequentialPoseCommand(CommandTerm):
         """This command term does not have any metrics to update."""
         pass
 
+    def get_curobo_solver(self, key: tuple, make):
+        """Return a cached cuRobo solver, building it once per config.
+
+        Args:
+            key: Hashable build config identifying the solver.
+            make: Zero-argument factory called on cache miss. The caller must
+                invoke it inside ``torch.inference_mode(False)`` (and the
+                cuRobo warp guard), like a fresh construction.
+
+        Returns:
+            The cached solver and the wall-clock build time in seconds
+            (0.0 on a cache hit).
+        """
+        solver = self._curobo_solver_cache.get(key)
+        if solver is not None:
+            return solver, 0.0
+        start = time.perf_counter()
+        solver = make()
+        build_s = time.perf_counter() - start
+        self._curobo_solver_cache[key] = solver
+        return solver, build_s
+
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
         # note: parent only deals with callbacks. not their visibility
@@ -429,22 +515,29 @@ class SequentialPoseCommand(CommandTerm):
             # create markers if necessary for the first time
             if not hasattr(self, "goal_pose_visualizer"):
                 # -- goal
-                self.goal_pose_visualizer = VisualizationMarkers(
-                    self.cfg.goal_pose_visualizer_cfg
-                )
+                self.goal_pose_visualizer = VisualizationMarkers(self.cfg.goal_pose_visualizer_cfg)
                 # -- current
-                self.current_pose_visualizer = VisualizationMarkers(
-                    self.cfg.current_pose_visualizer_cfg
-                )
+                self.current_pose_visualizer = VisualizationMarkers(self.cfg.current_pose_visualizer_cfg)
 
             # set their visibility to true
             self.goal_pose_visualizer.set_visibility(True)
             self.current_pose_visualizer.set_visibility(True)
 
+            if self.cfg.path_debug_vis and not hasattr(self, "curobo_path_visualizer"):
+                self.curobo_path_visualizer = VisualizationMarkers(
+                    CUROBO_PATH_MARKER_CFG.replace(prim_path="/Visuals/Command/curobo_path")
+                )
+            if hasattr(self, "curobo_path_visualizer"):
+                self.curobo_path_visualizer.set_visibility(self.cfg.path_debug_vis)
+                self._path_markers_visible = False
+
         else:
             if hasattr(self, "goal_pose_visualizer"):
                 self.goal_pose_visualizer.set_visibility(False)
                 self.current_pose_visualizer.set_visibility(False)
+            if hasattr(self, "curobo_path_visualizer"):
+                self.curobo_path_visualizer.set_visibility(False)
+                self._path_markers_visible = False
 
     def _debug_vis_callback(self, event):
         # check if robot is initialized
@@ -467,6 +560,61 @@ class SequentialPoseCommand(CommandTerm):
         # current end-effector pose
         ee_pos_b, ee_quat_b = self._get_ee_in_world_frame(slice(None))
         self.current_pose_visualizer.visualize(ee_pos_b, ee_quat_b)
+
+        # cuRobo plan path (env 0): waypoint spheres + next goal
+        if self.cfg.path_debug_vis and hasattr(self, "curobo_path_visualizer"):
+            self._update_curobo_path_vis()
+
+    def _update_curobo_path_vis(self, env_index: int = 0) -> None:
+        """Show the active cuRobo plan: spheres for positions, frames for orientations."""
+        show = False
+        if int(self._current_command_idx[env_index].item()) < len(self._command_handlers):
+            handler = self._command_handlers[int(self._current_command_idx[env_index].item())]
+            if (
+                isinstance(handler, _CuroboPlannedGoToFrameHandler)
+                and not handler._fallback
+                and handler._waypoint_pos_b is not None
+                and int(handler._waypoint_pos_b.shape[1]) > 0
+            ):
+                env_ids = torch.tensor([env_index], device=self.device, dtype=torch.long)
+                n = int(handler._waypoint_pos_b.shape[1])
+                pos_b = handler._waypoint_pos_b[env_ids].reshape(n, 3)
+                quat_b = handler._waypoint_quat_b[env_ids].reshape(n, 4)
+                root_pos = self._asset.data.root_pos_w.torch[env_ids].expand(n, -1)
+                root_quat = self._asset.data.root_quat_w.torch[env_ids].expand(n, -1)
+                pos_w, quat_w = math_utils.combine_frame_transforms(root_pos, root_quat, pos_b, quat_b)
+                next_idx = min(int(handler._waypoint_index[env_ids].item()), n - 1)
+                # Frames on ~10 sampled waypoints (always including the last)
+                # plus the next goal, so orientation twists are visible.
+                step = max(1, n // 10)
+                frame_idx = list(range(0, n, step))
+                if frame_idx[-1] != n - 1:
+                    frame_idx.append(n - 1)
+                if next_idx not in frame_idx:
+                    frame_idx.append(next_idx)
+                n_frames = len(frame_idx)
+                identity = torch.zeros(n + 1, 4, device=self.device)
+                identity[:, 3] = 1.0
+                translations = torch.cat(
+                    [pos_w, pos_w[next_idx : next_idx + 1], pos_w[frame_idx], pos_w[next_idx : next_idx + 1]],
+                    dim=0,
+                )
+                orientations = torch.cat(
+                    [identity, quat_w[frame_idx], quat_w[next_idx : next_idx + 1]],
+                    dim=0,
+                )
+                marker_indices = translations.new_zeros(n + n_frames + 2, dtype=torch.long)
+                marker_indices[n] = 1
+                marker_indices[n + 1 :] = 2
+                self.curobo_path_visualizer.set_visibility(True)
+                self.curobo_path_visualizer.visualize(
+                    translations, orientations, marker_indices=marker_indices
+                )
+                self._path_markers_visible = True
+                show = True
+        if not show and self._path_markers_visible:
+            self.curobo_path_visualizer.set_visibility(False)
+            self._path_markers_visible = False
 
     def _get_ee_in_base_frame(self, env_ids: torch.Tensor | slice):
         """
@@ -542,9 +690,7 @@ class _BaseCmdHandler:
         """Get the target pose in the base frame for the given environment IDs."""
         raise NotImplementedError
 
-    def _pack_command(
-        self, gripper_open: bool, pos: torch.Tensor, quat: torch.Tensor
-    ) -> torch.Tensor:
+    def _pack_command(self, gripper_open: bool, pos: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
         command = torch.zeros(pos.shape[0], 8, device=self._device)
         command[:, 0] = 1.0 if gripper_open else -1.0
         command[:, 1:4] = pos
@@ -552,7 +698,10 @@ class _BaseCmdHandler:
         return command
 
     def _step_pos_towards(
-        self, current: torch.Tensor, target: torch.Tensor, velocity: float
+        self,
+        current: torch.Tensor,
+        target: torch.Tensor,
+        velocity: float,
     ) -> torch.Tensor:
         """Advance ``current`` toward ``target`` by at most ``velocity * dt``."""
         delta = target - current
@@ -560,15 +709,11 @@ class _BaseCmdHandler:
         scale = torch.clamp(velocity * self._dt / dist.clamp(min=1.0e-8), max=1.0)
         return current + delta * scale
 
-    def _step_quat_towards(
-        self, current: torch.Tensor, target: torch.Tensor, angular_velocity: float
-    ) -> torch.Tensor:
+    def _step_quat_towards(self, current: torch.Tensor, target: torch.Tensor, angular_velocity: float) -> torch.Tensor:
         """Advance ``current`` toward ``target`` by at most ``angular_velocity * dt``."""
         err = math_utils.quat_box_minus(target, current)
         angle = torch.linalg.vector_norm(err, dim=-1, keepdim=True)
-        scale = torch.clamp(
-            angular_velocity * self._dt / angle.clamp(min=1.0e-8), max=1.0
-        )
+        scale = torch.clamp(angular_velocity * self._dt / angle.clamp(min=1.0e-8), max=1.0)
         return math_utils.quat_box_plus(current, err * scale)
 
 
@@ -589,15 +734,11 @@ class _GoToFrameHandler(_BaseCmdHandler):
         if self.cfg.distance_threshold < 0.0:
             raise ValueError("GoToFrameCfg.distance_threshold must be non-negative")
         if self.cfg.orientation_threshold_deg < 0.0:
-            raise ValueError(
-                "GoToFrameCfg.orientation_threshold_deg must be non-negative"
-            )
+            raise ValueError("GoToFrameCfg.orientation_threshold_deg must be non-negative")
 
         if cfg.target_position_env is None:
             self._frame = command_term._env.scene[cfg.frame_name]
-            self._frame_idx = self._frame.data.target_frame_names.index(
-                cfg.target_frame_name
-            )
+            self._frame_idx = self._frame.data.target_frame_names.index(cfg.target_frame_name)
         self.command_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.command_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.command_quat_b[:, 3] = 1.0
@@ -632,9 +773,21 @@ class _GoToFrameHandler(_BaseCmdHandler):
         target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
         pos_err = torch.linalg.vector_norm(ee_pos_b - target_pos_b, dim=-1)
         ori_err = math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)
-        return (pos_err <= self.cfg.distance_threshold) & (
-            ori_err <= self._ori_threshold_rad
-        )
+        done = (pos_err <= self.cfg.distance_threshold) & (ori_err <= self._ori_threshold_rad)
+        threshold = getattr(self.cfg, "valve_done_threshold_rad", None)
+        term = self._command_term
+        if (
+            threshold is not None
+            and float(threshold) > 0.0
+            and term._valve_asset is not None
+            and term._valve_joint_idx is not None
+        ):
+            # Contact-rich arc: the TCP can sit centimeters off while the
+            # valve is already turned. Advance on the valve angle instead of
+            # hanging on Cartesian thresholds.
+            valve_q = term._valve_asset.data.joint_pos.torch[env_ids, term._valve_joint_idx]
+            done = done | (torch.abs(valve_q - term.valve_joint_des[env_ids]) <= float(threshold))
+        return done
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         # Target pose in base frame
@@ -644,22 +797,18 @@ class _GoToFrameHandler(_BaseCmdHandler):
             )
             target_quat_w = None
             if self.cfg.target_orientation_env is not None:
-                target_quat_w = torch.tensor(
-                    self.cfg.target_orientation_env, device=self._device
-                ).expand(len(env_ids), -1)
+                target_quat_w = torch.tensor(self.cfg.target_orientation_env, device=self._device).expand(
+                    len(env_ids), -1
+                )
             target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
                 self._asset.data.root_pos_w.torch[env_ids],
                 self._asset.data.root_quat_w.torch[env_ids],
                 target_pos_w,
                 target_quat_w,
             )
-            return target_pos_b, (
-                self._held_quat_b[env_ids] if target_quat_w is None else target_quat_b
-            )
+            return target_pos_b, (self._held_quat_b[env_ids] if target_quat_w is None else target_quat_b)
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
-        target_quat_w = self._frame.data.target_quat_w.torch[
-            env_ids, self._frame_idx
-        ]
+        target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
@@ -690,6 +839,9 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         self._joint_waypoints = None
         self._joint_target = None
         self._waypoint_index = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
+        # Scalar is sufficient: like the synchronized-env check below, all
+        # envs plan each segment together.
+        self._fallback = False
 
     def reset(self, env_ids: torch.Tensor):
         super().reset(env_ids)
@@ -698,6 +850,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         self._joint_waypoints = None
         self._joint_target = None
         self._waypoint_index[env_ids] = 0
+        self._fallback = False
         if len(env_ids) != self._num_envs:
             raise RuntimeError("CuroboPlannedGoToFrameCfg currently requires synchronized environments.")
 
@@ -708,48 +861,78 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
 
         with curobo_compatible_warp():
-            from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
-            from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
+            from curobo.types import DeviceCfg, JointState
 
             robot_cfg = load_curobo_robot_cfg(
                 self.cfg.robot_curobo_yaml or f"{ASSET_DIR}/franka/cumotion/fr3.yaml",
                 self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
             )
-            # CommandManager runs in inference mode. Constructing cuRobo in
-            # that mode makes its reusable goal buffers inference tensors,
-            # which TrajOpt cannot subsequently update in place.
-            with torch.inference_mode(False):
-                planner = MotionPlanner(
-                    MotionPlannerCfg.create(
-                        robot=robot_cfg,
-                        self_collision_check=False,
-                        use_cuda_graph=False,
-                        num_ik_seeds=self.cfg.num_ik_seeds,
-                        num_trajopt_seeds=1,
-                        interpolation_dt=self._dt,
-                        interpolation_buffer_size=self.cfg.interpolation_buffer_size,
-                        device_cfg=DeviceCfg(),
+            if self.cfg.reference_pos_env is not None and self.cfg.reference_quat_xyzw is not None:
+                self._plan_from_reference(env_ids, robot_cfg)
+                return
+            from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
+            from curobo.types import GoalToolPose, Pose
+
+            # Reuse one planner per build config (see _curobo_solver_cache):
+            # construction costs seconds, solves are sub-second and warm-start
+            # from the previous call. The factory must run in inference_mode
+            # (False), otherwise cuRobo's reusable goal buffers become
+            # inference tensors that TrajOpt cannot update in place.
+            cache_key = (
+                "planner",
+                self.cfg.robot_curobo_yaml,
+                self.cfg.robot_urdf,
+                self.cfg.num_ik_seeds,
+                self.cfg.num_trajopt_seeds,
+                self.cfg.interpolation_buffer_size,
+            )
+
+            def _make_planner() -> MotionPlanner:
+                with torch.inference_mode(False):
+                    return MotionPlanner(
+                        MotionPlannerCfg.create(
+                            robot=robot_cfg,
+                            self_collision_check=False,
+                            use_cuda_graph=False,
+                            num_ik_seeds=self.cfg.num_ik_seeds,
+                            num_trajopt_seeds=self.cfg.num_trajopt_seeds,
+                            interpolation_dt=self._dt,
+                            interpolation_buffer_size=self.cfg.interpolation_buffer_size,
+                            device_cfg=DeviceCfg(),
+                        )
                     )
-                )
+
+            planner, build_s = self._command_term.get_curobo_solver(cache_key, _make_planner)
+            solve_start = time.perf_counter()
+            if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+                raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
             try:
                 target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
-                if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
-                    raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
-                tcp_to_flange_quat = math_utils.quat_inv(
-                    self._command_term._offset_rot[env_ids]
-                )
-                tcp_to_flange_pos = -math_utils.quat_apply(
-                    tcp_to_flange_quat, self._command_term._offset_pos[env_ids]
-                )
+                tcp_to_flange_quat = math_utils.quat_inv(self._command_term._offset_rot[env_ids])
+                tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, self._command_term._offset_pos[env_ids])
                 flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
                     target_pos_b,
                     target_quat_b,
                     tcp_to_flange_pos,
                     tcp_to_flange_quat,
                 )
-                joint_ids, joint_names = self._asset.find_joints(
-                    self.cfg.robot_joint_names, preserve_order=True
-                )
+                # Skip the solver when already there (e.g. a home-to-home leg):
+                # publish the current pose/joints as a single waypoint instead
+                # of burning seconds of trajopt on a no-op.
+                rep = env_ids[0:1]
+                ee_pos_b, ee_quat_b = self._command_term._get_ee_in_base_frame(rep)
+                if float(torch.linalg.vector_norm(ee_pos_b[0] - target_pos_b[0]).item()) <= float(
+                    self.cfg.distance_threshold
+                ) and float(
+                    math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)[0].item()
+                ) <= math.radians(
+                    self.cfg.orientation_threshold_deg
+                ):
+                    rep_jids, _ = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
+                    rep_q = self._asset.data.joint_pos.torch[rep][:, rep_jids]
+                    self._publish_plan(ee_pos_b, ee_quat_b, rep_q.unsqueeze(0), origin="trivial")
+                    return
+                joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
                 current = JointState.from_position(
                     self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
                     joint_names=joint_names,
@@ -758,23 +941,49 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 # the same frame.  Calibrate the constant transform from the
                 # current shared joint configuration, then express the Isaac
                 # target flange pose in cuRobo's URDF base frame.
-                curobo_flange = planner.compute_kinematics(current).tool_poses.get_link_pose(
-                    planner.tool_frames[0]
-                )
+                curobo_flange = planner.compute_kinematics(current).tool_poses.get_link_pose(planner.tool_frames[0])
                 isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
                     self._asset.data.root_pos_w.torch[env_ids],
                     self._asset.data.root_quat_w.torch[env_ids],
-                    self._asset.data.body_pos_w.torch[
-                        env_ids, self._command_term._body_idx
-                    ],
-                    self._asset.data.body_quat_w.torch[
-                        env_ids, self._command_term._body_idx
-                    ],
+                    self._asset.data.body_pos_w.torch[env_ids, self._command_term._body_idx],
+                    self._asset.data.body_quat_w.torch[env_ids, self._command_term._body_idx],
                 )
-                flange_quat_inv_c = math_utils.quat_inv(curobo_flange.quaternion)
-                flange_pos_inv_c = -math_utils.quat_apply(
-                    flange_quat_inv_c, curobo_flange.position
+                # Planning audit (first active env): measured start vs
+                # commanded goal, flange and TCP, all in the base frame. An
+                # inverted axis shows up as a negated component or ~180 deg
+                # RPY jump here, before cuRobo is even involved.
+                e0 = int(env_ids[0].item())
+                start_tcp_b, start_tcp_q = math_utils.combine_frame_transforms(
+                    isaac_flange_pos_b[0:1],
+                    isaac_flange_quat_b[0:1],
+                    self._command_term._offset_pos[env_ids[0:1]],
+                    self._command_term._offset_rot[env_ids[0:1]],
                 )
+
+                try:
+                    audit_seg = self._command_term._command_handlers.index(self)
+                except ValueError:
+                    audit_seg = "?"
+                print(
+                    f"[INFO] plan seg {audit_seg} env={e0} start EE-flange_b {_pose_str(isaac_flange_pos_b[0:1], isaac_flange_quat_b[0:1])}",
+                    flush=True,
+                )
+                print(
+                    f"[INFO] plan seg {audit_seg} env={e0} goal  EE-flange_b {_pose_str(flange_pos_b[0:1], flange_quat_b[0:1])}",
+                    flush=True,
+                )
+                print(
+                    f"[INFO] plan seg {audit_seg} env={e0} start EE-TCP_b    {_pose_str(start_tcp_b, start_tcp_q)}",
+                    flush=True,
+                )
+                print(
+                    f"[INFO] plan seg {audit_seg} env={e0} goal  EE-TCP_b    {_pose_str(target_pos_b[0:1], target_quat_b[0:1])}",
+                    flush=True,
+                )
+                # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
+                curobo_flange_quat_b = _wxyz_to_xyzw(curobo_flange.quaternion)
+                flange_quat_inv_c = math_utils.quat_inv(curobo_flange_quat_b)
+                flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
                 curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
                     isaac_flange_pos_b,
                     isaac_flange_quat_b,
@@ -793,25 +1002,36 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 # the input tensors in this context too: otherwise cuRobo
                 # adopts an inference-mode goal tensor as its mutable cache.
                 with torch.inference_mode(False), torch.enable_grad():
-                    current = JointState.from_position(
-                        current.position.clone(), joint_names=joint_names
-                    )
+                    current = JointState.from_position(current.position.clone(), joint_names=joint_names)
                     goal = GoalToolPose.from_poses(
                         {
                             planner.tool_frames[0]: Pose(
                                 position=flange_pos_c.clone(),
-                                quaternion=flange_quat_c.clone(),
+                                quaternion=_xyzw_to_wxyz(flange_quat_c.clone()),
                             )
                         },
                         ordered_tool_frames=planner.tool_frames,
                         num_goalset=1,
                     )
+                    # NOTE: enable_graph_attempt=99 effectively disables graph
+                    # seeding (attempts only run 0..max_plan_attempts-1, which
+                    # never reach 99). Pure IK + trajopt is enough here and far
+                    # cheaper than PRM queries; lower it only if you also want
+                    # graph seeds on later attempts.
                     result = planner.plan_pose(
-                        goal, current, max_attempts=1, enable_graph_attempt=99
+                        goal,
+                        current,
+                        max_attempts=self.cfg.max_plan_attempts,
+                        enable_graph_attempt=99,
                     )
                 if result is None or not bool(result.success.all().item()):
+                    try:
+                        seg = self._command_term._command_handlers.index(self)
+                    except ValueError:
+                        seg = "?"
                     print(
-                        "[WARN] cuRobo plan failed; "
+                        f"[WARN] cuRobo plan failed on seg {seg}; falling back to direct servo for "
+                        f"{self.cfg.target_frame_name or self.cfg.target_position_env}. "
                         f"start_q={current.position.detach().cpu().tolist()} "
                         f"isaac_flange={isaac_flange_pos_b.detach().cpu().tolist()} "
                         f"curobo_flange={curobo_flange.position.detach().cpu().tolist()} "
@@ -819,7 +1039,13 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                         f"flange_pos_c={flange_pos_c.detach().cpu().tolist()} "
                         f"flange_quat_c={flange_quat_c.detach().cpu().tolist()}"
                     )
-                    raise RuntimeError("cuRobo could not plan the requested frame motion")
+                    # Degrade to the parent velocity-limited servo for this
+                    # segment instead of killing the episode. Servo state was
+                    # seeded from the current EE pose at reset, and
+                    # _joint_target stays None so the action term does not
+                    # apply stale joint overrides.
+                    self._fallback = True
+                    return
                 trajectory = result.get_interpolated_plan().position
                 if trajectory.ndim == 4:
                     trajectory = trajectory[:, 0]
@@ -828,7 +1054,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 ).tool_poses.get_link_pose(planner.tool_frames[0])
                 tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
                     poses.position,
-                    poses.quaternion,
+                    _wxyz_to_xyzw(poses.quaternion),
                     self._command_term._offset_pos[0].expand_as(poses.position),
                     self._command_term._offset_rot[0].expand_as(poses.quaternion),
                 )
@@ -840,23 +1066,298 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     tcp_pos,
                     tcp_quat,
                 )
-                self._waypoint_pos_b = tcp_pos.unsqueeze(0)
-                self._waypoint_quat_b = tcp_quat.unsqueeze(0)
-                self._joint_waypoints = trajectory
-                self._joint_target = torch.zeros(
-                    self._num_envs, trajectory.shape[-1], device=self._device, dtype=trajectory.dtype
+                solve_s = time.perf_counter() - solve_start
+                self._publish_plan(
+                    tcp_pos, tcp_quat, trajectory, origin="planned", build_s=build_s, solve_s=solve_s
                 )
-                print(f"[INFO] cuRobo planned {tcp_pos.shape[0]} TCP waypoints for {self.cfg.target_frame_name}.")
-            finally:
-                planner.destroy()
+            except Exception as err:
+                # A throwing solver must not kill the episode (the original
+                # cuRobo crash mode): degrade to direct servo like a failed
+                # plan. Misconfiguration still raises above, outside this try.
+                try:
+                    seg = self._command_term._command_handlers.index(self)
+                except ValueError:
+                    seg = "?"
+                print(
+                    f"[WARN] cuRobo plan threw on seg {seg} "
+                    f"({type(err).__name__}: {err}); falling back to direct servo",
+                    flush=True,
+                )
+                self._fallback = True
+                return
+
+    def _publish_plan(
+        self,
+        tcp_pos: torch.Tensor,
+        tcp_quat: torch.Tensor,
+        trajectory: torch.Tensor,
+        origin: str,
+        build_s: float = 0.0,
+        solve_s: float = 0.0,
+    ) -> None:
+        """Store waypoints/joints and emit plan diagnostics (shared by both planners)."""
+        if getattr(self.cfg, "valve_done_threshold_rad", None) is not None:
+            self._validate_arc_radius(tcp_pos)
+        self._waypoint_pos_b = tcp_pos.unsqueeze(0)
+        self._waypoint_quat_b = tcp_quat.unsqueeze(0)
+        self._joint_waypoints = trajectory
+        self._joint_target = torch.zeros(
+            self._num_envs, trajectory.shape[-1], device=self._device, dtype=trajectory.dtype
+        )
+        print(
+            f"[INFO] cuRobo {origin} {tcp_pos.shape[0]} TCP waypoints for "
+            f"{self.cfg.target_frame_name or self.cfg.target_position_env} "
+            f"(build={build_s:.2f}s solve={solve_s:.2f}s)."
+        )
+        # Orientation audit: planned TCP RPY (deg, XYZ order) against
+        # the straight Cartesian slerp at the same fractions. A joint
+        # -space plan can land perfectly while twisting through a
+        # different route mid-path; that divergence shows up here.
+        n_wp = tcp_quat.shape[0]
+        print(
+            f"[INFO] plan ori path (planned-rpy vs slerp-rpy deg, N={n_wp}):",
+            flush=True,
+        )
+        q0, q1 = tcp_quat[0], tcp_quat[-1]
+        for f in (0.0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.0):
+            qp = tcp_quat[min(int(round(f * (n_wp - 1))), n_wp - 1)]
+            qs = math_utils.quat_slerp(q0, q1, float(f)).reshape(1, 4)
+            rp = torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(qp.unsqueeze(0)), dim=-1))[0]
+            rs = torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(qs), dim=-1))[0]
+            print(
+                f"[INFO]   f={f:.2f} plan={[round(float(v), 1) for v in rp.tolist()]} "
+                f"slerp={[round(float(v), 1) for v in rs.tolist()]}",
+                flush=True,
+            )
+
+    def _plan_from_reference(self, env_ids: torch.Tensor, robot_cfg: dict) -> None:
+        """Retarget a dense Cartesian reference into joint waypoints.
+
+        Instead of a free start-to-goal trajopt (which may shortcut the
+        authored arc), solve IK along each reference frame with cuRobo's
+        MotionRetargeter so execution follows the given trajectory.
+        Falls back to direct servo on any failure.
+        """
+        from curobo.motion_retargeter import (
+            MotionRetargeter,
+            MotionRetargeterCfg,
+            SequenceGoalToolPose,
+        )
+        from curobo.types import DeviceCfg, JointState, ToolPoseCriteria
+
+        ref_pos = torch.tensor(self.cfg.reference_pos_env, device=self._device, dtype=torch.float32)
+        ref_quat = torch.tensor(self.cfg.reference_quat_xyzw, device=self._device, dtype=torch.float32)
+        num_waypoints = ref_pos.shape[0]
+        tool_frame = robot_cfg["robot_cfg"]["kinematics"]["tool_frames"][0]
+        cache_key = (
+            "retargeter",
+            self.cfg.robot_curobo_yaml,
+            self.cfg.robot_urdf,
+            self.cfg.num_ik_seeds,
+        )
+
+        def _make_retargeter() -> MotionRetargeter:
+            with torch.inference_mode(False):
+                return MotionRetargeter(
+                    MotionRetargeterCfg.create(
+                        robot=robot_cfg,
+                        tool_pose_criteria={
+                            tool_frame: ToolPoseCriteria.track_position_and_orientation(
+                                xyz=[1.0, 1.0, 1.0],
+                                rpy=[1.0, 1.0, 1.0],
+                                non_terminal_scale=1.0,
+                            )
+                        },
+                        num_envs=1,
+                        use_mpc=False,
+                        self_collision_check=False,
+                        scene_model=None,
+                        load_collision_spheres=False,
+                        optimization_dt=self._dt,
+                        num_seeds_global=self.cfg.num_ik_seeds,
+                        num_seeds_local=1,
+                        position_tolerance=0.002,
+                        orientation_tolerance=0.02,
+                        device_cfg=DeviceCfg(),
+                    )
+                )
+
+        retargeter, build_s = self._command_term.get_curobo_solver(cache_key, _make_retargeter)
+        solve_start = time.perf_counter()
+        try:
+            if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+                raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
+            # Single shared plan like the trajopt path: the reference is one
+            # trajectory, executed synchronously by all envs.
+            rep = env_ids[0:1]
+            ref_pos_w = self._command_term._env.scene.env_origins[rep] + ref_pos
+            tcp_pos_b, tcp_quat_b = math_utils.subtract_frame_transforms(
+                self._asset.data.root_pos_w.torch[rep].expand(num_waypoints, -1),
+                self._asset.data.root_quat_w.torch[rep].expand(num_waypoints, -1),
+                ref_pos_w,
+                ref_quat.expand(num_waypoints, -1),
+            )
+            offset_pos = self._command_term._offset_pos[rep].expand(num_waypoints, -1)
+            offset_rot = self._command_term._offset_rot[rep].expand(num_waypoints, -1)
+            tcp_to_flange_quat = math_utils.quat_inv(offset_rot)
+            tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, offset_pos)
+            flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
+                tcp_pos_b,
+                tcp_quat_b,
+                tcp_to_flange_pos,
+                tcp_to_flange_quat,
+            )
+            joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
+            current = JointState.from_position(
+                self._asset.data.joint_pos.torch[rep][:, joint_ids],
+                joint_names=joint_names,
+            )
+            curobo_flange = retargeter.kinematics.compute_kinematics(current).tool_poses.get_link_pose(tool_frame)
+            isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
+                self._asset.data.root_pos_w.torch[rep],
+                self._asset.data.root_quat_w.torch[rep],
+                self._asset.data.body_pos_w.torch[rep, self._command_term._body_idx],
+                self._asset.data.body_quat_w.torch[rep, self._command_term._body_idx],
+            )
+            # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
+            flange_quat_inv_c = math_utils.quat_inv(_wxyz_to_xyzw(curobo_flange.quaternion))
+            flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
+            curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
+                isaac_flange_pos_b,
+                isaac_flange_quat_b,
+                flange_pos_inv_c,
+                flange_quat_inv_c,
+            )
+            flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                curobo_base_pos_b.expand(num_waypoints, -1),
+                curobo_base_quat_b.expand(num_waypoints, -1),
+                flange_pos_b,
+                flange_quat_b,
+            )
+            with torch.inference_mode(False), torch.enable_grad():
+                current = JointState.from_position(current.position.clone(), joint_names=joint_names)
+                arc_targets = SequenceGoalToolPose(
+                    tool_frames=[tool_frame],
+                    position=flange_pos_c[:, None, None, None, :].clone(),
+                    quaternion=_xyzw_to_wxyz(flange_quat_c[:, None, None, None, :].clone()),
+                )
+                if hasattr(retargeter, "_set_initial_joint_state"):
+                    result = retargeter.solve_sequence(
+                        arc_targets,
+                        initial_joint_state=current,
+                    )
+                    joint_waypoints = result.joint_state.reorder(joint_names).position
+                else:
+                    # Compatibility with installed cuRobo releases that
+                    # predate the initial_joint_state sequence API.
+                    retargeter.reset()
+                    retargeter._prev_solution = current.position.clone()
+                    retargeter._prev_velocity = current.velocity.clone()
+                    frame_solutions = [
+                        retargeter.solve_frame(arc_targets.get_frame(index))
+                        .joint_state.reorder(joint_names)
+                        .position
+                        for index in range(arc_targets.num_frames)
+                    ]
+                    joint_waypoints = torch.stack(frame_solutions, dim=1)
+            max_joint_step = torch.max(torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1]))
+            if max_joint_step > 0.15:
+                print(
+                    f"[WARN] cuRobo reference retarget has a joint discontinuity "
+                    f"(max step={float(max_joint_step.item()):.3f} rad); falling back to direct servo",
+                    flush=True,
+                )
+                self._fallback = True
+                return
+            solve_s = time.perf_counter() - solve_start
+            self._publish_plan(
+                tcp_pos_b, tcp_quat_b, joint_waypoints, origin="retargeted", build_s=build_s, solve_s=solve_s
+            )
+        except Exception as err:
+            try:
+                seg = self._command_term._command_handlers.index(self)
+            except ValueError:
+                seg = "?"
+            print(f"[WARN] cuRobo reference retarget failed on seg {seg} ({err}); falling back", flush=True)
+            self._fallback = True
+
+    def _validate_arc_radius(self, tcp_pos_b: torch.Tensor, wander_tol_m: float = 0.01) -> None:
+        """Check the planned TCP path against its own endpoint chord.
+
+        A plan between two bead targets should not wander beyond what the
+        straight chord between its endpoints implies: compare the range of
+        ``|TCP - pivot|`` along the plan vs along the chord. Warns when the
+        plan bows out (bad arc / wrong pivot), not when the beads themselves
+        imply varying radius. Display only; never fails the plan.
+        """
+        term = self._command_term
+        valve = term._valve_asset
+        if valve is None or tcp_pos_b.shape[0] < 2:
+            return
+        if not hasattr(self, "_valve_pivot_idx"):
+            # Anchor = joint anchor (a fixed point ON the rotation axis).
+            # Per Ball_Valve.urdf, RevoluteJoint's origin is identity in its
+            # parent valvula_esfera, so that body's origin IS the anchor.
+            self._valve_pivot_idx = None
+            self._valve_pivot_name = "valve-root"
+            for candidate in ("valvula_esfera", "alavanca_pivot"):
+                try:
+                    ids, _ = valve.find_bodies(candidate)
+                except Exception:
+                    ids = []
+                if ids:
+                    self._valve_pivot_idx = int(ids[0])
+                    self._valve_pivot_name = candidate
+                    break
+        if self._valve_pivot_idx is None:
+            pivot_w = valve.data.root_pos_w.torch[0]
+        else:
+            pivot_w = valve.data.body_pos_w.torch[0, self._valve_pivot_idx]
+        pivot_name = self._valve_pivot_name
+        n = tcp_pos_b.shape[0]
+        root_pos = self._asset.data.root_pos_w.torch[0:1].expand(n, -1)
+        root_quat = self._asset.data.root_quat_w.torch[0:1].expand(n, -1)
+        identity = torch.zeros(n, 4, device=self._device)
+        identity[:, 3] = 1.0
+        tcp_w, _ = math_utils.combine_frame_transforms(root_pos, root_quat, tcp_pos_b, identity)
+
+        def _range(t: torch.Tensor) -> float:
+            d = torch.linalg.vector_norm(t - pivot_w.unsqueeze(0), dim=-1)
+            return float(d.max().item() - d.min().item()), float(d.mean().item())
+
+        plan_range, plan_mean = _range(tcp_w)
+        f = torch.linspace(0.0, 1.0, n, device=self._device).unsqueeze(-1)
+        chord = tcp_w[0:1] * (1.0 - f) + tcp_w[-1:] * f
+        chord_range, _ = _range(chord)
+        plan_mm, chord_mm = plan_range * 1000.0, chord_range * 1000.0
+        try:
+            seg = self._command_term._command_handlers.index(self)
+        except ValueError:
+            seg = "?"
+        print(
+            f"[INFO] plan seg {seg} arc radius vs {pivot_name} "
+            f"@ {[round(float(v), 4) for v in pivot_w.detach().cpu().tolist()]}: "
+            f"plan range={plan_mm:.1f}mm chord range={chord_mm:.1f}mm mean={plan_mean:.4f}m (N={n})",
+            flush=True,
+        )
+        if plan_mm > chord_mm + wander_tol_m * 1000.0:
+            print(
+                f"[WARN] plan seg {seg} wanders {plan_mm - chord_mm:.1f}mm beyond its "
+                f"endpoint chord: path not circular about the valve pivot",
+                flush=True,
+            )
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        if self._fallback:
+            return super().update(env_mask)
         env_ids = torch.where(env_mask)[0]
         # CommandManager resets every sequence handler at episode reset. Plan
         # here instead, once this term actually becomes active after the arm
         # has reached the lower lever pose and closed the gripper.
         if self._waypoint_pos_b is None:
             self._plan(env_ids)
+            if self._fallback:
+                return super().update(env_mask)
         # CommandManager advances a completed handler and still invokes its
         # update once in that same tick.  Use the final waypoint for that
         # harmless trailing update while retaining the one-past-end completion
@@ -873,9 +1374,20 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         return self._pack_command(self.cfg.gripper_open, pos, quat)
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self._fallback:
+            return super().is_done(env_ids)
         if self._waypoint_pos_b is None:
             return torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
-        return self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
+        exhausted = self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
+        if not torch.any(exhausted):
+            return exhausted
+        # Waypoint exhaustion alone is not convergence: the final waypoint is
+        # first commanded the same tick the index exhausts, so advancing here
+        # would chain the next plan from lagged joints. update() keeps
+        # publishing the final waypoint/joints, so waiting for the parent
+        # distance/orientation check lets the arm settle onto the plan end.
+        # A plan that ends out of tolerance trips the stall watchdog instead.
+        return exhausted & super().is_done(env_ids)
 
 
 class _GripperHandler(_BaseCmdHandler):
@@ -924,9 +1436,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
             raise ValueError("RotateFrameCfg.angle_threshold_deg must be non-negative")
 
         self._frame: FrameTransformer = command_term._env.scene[cfg.frame_name]
-        self._frame_idx = self._frame.data.target_frame_names.index(
-            cfg.target_frame_name
-        )
+        self._frame_idx = self._frame.data.target_frame_names.index(cfg.target_frame_name)
         self.initial_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.axis_pos_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.axis_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
@@ -944,15 +1454,11 @@ class _RotateFrameHandler(_BaseCmdHandler):
 
         if self._command_term._valve_asset is not None:
             self._command_term.recompute_valve_rotate_angle(env_ids)
-            self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[
-                env_ids
-            ]
+            self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[env_ids]
         else:
             self.angle_rad_tensor[env_ids] = math.radians(self.cfg.angle_deg)
 
-        ee_pos_b, self.initial_quat_b[env_ids] = (
-            self._command_term._get_ee_in_base_frame(env_ids)
-        )
+        ee_pos_b, self.initial_quat_b[env_ids] = self._command_term._get_ee_in_base_frame(env_ids)
 
         self.axis_pos_b[env_ids], axis_quat_b = self._get_rotation_axis_pose_b(env_ids)
 
@@ -968,77 +1474,54 @@ class _RotateFrameHandler(_BaseCmdHandler):
         # The rotation vector is explicit in the axis frame. Keeping it in the
         # command config prevents a grasp-frame rotation from silently changing
         # the mechanical joint axis.
-        axis_in_frame = torch.tensor(
-            self.cfg.axis, device=self._device, dtype=torch.float32
-        ).repeat(len(env_ids), 1)
+        axis_in_frame = torch.tensor(self.cfg.axis, device=self._device, dtype=torch.float32).repeat(len(env_ids), 1)
         if torch.any(torch.linalg.vector_norm(axis_in_frame, dim=-1) < 1.0e-6):
             raise ValueError("RotateFrameCfg.axis must be non-zero")
 
         # Rotation axis expressed in the robot base frame.
         rot_axis_b = math_utils.quat_apply(axis_quat_b, axis_in_frame)
-        self.rot_axis_b[env_ids] = rot_axis_b / torch.linalg.vector_norm(
-            rot_axis_b, dim=-1, keepdim=True
-        )
+        self.rot_axis_b[env_ids] = rot_axis_b / torch.linalg.vector_norm(rot_axis_b, dim=-1, keepdim=True)
         if self._command_term.cfg.debug_vis:
             print("Rotation axis: ", self.rot_axis_b[env_ids])
 
         # vector from rotation center to initial ee pos, which describes
         # our expected motion
         radius_vec = ee_pos_b - self.axis_pos_b[env_ids]
-        self.radius_vec[env_ids] = self._get_ortogonal_vector(
-            radius_vec, self.rot_axis_b[env_ids]
-        )
+        self.radius_vec[env_ids] = self._get_ortogonal_vector(radius_vec, self.rot_axis_b[env_ids])
         if self._command_term.cfg.debug_vis:
             print("Radius vector: ", self.radius_vec[env_ids])
 
         # Get final motion poses
         angle = self.angle_rad_tensor[env_ids]
-        total_rotation = math_utils.quat_from_angle_axis(
-            angle, self.rot_axis_b[env_ids]
-        )
-        self.final_quat_b[env_ids] = math_utils.quat_mul(
-            total_rotation, self.initial_quat_b[env_ids]
-        )
+        total_rotation = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
+        self.final_quat_b[env_ids] = math_utils.quat_mul(total_rotation, self.initial_quat_b[env_ids])
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         # Get final motion poses
         angle = self.angle_rad_tensor[env_ids]
 
-        v_rot = self._rodrigues_rotate(
-            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
-        )
+        v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
         final_pose_b = self.axis_pos_b[env_ids] + v_rot
 
-        total_rotation = math_utils.quat_from_angle_axis(
-            angle, self.rot_axis_b[env_ids]
-        )
+        total_rotation = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
         final_quat = math_utils.quat_mul(total_rotation, self.initial_quat_b[env_ids])
 
         return final_pose_b, final_quat
 
-    def _rodrigues_rotate(
-        self, v: torch.Tensor, axis: torch.Tensor, theta: torch.Tensor
-    ) -> torch.Tensor:
+    def _rodrigues_rotate(self, v: torch.Tensor, axis: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         return (
             v * torch.cos(theta)[:, None]
             + torch.cross(axis, v, dim=-1) * torch.sin(theta)[:, None]
-            + axis
-            * torch.sum(axis * v, dim=-1)[:, None]
-            * (1 - torch.cos(theta))[:, None]
+            + axis * torch.sum(axis * v, dim=-1)[:, None] * (1 - torch.cos(theta))[:, None]
         )
 
-    def _get_ortogonal_vector(
-        self, vector: torch.Tensor, ortogonal_to: torch.Tensor
-    ) -> torch.Tensor:
+    def _get_ortogonal_vector(self, vector: torch.Tensor, ortogonal_to: torch.Tensor) -> torch.Tensor:
         """
         Given a vector V and K, we can decompose on V = V || k  + V |_ k
 
         This function returns the V |_ k
         """
-        return (
-            vector
-            - torch.sum(vector * ortogonal_to, dim=-1, keepdim=True) * ortogonal_to
-        )
+        return vector - torch.sum(vector * ortogonal_to, dim=-1, keepdim=True) * ortogonal_to
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         env_ids = torch.where(env_mask)[0]
@@ -1047,15 +1530,11 @@ class _RotateFrameHandler(_BaseCmdHandler):
             self._progress_abs[env_ids] + self.cfg.angular_velocity * self._dt,
             max=abs_angle,
         )
-        angle = torch.copysign(
-            self._progress_abs[env_ids], self.angle_rad_tensor[env_ids]
-        )
+        angle = torch.copysign(self._progress_abs[env_ids], self.angle_rad_tensor[env_ids])
 
         # -- position
         # rotate radius vector using Rodrigues' rotation formula
-        v_rot = self._rodrigues_rotate(
-            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
-        )
+        v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
         target_pos_b = self.axis_pos_b[env_ids] + v_rot
 
         # Same signed angle-axis as the position orbit. Slerping to the
@@ -1068,17 +1547,13 @@ class _RotateFrameHandler(_BaseCmdHandler):
         return self._pack_command(self.cfg.gripper_open, target_pos_b, interp_quat_b)
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        remaining = (
-            torch.abs(self.angle_rad_tensor[env_ids]) - self._progress_abs[env_ids]
-        )
+        remaining = torch.abs(self.angle_rad_tensor[env_ids]) - self._progress_abs[env_ids]
         return remaining <= self._angle_threshold_rad
 
     def _get_rotation_axis_pose_b(self, env_ids: torch.Tensor):
         # Target pose in base frame
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
-        target_quat_w = self._frame.data.target_quat_w.torch[
-            env_ids, self._frame_idx
-        ]
+        target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
@@ -1109,10 +1584,7 @@ class _ScrewFrameHandler(_RotateFrameHandler):
     def reset(self, env_ids: torch.Tensor):
         super().reset(env_ids)
         command_term = self._command_term
-        if (
-            command_term._screw_asset is not None
-            and command_term._screw_revolute_idx is not None
-        ):
+        if command_term._screw_asset is not None and command_term._screw_revolute_idx is not None:
             self._joint_start[env_ids] = command_term._screw_asset.data.joint_pos.torch[
                 env_ids, command_term._screw_revolute_idx
             ]
@@ -1120,16 +1592,12 @@ class _ScrewFrameHandler(_RotateFrameHandler):
     def _axial_offset(self, env_ids: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
         total_angle = torch.abs(self.angle_rad_tensor[env_ids]).clamp_min(1.0e-8)
         fraction = torch.abs(angle) / total_angle
-        return (
-            self.rot_axis_b[env_ids]
-            * (fraction * float(self.cfg.axial_distance))[:, None]
-        )
+        return self.rot_axis_b[env_ids] * (fraction * float(self.cfg.axial_distance))[:, None]
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         final_pos_b, final_quat_b = super().get_target_in_base_frame(env_ids)
         return (
-            final_pos_b
-            + self.rot_axis_b[env_ids] * float(self.cfg.axial_distance),
+            final_pos_b + self.rot_axis_b[env_ids] * float(self.cfg.axial_distance),
             final_quat_b,
         )
 
@@ -1140,42 +1608,25 @@ class _ScrewFrameHandler(_RotateFrameHandler):
             self._progress_abs[env_ids] + self.cfg.angular_velocity * self._dt,
             max=abs_angle,
         )
-        angle = torch.copysign(
-            self._progress_abs[env_ids], self.angle_rad_tensor[env_ids]
-        )
+        angle = torch.copysign(self._progress_abs[env_ids], self.angle_rad_tensor[env_ids])
 
         coupling = self._command_term.cfg.screw_coupling
         if coupling is not None and coupling.command_joint_angle_scale != 0.0:
-            self._command_term._screw_revolute_target[env_ids] = (
-                self._joint_start[env_ids]
-                + angle * float(coupling.command_joint_angle_scale)
+            self._command_term._screw_revolute_target[env_ids] = self._joint_start[env_ids] + angle * float(
+                coupling.command_joint_angle_scale
             )
 
-        v_rot = self._rodrigues_rotate(
-            self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle
-        )
-        target_pos_b = (
-            self.axis_pos_b[env_ids]
-            + v_rot
-            + self._axial_offset(env_ids, angle)
-        )
+        v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
+        target_pos_b = self.axis_pos_b[env_ids] + v_rot + self._axial_offset(env_ids, angle)
         delta_q = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
-        target_quat_b = math_utils.quat_mul(
-            delta_q, self.initial_quat_b[env_ids]
-        )
-        return self._pack_command(
-            self.cfg.gripper_open, target_pos_b, target_quat_b
-        )
+        target_quat_b = math_utils.quat_mul(delta_q, self.initial_quat_b[env_ids])
+        return self._pack_command(self.cfg.gripper_open, target_pos_b, target_quat_b)
 
 
-class _CuroboPlannedRotateFrameHandler(
-    _CuroboPlannedGoToFrameHandler, _RotateFrameHandler
-):
+class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFrameHandler):
     """Solve the complete valve arc as ordered cuRobo IK joint waypoints."""
 
-    def __init__(
-        self, cfg: "CuroboPlannedRotateFrameCfg", command_term: SequentialPoseCommand
-    ):
+    def __init__(self, cfg: "CuroboPlannedRotateFrameCfg", command_term: SequentialPoseCommand):
         # Initialize the mechanical rotation geometry, then the cuRobo state.
         _RotateFrameHandler.__init__(self, cfg, command_term)
         self.cfg: CuroboPlannedRotateFrameCfg
@@ -1183,9 +1634,8 @@ class _CuroboPlannedRotateFrameHandler(
         self._waypoint_quat_b = None
         self._joint_waypoints = None
         self._joint_target = None
-        self._waypoint_index = torch.zeros(
-            self._num_envs, dtype=torch.long, device=self._device
-        )
+        self._waypoint_index = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
+        self._fallback = False
 
     def reset(self, env_ids: torch.Tensor):
         _RotateFrameHandler.reset(self, env_ids)
@@ -1194,10 +1644,9 @@ class _CuroboPlannedRotateFrameHandler(
         self._joint_waypoints = None
         self._joint_target = None
         self._waypoint_index[env_ids] = 0
+        self._fallback = False
         if len(env_ids) != self._num_envs:
-            raise RuntimeError(
-                "CuroboPlannedRotateFrameCfg currently requires synchronized environments."
-            )
+            raise RuntimeError("CuroboPlannedRotateFrameCfg currently requires synchronized environments.")
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return _RotateFrameHandler.get_target_in_base_frame(self, env_ids)
@@ -1205,9 +1654,7 @@ class _CuroboPlannedRotateFrameHandler(
     def _plan(self, env_ids: torch.Tensor) -> None:
         """Retarget the complete Cartesian arc from the current grasp state."""
         if len(env_ids) != 1:
-            raise RuntimeError(
-                "CuroboPlannedRotateFrameCfg currently supports one environment."
-            )
+            raise RuntimeError("CuroboPlannedRotateFrameCfg currently supports one environment.")
 
         from isaaclab_hiveboard.assets import ASSET_DIR
         from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
@@ -1226,45 +1673,47 @@ class _CuroboPlannedRotateFrameHandler(
                 self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
             )
             tool_frame = robot_cfg["robot_cfg"]["kinematics"]["tool_frames"][0]
-            with torch.inference_mode(False):
-                retargeter = MotionRetargeter(
-                    MotionRetargeterCfg.create(
-                        robot=robot_cfg,
-                        tool_pose_criteria={
-                            tool_frame: ToolPoseCriteria.track_position_and_orientation(
-                                xyz=[1.0, 1.0, 1.0],
-                                rpy=[1.0, 1.0, 1.0],
-                                non_terminal_scale=1.0,
-                            )
-                        },
-                        num_envs=1,
-                        use_mpc=False,
-                        self_collision_check=False,
-                        scene_model=None,
-                        load_collision_spheres=False,
-                        optimization_dt=self._dt,
-                        num_seeds_global=self.cfg.num_ik_seeds,
-                        num_seeds_local=1,
-                        position_tolerance=0.002,
-                        orientation_tolerance=0.02,
-                        device_cfg=DeviceCfg(),
-                    )
-                )
+            cache_key = (
+                "retargeter",
+                self.cfg.robot_curobo_yaml,
+                self.cfg.robot_urdf,
+                self.cfg.num_ik_seeds,
+            )
 
+            def _make_retargeter() -> MotionRetargeter:
+                with torch.inference_mode(False):
+                    return MotionRetargeter(
+                        MotionRetargeterCfg.create(
+                            robot=robot_cfg,
+                            tool_pose_criteria={
+                                tool_frame: ToolPoseCriteria.track_position_and_orientation(
+                                    xyz=[1.0, 1.0, 1.0],
+                                    rpy=[1.0, 1.0, 1.0],
+                                    non_terminal_scale=1.0,
+                                )
+                            },
+                            num_envs=1,
+                            use_mpc=False,
+                            self_collision_check=False,
+                            scene_model=None,
+                            load_collision_spheres=False,
+                            optimization_dt=self._dt,
+                            num_seeds_global=self.cfg.num_ik_seeds,
+                            num_seeds_local=1,
+                            position_tolerance=0.002,
+                            orientation_tolerance=0.02,
+                            device_cfg=DeviceCfg(),
+                        )
+                    )
+
+            retargeter, _ = self._command_term.get_curobo_solver(cache_key, _make_retargeter)
+
+            if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+                raise ValueError("CuroboPlannedRotateFrameCfg requires pose_command.body_offset")
             try:
-                if (
-                    self._command_term._offset_pos is None
-                    or self._command_term._offset_rot is None
-                ):
-                    raise ValueError(
-                        "CuroboPlannedRotateFrameCfg requires pose_command.body_offset"
-                    )
-
                 final_angle = self.angle_rad_tensor[env_ids][0]
                 step_angle = self.cfg.angular_velocity * self._dt
-                num_steps = max(
-                    1, int(math.ceil(abs(float(final_angle.item())) / step_angle))
-                )
+                num_steps = max(1, int(math.ceil(abs(float(final_angle.item())) / step_angle)))
                 num_waypoints = num_steps + 1
                 angles = torch.linspace(
                     0.0,
@@ -1276,25 +1725,17 @@ class _CuroboPlannedRotateFrameHandler(
                 axis_b = self.rot_axis_b[env_ids].expand(num_waypoints, -1)
                 radius_b = self.radius_vec[env_ids].expand(num_waypoints, -1)
                 axis_pos_b = self.axis_pos_b[env_ids].expand(num_waypoints, -1)
-                tcp_pos_b = axis_pos_b + self._rodrigues_rotate(
-                    radius_b, axis_b, angles
-                )
+                tcp_pos_b = axis_pos_b + self._rodrigues_rotate(radius_b, axis_b, angles)
                 delta_quat_b = math_utils.quat_from_angle_axis(angles, axis_b)
                 tcp_quat_b = math_utils.quat_mul(
                     delta_quat_b,
                     self.initial_quat_b[env_ids].expand(num_waypoints, -1),
                 )
 
-                offset_pos = self._command_term._offset_pos[env_ids].expand(
-                    num_waypoints, -1
-                )
-                offset_rot = self._command_term._offset_rot[env_ids].expand(
-                    num_waypoints, -1
-                )
+                offset_pos = self._command_term._offset_pos[env_ids].expand(num_waypoints, -1)
+                offset_rot = self._command_term._offset_rot[env_ids].expand(num_waypoints, -1)
                 tcp_to_flange_quat = math_utils.quat_inv(offset_rot)
-                tcp_to_flange_pos = -math_utils.quat_apply(
-                    tcp_to_flange_quat, offset_pos
-                )
+                tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, offset_pos)
                 flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
                     tcp_pos_b,
                     tcp_quat_b,
@@ -1302,40 +1743,27 @@ class _CuroboPlannedRotateFrameHandler(
                     tcp_to_flange_quat,
                 )
 
-                joint_ids, joint_names = self._asset.find_joints(
-                    self.cfg.robot_joint_names, preserve_order=True
-                )
+                joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
                 current = JointState.from_position(
                     self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
                     joint_names=joint_names,
                 )
 
-                curobo_flange = retargeter.kinematics.compute_kinematics(
-                    current
-                ).tool_poses.get_link_pose(tool_frame)
-                isaac_flange_pos_b, isaac_flange_quat_b = (
-                    math_utils.subtract_frame_transforms(
-                        self._asset.data.root_pos_w.torch[env_ids],
-                        self._asset.data.root_quat_w.torch[env_ids],
-                        self._asset.data.body_pos_w.torch[
-                            env_ids, self._command_term._body_idx
-                        ],
-                        self._asset.data.body_quat_w.torch[
-                            env_ids, self._command_term._body_idx
-                        ],
-                    )
+                curobo_flange = retargeter.kinematics.compute_kinematics(current).tool_poses.get_link_pose(tool_frame)
+                isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
+                    self._asset.data.root_pos_w.torch[env_ids],
+                    self._asset.data.root_quat_w.torch[env_ids],
+                    self._asset.data.body_pos_w.torch[env_ids, self._command_term._body_idx],
+                    self._asset.data.body_quat_w.torch[env_ids, self._command_term._body_idx],
                 )
-                flange_quat_inv_c = math_utils.quat_inv(curobo_flange.quaternion)
-                flange_pos_inv_c = -math_utils.quat_apply(
-                    flange_quat_inv_c, curobo_flange.position
-                )
-                curobo_base_pos_b, curobo_base_quat_b = (
-                    math_utils.combine_frame_transforms(
-                        isaac_flange_pos_b,
-                        isaac_flange_quat_b,
-                        flange_pos_inv_c,
-                        flange_quat_inv_c,
-                    )
+                # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
+                flange_quat_inv_c = math_utils.quat_inv(_wxyz_to_xyzw(curobo_flange.quaternion))
+                flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
+                curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
+                    isaac_flange_pos_b,
+                    isaac_flange_quat_b,
+                    flange_pos_inv_c,
+                    flange_quat_inv_c,
                 )
                 flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
                     curobo_base_pos_b.expand(num_waypoints, -1),
@@ -1345,22 +1773,18 @@ class _CuroboPlannedRotateFrameHandler(
                 )
 
                 with torch.inference_mode(False), torch.enable_grad():
-                    current = JointState.from_position(
-                        current.position.clone(), joint_names=joint_names
-                    )
+                    current = JointState.from_position(current.position.clone(), joint_names=joint_names)
                     arc_targets = SequenceGoalToolPose(
                         tool_frames=[tool_frame],
                         position=flange_pos_c[:, None, None, None, :].clone(),
-                        quaternion=flange_quat_c[:, None, None, None, :].clone(),
+                        quaternion=_xyzw_to_wxyz(flange_quat_c[:, None, None, None, :].clone()),
                     )
                     if hasattr(retargeter, "_set_initial_joint_state"):
                         result = retargeter.solve_sequence(
                             arc_targets,
                             initial_joint_state=current,
                         )
-                        joint_waypoints = result.joint_state.reorder(
-                            joint_names
-                        ).position
+                        joint_waypoints = result.joint_state.reorder(joint_names).position
                     else:
                         # Compatibility with installed cuRobo releases that
                         # predate the initial_joint_state sequence API. This is
@@ -1377,9 +1801,7 @@ class _CuroboPlannedRotateFrameHandler(
                         ]
                         joint_waypoints = torch.stack(frame_solutions, dim=1)
 
-                max_joint_step = torch.max(
-                    torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1])
-                )
+                max_joint_step = torch.max(torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1]))
                 if max_joint_step > self.cfg.max_joint_step:
                     raise RuntimeError(
                         "cuRobo retargeted arc contains a joint discontinuity: "
@@ -1395,19 +1817,16 @@ class _CuroboPlannedRotateFrameHandler(
                     device=self._device,
                     dtype=self._joint_waypoints.dtype,
                 )
+                print(f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints for the valve arc.")
+            except Exception as err:
+                # A throwing solver must not kill the episode: degrade to
+                # direct servo like a failed plan.
                 print(
-                    f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints "
-                    f"for the valve arc."
+                    f"[WARN] cuRobo arc retarget threw ({type(err).__name__}: {err}); falling back",
+                    flush=True,
                 )
-            finally:
-                if hasattr(retargeter, "destroy"):
-                    retargeter.destroy()
-                else:
-                    retargeter._global_ik_solver.destroy()
-                    if retargeter._local_ik_solver is not None:
-                        retargeter._local_ik_solver.destroy()
-                    if retargeter._mpc_solver is not None:
-                        retargeter._mpc_solver.destroy()
+                self._fallback = True
+                return
 
 
 @configclass
@@ -1484,6 +1903,15 @@ class SequentialPoseCommandCfg(CommandTermCfg):
 
     debug_vis: bool = False
 
+    log_transitions: bool = False
+    """Log segment start/finish with per-segment durations."""
+
+    stall_timeout_s: float = 0.0
+    """Warn + dump diagnostics when a segment exceeds this duration [s]. 0 disables."""
+
+    path_debug_vis: bool = False
+    """Show the active cuRobo plan (waypoint spheres) and the next goal. Needs debug_vis."""
+
     goal_pose_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(  # type: ignore
         prim_path="/Visuals/Command/pose_goal"
     )
@@ -1537,6 +1965,12 @@ class GoToFrameCfg(BaseCmd):
     """End-effector distance to the target frame at which the command is done [m]."""
     orientation_threshold_deg: float = 10.0
     """End-effector orientation error to the target at which the command is done [deg]."""
+    valve_done_threshold_rad: float | None = None
+    """Also complete once the valve is within this of its desired angle [rad].
+
+    For contact-rich segments (e.g. the valve arc) the TCP can hold centimeters
+    off-target while the task is physically done. None disables.
+    """
     canonicalize_upward: bool = True
     """If True, flip the target 180° about TCP +X when TCP +Z points down.
 
@@ -1559,7 +1993,13 @@ class CuroboPlannedGoToFrameCfg(GoToFrameCfg):
     robot_curobo_yaml: str | None = None
     robot_urdf: str | None = None
     num_ik_seeds: int = 4
+    num_trajopt_seeds: int = 1
+    max_plan_attempts: int = 1
     interpolation_buffer_size: int = 128
+    reference_pos_env: tuple[tuple[float, float, float], ...] | None = None
+    """Dense env-frame TCP positions steering the plan (retargeted, not free)."""
+    reference_quat_xyzw: tuple[tuple[float, float, float, float], ...] | None = None
+    """Dense TCP orientations (x, y, z, w) matching :attr:`reference_pos_env`."""
 
 
 @configclass

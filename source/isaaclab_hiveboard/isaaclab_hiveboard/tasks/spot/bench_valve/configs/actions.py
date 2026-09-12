@@ -15,8 +15,6 @@ from isaaclab_hiveboard.assets.spot.bench import ARM_JOINT_NAMES, TCP_SITE_POS
 from isaaclab_hiveboard.mdp.pose_actions import OffsetDifferentialIKAction
 
 
-
-
 @configclass
 class SpotBenchJointActionCfg:
     """Absolute arm + gripper joint positions from the website clip."""

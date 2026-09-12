@@ -61,6 +61,12 @@ def _route_command(env, command: torch.Tensor) -> torch.Tensor:
         return torch.cat((command[:, 1:8], command[:, 0:1]), dim=-1)
     if terms == ["arm_action", "gripper_action"] and dims == [3, 1]:
         return torch.cat((command[:, 1:4], command[:, 0:1]), dim=-1)
+    if terms == ["arm_action", "gripper_action"] and dims == [6, 1]:
+        # CuroboJointPositionAction ignores its input (command waypoints drive
+        # it directly); the gripper still takes the command's open/close bit.
+        return torch.cat((torch.zeros_like(command[:, 1:7]), command[:, 0:1]), dim=-1)
+    if terms == ["gripper_action", "arm_action"] and dims == [1, 6]:
+        return torch.cat((command[:, 0:1], torch.zeros_like(command[:, 1:7])), dim=-1)
     if terms == ["arm_action"] and dims == [7]:
         return command
     return command
@@ -153,13 +159,30 @@ def _print_pose(base, step: int, env_index: int) -> None:
     target_quat_b = _as_torch(target_quat_b)
     pos_err = torch.linalg.vector_norm(ee_pos_b - target_pos_b, dim=-1)
     ori_err = math_utils.quat_error_magnitude(ee_quat_b, target_quat_b)
+    ee_rpy_deg = torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(ee_quat_b), dim=-1))
+    target_rpy_deg = torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(target_quat_b), dim=-1))
     print(
         f"[POSE] env={debug_env} ee_pos_b={ee_pos_b.cpu().tolist()} "
         f"target_pos_b={target_pos_b.cpu().tolist()} "
         f"pos_err={pos_err.cpu().tolist()} "
+        f"ee_quat_b(xyzw)={ee_quat_b.cpu().tolist()} "
+        f"target_quat_b(xyzw)={target_quat_b.cpu().tolist()} "
+        f"ee_rpy_deg={ee_rpy_deg.cpu().tolist()} "
+        f"target_rpy_deg={target_rpy_deg.cpu().tolist()} "
         f"ori_err_deg={torch.rad2deg(ori_err).cpu().tolist()}",
         flush=True,
     )
+    handler = handlers[active_idx]
+    if getattr(handler, "_fallback", None) is not None:
+        waypoints = getattr(handler, "_waypoint_pos_b", None)
+        waypoint_index = getattr(handler, "_waypoint_index", None)
+        total = int(waypoints.shape[1]) if waypoints is not None else 0
+        index = int(waypoint_index[env_ids].item()) if waypoint_index is not None else 0
+        print(
+            f"[POSE] env={debug_env} handler={type(handler).__name__} "
+            f"curobo_fallback={bool(handler._fallback)} waypoint={index}/{total}",
+            flush=True,
+        )
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:

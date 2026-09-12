@@ -57,6 +57,24 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-CuroboValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.curobo_valve.env:SpotCuroboValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-CuroboValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.curobo_valve.env:SpotCuroboValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Spot-Gains-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

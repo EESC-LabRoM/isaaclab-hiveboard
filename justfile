@@ -19,6 +19,10 @@ play-spot-ball-valve:
 play-spot-bench-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-BenchValve-Play-v0"
 
+# Play Spot bench valve with each Cartesian leg planned by cuRobo
+play-spot-curobo-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-CuroboValve-Play-v0" --pose-debug
+
 # Play robot-only Spot clip (PD gain eval)
 play-spot-gains:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Gains-Play-v0"

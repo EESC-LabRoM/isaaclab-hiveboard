@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,10 @@ from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab_hiveboard.assets.spot.bench import (
     ARM_JOINT_NAMES,
     BOARD_INTO,
+    HOME_ARM,
     TCP_SITE_POS,
     TCP_SITE_QUAT_XYZW,
+    TRAJECTORY_JSON,
     TRAJ_RATE_HZ,
     VALVE_JOINT_CLOSED,
     VALVE_JOINT_OPEN,
@@ -452,6 +455,125 @@ def retarget(
             "err_rot_deg": round(math.degrees(rot_err), 2),
         })
     return np.round(q_out, 6).tolist(), key_report
+
+
+@dataclass
+class BenchKeyMove:
+    """One traj_edit bead as a wrist-frame Cartesian target."""
+
+    pos: tuple[float, float, float]
+    quat_xyzw: tuple[float, float, float, float]
+    gripper_open: bool
+    complete_on_valve: bool = False
+    """Advance past this bead once the valve reaches its goal (for arc beads)."""
+
+
+@dataclass
+class BenchKeyHold:
+    """Gripper hold inserted between coincident beads."""
+
+    gripper_open: bool
+    duration_s: float
+
+
+BenchKeyStep = BenchKeyMove | BenchKeyHold
+
+_SITE_ROTATION = torch.tensor(TCP_SITE_QUAT_XYZW, dtype=torch.float32)
+_FLIP_X = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+
+
+def site_to_wrist_quat(site_quat: torch.Tensor) -> torch.Tensor:
+    """Convert an editor TCP-site orientation to the wrist frame.
+
+    Strip the fixed site offset, then apply a local-X flip only when the
+    stripped orientation is upside down (|roll| > 90 deg). The flip keeps the
+    gripper right-side up without twisting home beads, whose site quaternions
+    already strip to an upright wrist.
+    """
+    stripped = math_utils.quat_mul(site_quat, math_utils.quat_inv(_SITE_ROTATION))
+    roll_deg = abs(
+        float(torch.rad2deg(torch.stack(math_utils.euler_xyz_from_quat(stripped.unsqueeze(0)), dim=-1)[0, 0]))
+    )
+    if roll_deg > 90.0:
+        return math_utils.quat_mul(stripped, _FLIP_X)
+    return stripped
+
+
+def _load_keys_and_site(
+    payload_path: str | Path,
+) -> tuple[list[dict], "np.ndarray", "np.ndarray", float]:
+    """Enabled beads, dense site-frame path, and rate from a trajectory file."""
+    payload_path = Path(payload_path)
+    payload = json.loads(payload_path.read_text())
+    keys = [key for key in payload.get("keys", []) if not key.get("off") and key.get("pos") is not None]
+    if not keys:
+        raise ValueError(f"Trajectory {payload_path} has no enabled position keys")
+    rate = float(payload.get("rate", 50))
+    if not math.isfinite(rate) or rate <= 0:
+        raise ValueError("Trajectory rate must be positive and finite")
+    pitch = HOME_ARM[1] + HOME_ARM[2] + HOME_ARM[4]
+    home_wrist = torch.tensor([0.0, math.sin(pitch / 2), 0.0, math.cos(pitch / 2)])
+    home_site = math_utils.quat_mul(home_wrist, _SITE_ROTATION).numpy()
+    pos, site_quats, _, _ = expand_keys(keys, max(int(k["sample"]) for k in keys) + 1, home_site)
+    return keys, pos, site_quats, rate
+
+
+def bench_key_steps(payload_path: str | Path = TRAJECTORY_JSON) -> list[BenchKeyStep]:
+    """Ordered traj_edit beads as wrist-frame targets plus gripper holds.
+
+    Single source of truth for the bench trajectory, shared by the bench and
+    cuRobo command configs so both envs track identical Cartesian targets.
+    """
+    keys, _, site_quats, rate = _load_keys_and_site(payload_path)
+    steps: list[BenchKeyStep] = []
+    previous = None
+    for key in keys:
+        pos = tuple(float(v) for v in key["pos"])
+        if len(pos) != 3 or not all(math.isfinite(v) for v in pos):
+            raise ValueError(f"Invalid key position: {key!r}")
+        site_quat = torch.tensor(site_quats[int(key["sample"])], dtype=torch.float32)
+        quat_xyzw = tuple(float(v) for v in site_to_wrist_quat(site_quat).tolist())
+        gripper_open = float(key["grip"]) < -0.9
+        steps.append(
+            BenchKeyMove(
+                pos=pos,
+                quat_xyzw=quat_xyzw,
+                gripper_open=gripper_open,
+                complete_on_valve=str(key.get("kind", "pose")) == "arc",
+            )
+        )
+        if previous is not None and math.dist(pos, previous["pos"]) < 0.001:
+            duration = (int(key["sample"]) - int(previous["sample"])) / rate
+            if duration > 0:
+                steps.append(BenchKeyHold(gripper_open=gripper_open, duration_s=duration))
+        previous = key
+    return steps
+
+
+def bench_arc_reference(
+    payload_path: str | Path = TRAJECTORY_JSON,
+) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float, float]]] | None:
+    """Dense wrist-frame Cartesian reference along the grasp-to-arc swing.
+
+    Returns env-frame (positions, xyzw quaternions) sampled at the trajectory
+    rate, or None when the payload has no grasp/arc bead pair. Feed it to the
+    cuRobo solver so the turn follows the authored arc instead of a free
+    start-to-goal shortcut.
+    """
+    keys, pos, site_quats, _ = _load_keys_and_site(payload_path)
+    grasp = next((k for k in keys if k.get("label") == "grasp"), None)
+    arc = next((k for k in keys if k.get("kind") == "arc"), None)
+    if grasp is None or arc is None:
+        return None
+    start, end = int(grasp["sample"]), int(arc["sample"])
+    if end <= start:
+        return None
+    ref_pos = [tuple(float(v) for v in pos[s]) for s in range(start, end + 1)]
+    ref_quat = []
+    for s in range(start, end + 1):
+        wrist = site_to_wrist_quat(torch.tensor(site_quats[s], dtype=torch.float32))
+        ref_quat.append(tuple(float(v) for v in wrist.tolist()))
+    return ref_pos, ref_quat
 
 
 def print_key_report(key_report: list[dict]) -> None:

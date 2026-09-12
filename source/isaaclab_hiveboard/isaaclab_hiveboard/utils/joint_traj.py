@@ -44,8 +44,12 @@ class JointTrajDumper:
         self._robot = self._env.scene["robot"]
         self._dt = float(self._env.cfg.sim.dt) * float(self._env.cfg.decimation)
         self._action = self._env.action_manager.get_term("arm_action")
-        self._joint_ids = self._action._joint_ids
+        self._joint_ids = list(self._action._joint_ids)
         self._joint_names = list(self._action._joint_names)
+        if "gripper_action" in self._env.action_manager.active_terms:
+            gripper_action = self._env.action_manager.get_term("gripper_action")
+            self._joint_ids.extend(gripper_action._joint_ids)
+            self._joint_names.extend(gripper_action._joint_names)
         self._contact_names = [
             name for name in self._env.scene.keys() if str(name).endswith("_contact")
         ]

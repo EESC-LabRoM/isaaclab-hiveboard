@@ -1,0 +1,15 @@
+# Kinematics-only cuRobo v2 configuration for the Spot arm.
+# Arm-only by design: the 12 leg joints are excluded from the cspace below
+# (verified: the built planner reports exactly these 6 joints). In sim the
+# legs are PD-held by the fixed_legs actuator, so cuRobo never commands them.
+# The loader replaces ``urdf_path`` with an absolute, package-local path.
+robot_cfg:
+  kinematics:
+    format_version: 2.0
+    urdf_path: ../spot_with_arm.urdf
+    base_link: body
+    tool_frames: [arm_link_wr1]
+    cspace:
+      joint_names: [arm_sh0, arm_sh1, arm_el0, arm_el1, arm_wr0, arm_wr1]
+      default_joint_position: [0.0, -1.9, 2.0, 0.0, -0.6, 0.0]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
