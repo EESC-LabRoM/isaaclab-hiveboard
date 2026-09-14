@@ -74,7 +74,7 @@ class SpotBenchValveEnvCfg(ManagerBasedRLEnvCfg):
         # 500 Hz physics / 10 = 50 Hz, matching the website clip.
         self.decimation = DECIMATION
         # Allow feedback-driven moves and the authored gripper holds to finish.
-        self.episode_length_s = 30.0
+        self.episode_length_s = 10.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"

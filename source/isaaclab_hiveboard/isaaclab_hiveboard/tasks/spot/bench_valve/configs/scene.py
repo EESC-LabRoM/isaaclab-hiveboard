@@ -9,8 +9,9 @@ from isaaclab.actuators.actuator_pd_cfg import ImplicitActuatorCfg
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.utils.configclass import configclass
+from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
 import isaaclab.sim as sim_utils
 
@@ -56,15 +57,15 @@ class BenchValveSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = SPOT_ARM_BENCH_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # ground = AssetBaseCfg(
-    #     prim_path="/World/Ground",
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(20.0, 20.0, 0.1),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
-    #     collision_group=-1,
-    # )
+    ground = AssetBaseCfg(
+        prim_path="/World/Ground",
+        spawn=sim_utils.CuboidCfg(
+            size=(20.0, 20.0, 0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
+        collision_group=-1,
+    )
 
     light = AssetBaseCfg(
         prim_path="/World/light",
@@ -145,3 +146,20 @@ class BenchValveSceneCfg(InteractiveSceneCfg):
     wr0_contact: ContactSensorCfg = _valve_contact(SPOT_ARM_UUC_WR0_PRIM)
     el1_contact: ContactSensorCfg = _valve_contact(SPOT_ARM_UUC_EL1_PRIM)
     el0_contact: ContactSensorCfg = _valve_contact(SPOT_ARM_UUC_EL0_PRIM)
+
+    scene_cam: CameraCfg = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/scene_cam",
+        offset=CameraCfg.OffsetCfg(
+            pos=(0.2, -2.1, 0.9),
+            rot=(-0.02862, 0.03624, 0.61917, 0.78390),
+            convention="world",
+        ),
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
+        ),
+        width=1920,
+        height=1080,
+        update_period=0.0,
+        renderer_cfg=NewtonWarpRendererCfg(enable_shadows=True),
+    )

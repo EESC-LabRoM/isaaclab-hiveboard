@@ -195,3 +195,18 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
     diffusion_policy: DiffusionPolicyCfg = DiffusionPolicyCfg()
     evaluation: EvaluationCfg = EvaluationCfg()
+
+    @configclass
+    class CameraObsCfg(ObsGroup):
+        """Fixed scene-camera RGB frames (unnormalized uint8) for video recording."""
+
+        scene_rgb = ObsTerm(
+            func=mdp.image,
+            params={"sensor_cfg": SceneEntityCfg("scene_cam"), "data_type": "rgb", "normalize": False},
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    camera: CameraObsCfg = CameraObsCfg()

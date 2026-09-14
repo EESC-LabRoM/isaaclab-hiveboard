@@ -100,6 +100,63 @@ def _force_norm(forces) -> float:
     return float(torch.linalg.vector_norm(tensor.reshape(-1, 3), dim=-1).max().item())
 
 
+def _video_slug(task_id: str) -> str:
+    name = task_id.split(":")[-1]
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
+
+
+def _open_ffmpeg_writer(path: str, width: int, height: int, fps: int):
+    """Open a streaming ffmpeg writer for raw RGB24 frames (kitless, no pip deps)."""
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise SystemExit("--video needs the `ffmpeg` binary on PATH.")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-framerate",
+        str(fps),
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        "18",
+        str(path),
+    ]
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def _read_scene_rgb(base, env_index: int):
+    """Read the latest scene_cam RGB frame as a contiguous uint8 (H, W, 3) array."""
+    import numpy as np
+
+    cam = base.scene["scene_cam"]
+    out = cam.data.output.get("rgb", None)
+    if out is None:
+        return None
+    tensor = out.torch if hasattr(out, "torch") else out
+    idx = min(max(int(env_index), 0), tensor.shape[0] - 1)
+    frame = tensor[idx].detach().cpu().numpy()
+    if frame.ndim != 3 or frame.shape[2] < 3:
+        return None
+    if frame.shape[2] > 3:
+        frame = frame[:, :, :3]
+    if frame.dtype != np.uint8:
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(frame)
+
+
 def _print_contact(base, step: int, env_index: int) -> None:
     debug_env = min(env_index, base.num_envs - 1)
     report = {}
@@ -242,6 +299,31 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         action="store_true",
         help="Disable joint tracking logs even for joint-trajectory tasks.",
     )
+    parser.add_argument(
+        "--video",
+        action="store_true",
+        default=False,
+        help="Save scene_cam RGB frames to MP4 (kitless Newton Warp; keeps the live window open).",
+    )
+    parser.add_argument(
+        "--video-folder",
+        default=os.path.join("videos", "curobo_valve"),
+        help="Directory for the output MP4 (default: videos/curobo_valve).",
+    )
+    parser.add_argument(
+        "--video-fps",
+        type=int,
+        default=50,
+        help="Output video framerate (default: 50, matching the 50 Hz bench/curobo control rate for real-time playback).",
+    )
+    parser.add_argument(
+        "--video-name",
+        default=None,
+        help="Output filename (default: <task-slug>-<timestamp>.mp4).",
+    )
+    parser.add_argument(
+        "--video-env", type=int, default=0, help="Environment index to record (default: 0)."
+    )
     add_launcher_args(parser)
     args, hydra_args = setup_preset_cli(parser)
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
@@ -334,6 +416,25 @@ def main() -> int:
             print(f"[INFO] Joint tracking log: {out_dir}")
 
         count = 0
+        video_proc = None
+        video_path = None
+        video_frames = 0
+        if args.video:
+            if "scene_cam" not in base.scene.keys():
+                raise SystemExit(
+                    f"--video needs a 'scene_cam' sensor in the scene (task {args.task} has none)."
+                )
+            cam_cfg = base.scene["scene_cam"].cfg
+            video_width, video_height = int(cam_cfg.width), int(cam_cfg.height)
+            os.makedirs(args.video_folder, exist_ok=True)
+            video_name = args.video_name or (
+                f"{_video_slug(args.task)}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
+            )
+            if not video_name.endswith(".mp4"):
+                video_name += ".mp4"
+            video_path = os.path.join(args.video_folder, video_name)
+            video_proc = _open_ffmpeg_writer(video_path, video_width, video_height, args.video_fps)
+            print(f"[INFO] Recording scene_cam to {video_path} ({video_width}x{video_height} @ {args.video_fps}fps)")
         try:
             while True:
                 if base.sim.visualizers and not _visualizers_alive(base.sim):
@@ -358,6 +459,15 @@ def main() -> int:
                 count += 1
                 if joint_log is not None:
                     joint_log.sample(count, action)
+                if video_proc is not None:
+                    frame = _read_scene_rgb(base, args.video_env)
+                    if frame is not None:
+                        try:
+                            video_proc.stdin.write(frame.tobytes())
+                            video_frames += 1
+                        except BrokenPipeError:
+                            print("[WARN] ffmpeg closed early; stopping video.", file=sys.stderr)
+                            video_proc = None
 
                 log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
                 if log_now and args.contact_debug:
@@ -379,6 +489,13 @@ def main() -> int:
                     joint_term.print_key_errors(args.pose_debug_env)
             if joint_log is not None and joint_log._rows:
                 joint_log.save()
+            if video_proc is not None:
+                try:
+                    video_proc.stdin.close()
+                    video_proc.wait(timeout=60)
+                except Exception as err:  # noqa: BLE001
+                    print(f"[WARN] Finalizing video failed: {err}", file=sys.stderr)
+                print(f"[INFO] Saved {video_frames} frames to {video_path}")
             env.close()
 
     print(f"[INFO] Played {count} steps.")
