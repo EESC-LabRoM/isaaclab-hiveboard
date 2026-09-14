@@ -25,11 +25,13 @@ dependencies = [
     "usd-exchange==2.3.0",
     "imgui-bundle>=1.92.601",
     "h5py>=3.16.0",
+    "nvidia-curobo[cu13]",
+    "viser>=0.2.11",
 ]
 
 [project.optional-dependencies]
 cameras = ["isaacsim[all,extscache]==6.0.1"]
-curobo = ["nvidia-curobo[cu12]"]
+curobo = ["nvidia-curobo[cu13]"]
 data = [
     "diffusers>=0.36.0",
     "dill>=0.3.5.1",
@@ -44,7 +46,7 @@ data = [
 url = "https://pypi.nvidia.com/"
 
 [tool.uv.sources]
-nvidia-curobo = { git = "https://github.com/NVlabs/curobo.git" }
+nvidia-curobo = { path = "dependencies/curobo", editable = true }
 isaaclab = { path = "dependencies/IsaacLab/source/isaaclab", editable = true }
 isaaclab-assets = { path = "dependencies/IsaacLab/source/isaaclab_assets", editable = true }
 isaaclab-contrib = { path = "dependencies/IsaacLab/source/isaaclab_contrib", editable = true }

@@ -39,6 +39,10 @@ retarget-spot-traj *args:
 edit-spot-traj *args:
     uv run python scripts/traj_edit.py {{args}} physics=newton_mjwarp --visualizer none
 
+# Build Spot ball-valve EE paths: Newton beads + terminal goal editor
+build-valve-path *args:
+    uv run python scripts/valve_path_tui.py {{args}} physics=newton_mjwarp --visualizer newton
+
 # Search Spot arm/gripper PD gains on the robot-only clip
 optimize-spot-gains joints="all" num_envs="16" max_evals="80":
     uv run python scripts/optimize_spot_gains.py --optimize \
