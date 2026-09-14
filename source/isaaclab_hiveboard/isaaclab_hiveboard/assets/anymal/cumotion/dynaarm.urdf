@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- Kinematics-only DynaArm model for cuRobo planning. Transforms, joint
+     names, axes and limits match the committed arm-only URDF
+     (assets/anymal/urdf/dynaarm.urdf); simulation owns geometry. -->
+<robot name="dynaarm">
+  <link name="arm_mount"/>
+  <link name="dynaarm_base"/>
+  <joint name="dynaarm_joint_base" type="fixed"><origin xyz="0 0 0" rpy="0 0 0"/><parent link="arm_mount"/><child link="dynaarm_base"/></joint>
+  <link name="dynaarm_shoulder"/>
+  <joint name="dynaarm_shoulder_rotation" type="revolute"><origin xyz="0 0 0.1105" rpy="0 0 0"/><parent link="dynaarm_base"/><child link="dynaarm_shoulder"/><axis xyz="0 0 1"/><limit lower="-4.312388980385" upper="4.312388980385" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_upperarm"/>
+  <joint name="dynaarm_shoulder_flexion" type="revolute"><origin xyz="0 0 0.047" rpy="1.570796326795 -1.570796326795 0"/><parent link="dynaarm_shoulder"/><child link="dynaarm_upperarm"/><axis xyz="0 0 1"/><limit lower="-1.720796326795" upper="1.720796326795" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_elbow"/>
+  <joint name="dynaarm_elbow_flexion" type="revolute"><origin xyz="0.4127 0 0" rpy="0 0 0"/><parent link="dynaarm_upperarm"/><child link="dynaarm_elbow"/><axis xyz="0 0 1"/><limit lower="0.0" upper="3.09159265359" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_forearm"/>
+  <joint name="dynaarm_forearm_rotation" type="revolute"><origin xyz="0.0262 -0.0855 0" rpy="1.570796326795 1.570796326795 1.570796326795"/><parent link="dynaarm_elbow"/><child link="dynaarm_forearm"/><axis xyz="0 0 1"/><limit lower="-4.712388980385" upper="4.712388980385" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_wrist_1"/>
+  <joint name="dynaarm_wrist_flexion" type="revolute"><origin xyz="0.0295 0 0.4207" rpy="0 -1.570796326795 0"/><parent link="dynaarm_forearm"/><child link="dynaarm_wrist_1"/><axis xyz="0 0 1"/><limit lower="-1.820796326795" upper="1.820796326795" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_wrist_2"/>
+  <joint name="dynaarm_wrist_rotation" type="revolute"><origin xyz="0.117 0.0 0.0295" rpy="-1.570796326795 1.570796326795 -1.570796326795"/><parent link="dynaarm_wrist_1"/><child link="dynaarm_wrist_2"/><axis xyz="0 0 1"/><limit lower="-1.570796326795" upper="4.712388980385" effort="40" velocity="4"/></joint>
+  <link name="dynaarm_flange"/>
+  <joint name="dynaarm_flange_fix_joint" type="fixed"><origin xyz="0.0 0.0 0.009" rpy="0.0 0.0 1.570796326795"/><parent link="dynaarm_wrist_2"/><child link="dynaarm_flange"/></joint>
+</robot>

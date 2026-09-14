@@ -91,3 +91,25 @@ gym.register(
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.gains.env:SpotGainsEnvCfg_PLAY",
     },
 )
+
+##
+# ANYmal Environments
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CuroboValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.curobo_valve.env:AnymalCuroboValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CuroboValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.curobo_valve.env:AnymalCuroboValveEnvCfg_PLAY",
+    },
+)

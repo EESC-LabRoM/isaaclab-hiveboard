@@ -1,0 +1,14 @@
+# Kinematics-only cuRobo v2 configuration for the Duatic DynaArm (ANYmal).
+# Arm-only by design: the ANYmal legs are PD-held / fixed in sim, so cuRobo
+# never commands them. Mirrors spot_arm.yaml: the loader replaces
+# ``urdf_path`` with an absolute, package-local path.
+robot_cfg:
+  kinematics:
+    format_version: 2.0
+    urdf_path: dynaarm.urdf
+    base_link: arm_mount
+    tool_frames: [dynaarm_flange]
+    cspace:
+      joint_names: [dynaarm_shoulder_rotation, dynaarm_shoulder_flexion, dynaarm_elbow_flexion, dynaarm_forearm_rotation, dynaarm_wrist_flexion, dynaarm_wrist_rotation]
+      default_joint_position: [0.0, 0.0, 1.7, 0.0, 0.0, 1.5708]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

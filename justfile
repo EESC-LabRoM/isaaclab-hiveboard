@@ -23,6 +23,10 @@ play-spot-bench-valve:
 play-spot-curobo-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-CuroboValve-Play-v0" --pose-debug
 
+# Play ANYmal bench valve with each Cartesian leg planned by cuRobo (DynaArm)
+play-anymal-curobo-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-CuroboValve-Play-v0" --pose-debug
+
 # Play robot-only Spot clip (PD gain eval)
 play-spot-gains:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-Gains-Play-v0"
@@ -80,6 +84,10 @@ strip-obj-unused-verts:
 # Regenerate Newton USD assets (UUC conversion + valve CoACD overlay)
 generate-newton-usd *args:
     uv run python scripts/generate_newton_usd.py {{args}}
+
+# Bake kitless ANYmal-D + DynaArm + Robotiq USD (fetch Nucleus, author arm, weld)
+generate-anymal-usd *args:
+    uv run python scripts/generate_anymal_newton_usd.py {{args}}
 
 # Precompute Spot reachable reset state cache
 precompute-cache:

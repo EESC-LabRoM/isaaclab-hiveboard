@@ -21,15 +21,15 @@ class SpotGainsSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = SPOT_ARM_GAINS_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    ground = AssetBaseCfg(
-        prim_path="/World/Ground",
-        spawn=sim_utils.CuboidCfg(
-            size=(20.0, 20.0, 0.1),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
-        collision_group=-1,
-    )
+    # ground = AssetBaseCfg(
+    #     prim_path="/World/Ground",
+    #     spawn=sim_utils.CuboidCfg(
+    #         size=(20.0, 20.0, 0.1),
+    #         collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
+    #     collision_group=-1,
+    # )
 
     light = AssetBaseCfg(
         prim_path="/World/light",
