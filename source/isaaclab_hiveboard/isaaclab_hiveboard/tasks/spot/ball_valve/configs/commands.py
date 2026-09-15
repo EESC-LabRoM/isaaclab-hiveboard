@@ -1,6 +1,7 @@
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import SPOT_EE, as_command_offset
+from isaaclab_hiveboard.assets.spot.constants import ARM_JOINT_NAMES
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     GoToFrameCfg,
     GripperCommand,
@@ -18,6 +19,8 @@ class FramePoseCommandsCfg:
         body_name=SPOT_EE.body_name,
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
+        output_joint_positions=True,
+        ik_joint_names=list(ARM_JOINT_NAMES[:-1]),
         valve_asset_name="ball_valve",
         valve_joint_name="RevoluteJoint",
         open_task_prob=0.0,

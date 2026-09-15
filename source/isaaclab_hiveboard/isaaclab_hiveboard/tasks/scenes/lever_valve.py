@@ -69,8 +69,12 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
             semantic_tags=[("class", "valve")],
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=SPOT_WORKSPACE.object_pos,
-            rot=(0.0, 0.0, 0.0, 1.0),
+            # The old reset event expressed the nominal valve pose in Spot's
+            # base frame as (1.0, 0.06, 0.154), with a 180-degree yaw.  Spot's
+            # base is at z=0.65, so store the equivalent world pose here. The
+            # standard reset event then adds configurable offsets to it.
+            pos=(1.0, 0.06, 0.804),
+            rot=(0.0, 0.0, 1.0, 0.0),
             joint_pos={
                 "RevoluteJoint": 0.0,
             },
@@ -84,6 +88,8 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
                 viscous_friction=0.0,
                 effort_limit_sim=2.0,
                 joint_names_expr=["RevoluteJoint"],
+                # The valve is passive. A non-zero drive would pull every
+                # custom reset angle toward its stale target on the first step.
                 stiffness=0.0,
             ),
         },
@@ -107,9 +113,7 @@ class LeverValveSceneCfg(InteractiveSceneCfg):
     target_frame = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",
         debug_vis=False,
-        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(
-            prim_path="/Visuals/ValveTransformers"
-        ),
+        visualizer_cfg=FRAME_MARKER_SMALL_CFG.replace(prim_path="/Visuals/ValveTransformers"),
         target_frames=[
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/Valve/Geometry/valvula_esfera/alavanca_pivot",

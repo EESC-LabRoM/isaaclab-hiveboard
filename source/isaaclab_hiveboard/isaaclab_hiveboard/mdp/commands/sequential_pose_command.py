@@ -9,6 +9,8 @@ import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import BaseArticulation
+from isaaclab.controllers.differential_ik import DifferentialIKController
+from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
 from isaaclab.managers import CommandTerm
@@ -54,6 +56,10 @@ def _xyzw_to_wxyz(q: torch.Tensor) -> torch.Tensor:
 def _wxyz_to_xyzw(q: torch.Tensor) -> torch.Tensor:
     """Reorder cuRobo (w, x, y, z) quaternions to Isaac Lab (x, y, z, w)."""
     return q[..., [1, 2, 3, 0]]
+
+
+def _finite(*tensors: torch.Tensor) -> bool:
+    return all(bool(torch.isfinite(tensor).all()) for tensor in tensors)
 
 
 def _pose_str(p: torch.Tensor, q: torch.Tensor) -> str:
@@ -108,6 +114,8 @@ class SequentialPoseCommand(CommandTerm):
         else:
             self._offset_pos, self._offset_rot = None, None
 
+        self._initialize_joint_output()
+
         # -- optional valve task state
         self.valve_task_goal = torch.ones(self.num_envs, device=self.device, dtype=torch.float32)
         self.valve_joint_start = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
@@ -141,21 +149,30 @@ class SequentialPoseCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         """The desired command.
 
-        The command is an 8-dimensional tensor:
-        - 1 dimension for gripper status (1 for close, -1 for open)
-        - 3 dimensions for the target end-effector position in the base frame
-        - 4 dimensions for the target end-effector orientation (quat) in the base frame
+        Default (TCP pose, 8-D):
+        - gripper status (positive open, negative close)
+        - target end-effector position in the base frame
+        - target end-effector orientation (xyzw) in the base frame
+
+        With ``output_joint_positions`` (action positions, 1 + n joints):
+        - IK joint positions in ``ik_joint_names`` order
+        - gripper status (positive open, negative close)
         """
+        if self._joint_command is not None:
+            return self._joint_command
         return self._command
 
     def _resample_command(self, env_ids: Sequence[int] | slice | None | torch.Tensor = None):
         """Resets the command sequence for the specified environments."""
+        from isaaclab_hiveboard.utils.frame_sensors import refresh_frame_sensors
+
         if isinstance(env_ids, slice) or env_ids is None:
             env_ids = torch.arange(self._env.num_envs, device=self.device)
         elif not isinstance(env_ids, torch.Tensor):
             env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         self._reset_screw_coupling(env_ids)
         self._sample_valve_task(env_ids)
+        refresh_frame_sensors(self._env)
         self._current_command_idx[env_ids] = 0
         self._seg_time[env_ids] = 0.0
         self._seg_warned[env_ids] = False
@@ -173,6 +190,85 @@ class SequentialPoseCommand(CommandTerm):
             active = env_mask & (self._current_command_idx == i)
             if torch.any(active):
                 self._command[active] = handler.update(active)
+                if self.cfg.debug_vis:
+                    target_pos, target_quat = handler.get_target_in_base_frame(torch.where(active)[0])
+                    self._target_pos_b[active] = target_pos
+                    self._target_quat_b[active] = target_quat
+        self._sync_joint_command()
+
+    def _initialize_joint_output(self) -> None:
+        """Build the optional joint-position command buffers and DLS solver."""
+        self._joint_command = None
+        self._ik_controller = None
+        self._ik_joint_ids = None
+        if not self.cfg.output_joint_positions:
+            return
+        self._ik_joint_ids = self._resolve_ik_joint_ids()
+        self._ik_jacobi_body_idx = self._body_idx - 1 if self._asset.is_fixed_base else self._body_idx
+        self._ik_jacobi_joint_ids = [int(j) + int(self._asset.num_base_dofs) for j in self._ik_joint_ids]
+        self._ik_controller = DifferentialIKController(
+            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+            num_envs=self.num_envs,
+            device=self.device,
+        )
+        self._joint_command = torch.zeros(
+            self.num_envs, len(self._ik_joint_ids) + 1, device=self.device, dtype=torch.float32
+        )
+        self._write_joint_command(self._asset.data.default_joint_pos.torch[:, self._ik_joint_ids])
+
+    def _resolve_ik_joint_ids(self) -> list[int]:
+        if not self.cfg.ik_joint_names:
+            raise ValueError("output_joint_positions requires ik_joint_names")
+        joint_ids, joint_names = self._asset.find_joints(list(self.cfg.ik_joint_names), preserve_order=True)
+        if len(joint_ids) != len(self.cfg.ik_joint_names):
+            raise ValueError(
+                f"Expected {len(self.cfg.ik_joint_names)} IK joints {list(self.cfg.ik_joint_names)}, "
+                f"found {len(joint_ids)}: {joint_names}"
+            )
+        return list(joint_ids)
+
+    def _write_joint_command(self, arm_pos: torch.Tensor) -> None:
+        self._joint_command[:, :-1] = arm_pos
+        self._joint_command[:, -1] = self._command[:, 0]
+
+    def _sync_joint_command(self) -> None:
+        """Publish IK joint targets for the current TCP command."""
+        if self._joint_command is None:
+            return
+        env_ids = slice(None)
+        target_pos_b, target_quat_b = self._tcp_pose_to_body_pose(
+            self._command[:, 1:4], self._command[:, 4:8], env_ids
+        )
+        body_pos_b, body_quat_b = self._body_pose_in_base(env_ids)
+        joint_pos = self._asset.data.joint_pos.torch[:, self._ik_joint_ids]
+        jacobian = self._body_jacobian_in_base()
+        if not _finite(body_pos_b, jacobian):
+            self._write_joint_command(joint_pos)
+            return
+        self._write_joint_command(
+            self._solve_body_ik(target_pos_b, target_quat_b, body_pos_b, body_quat_b, jacobian, joint_pos)
+        )
+
+    def _body_jacobian_in_base(self) -> torch.Tensor:
+        jacobian = self._asset.data.body_link_jacobian_w.torch[
+            :, self._ik_jacobi_body_idx, :, self._ik_jacobi_joint_ids
+        ].clone()
+        world_to_base = math_utils.matrix_from_quat(math_utils.quat_inv(self._asset.data.root_quat_w.torch))
+        jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
+        jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
+        return jacobian
+
+    def _solve_body_ik(
+        self,
+        target_pos_b: torch.Tensor,
+        target_quat_b: torch.Tensor,
+        body_pos_b: torch.Tensor,
+        body_quat_b: torch.Tensor,
+        jacobian: torch.Tensor,
+        joint_pos: torch.Tensor,
+    ) -> torch.Tensor:
+        self._ik_controller.set_command(torch.cat((target_pos_b, target_quat_b), dim=-1), body_pos_b, body_quat_b)
+        return self._ik_controller.compute(body_pos_b, body_quat_b, jacobian, joint_pos)
 
     def _initialize_valve_task(self) -> None:
         """Resolve and validate the optional valve articulation and task limits."""
@@ -446,6 +542,7 @@ class SequentialPoseCommand(CommandTerm):
 
         # Apply after handlers so ScrewFrame can publish this step's revolute target.
         self._update_screw_coupling()
+        self._sync_joint_command()
 
     def is_done(self) -> torch.Tensor:
         """Check if all commands were finished."""
@@ -561,29 +658,25 @@ class SequentialPoseCommand(CommandTerm):
         ee_pos_b, ee_quat_b = self._get_ee_in_world_frame(slice(None))
         self.current_pose_visualizer.visualize(ee_pos_b, ee_quat_b)
 
-        # cuRobo plan path (env 0): waypoint spheres + next goal
+        # Active command path (env 0): waypoint spheres + next goal
         if self.cfg.path_debug_vis and hasattr(self, "curobo_path_visualizer"):
             self._update_curobo_path_vis()
 
     def _update_curobo_path_vis(self, env_index: int = 0) -> None:
-        """Show the active cuRobo plan: spheres for positions, frames for orientations."""
+        """Show an actual cuRobo plan or the active direct command's geometry."""
+        from isaaclab_hiveboard.utils.command_path import active_command_path
+
         show = False
         if int(self._current_command_idx[env_index].item()) < len(self._command_handlers):
             handler = self._command_handlers[int(self._current_command_idx[env_index].item())]
-            if (
-                isinstance(handler, _CuroboPlannedGoToFrameHandler)
-                and not handler._fallback
-                and handler._waypoint_pos_b is not None
-                and int(handler._waypoint_pos_b.shape[1]) > 0
-            ):
+            path = active_command_path(handler, self._command, env_index)
+            if path is not None:
                 env_ids = torch.tensor([env_index], device=self.device, dtype=torch.long)
-                n = int(handler._waypoint_pos_b.shape[1])
-                pos_b = handler._waypoint_pos_b[env_ids].reshape(n, 3)
-                quat_b = handler._waypoint_quat_b[env_ids].reshape(n, 4)
+                pos_b, quat_b, next_idx = path
+                n = pos_b.shape[0]
                 root_pos = self._asset.data.root_pos_w.torch[env_ids].expand(n, -1)
                 root_quat = self._asset.data.root_quat_w.torch[env_ids].expand(n, -1)
                 pos_w, quat_w = math_utils.combine_frame_transforms(root_pos, root_quat, pos_b, quat_b)
-                next_idx = min(int(handler._waypoint_index[env_ids].item()), n - 1)
                 # Frames on ~10 sampled waypoints (always including the last)
                 # plus the next goal, so orientation twists are visible.
                 step = max(1, n // 10)
@@ -616,51 +709,47 @@ class SequentialPoseCommand(CommandTerm):
             self.curobo_path_visualizer.set_visibility(False)
             self._path_markers_visible = False
 
-    def _get_ee_in_base_frame(self, env_ids: torch.Tensor | slice):
-        """
-        To convert the end-effector pose from world frame to base frame, we do:
-        1. Get the end-effector pose in world frame   (Pwe)
-        2. Subtract the base (root) pose from the end-effector pose (Pbe = Pwb^-1 * Pwe)
-        3. Apply the fixed offset (if any) (Pbe' = Pbe * P_ee')
-        """
-
-        # End-effector pose in base frame
-        ee_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._body_idx]
-        ee_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._body_idx]
-
-        ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
+    def _body_pose_in_base(self, env_ids: torch.Tensor | slice):
+        """Commanded body (``arm_link_wr1``) pose in the robot base frame."""
+        return math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
             self._asset.data.root_quat_w.torch[env_ids],
-            ee_pos_w,
-            ee_quat_w,
+            self._asset.data.body_pos_w.torch[env_ids, self._body_idx],
+            self._asset.data.body_quat_w.torch[env_ids, self._body_idx],
         )
 
-        if self._offset_pos is not None and self._offset_rot is not None:
-            ee_pos_b, ee_quat_b = math_utils.combine_frame_transforms(
-                ee_pos_b,
-                ee_quat_b,
-                self._offset_pos[env_ids],
-                self._offset_rot[env_ids],
-            )
-        return ee_pos_b, ee_quat_b
+    def _body_pose_to_tcp_pose(self, pos: torch.Tensor, quat: torch.Tensor, env_ids: torch.Tensor | slice):
+        """Compose the flange→TCP offset onto a body pose."""
+        if self._offset_pos is None or self._offset_rot is None:
+            return pos, quat
+        return math_utils.combine_frame_transforms(
+            pos, quat, self._offset_pos[env_ids], self._offset_rot[env_ids]
+        )
+
+    def _tcp_pose_to_body_pose(self, pos: torch.Tensor, quat: torch.Tensor, env_ids: torch.Tensor | slice):
+        """Map a TCP pose back to the flange body with the inverse offset."""
+        if self._offset_pos is None or self._offset_rot is None:
+            return pos, quat
+        offset_pos = self._offset_pos[env_ids]
+        offset_rot = self._offset_rot[env_ids]
+        if offset_pos.shape[0] != pos.shape[0]:
+            offset_pos = offset_pos.expand(pos.shape[0], -1)
+            offset_rot = offset_rot.expand(pos.shape[0], -1)
+        body_from_tcp_quat = math_utils.quat_inv(offset_rot)
+        body_from_tcp_pos = -math_utils.quat_apply(body_from_tcp_quat, offset_pos)
+        return math_utils.combine_frame_transforms(pos, quat, body_from_tcp_pos, body_from_tcp_quat)
+
+    def _get_ee_in_base_frame(self, env_ids: torch.Tensor | slice):
+        """TCP pose in the robot base frame."""
+        return self._body_pose_to_tcp_pose(*self._body_pose_in_base(env_ids), env_ids)
 
     def _get_ee_in_world_frame(self, env_ids: torch.Tensor | slice):
-        """
-        To convert the end-effector pose from world frame to world frame, we do:
-        """
-        # End-effector pose in world frame
-        ee_pos_w = self._asset.data.body_pos_w.torch[env_ids, self._body_idx]
-        ee_quat_w = self._asset.data.body_quat_w.torch[env_ids, self._body_idx]
-
-        if self._offset_pos is not None and self._offset_rot is not None:
-            ee_pos_w, ee_quat_w = math_utils.combine_frame_transforms(
-                ee_pos_w,  # T01
-                ee_quat_w,  # R01
-                self._offset_pos[env_ids],  # T12
-                self._offset_rot[env_ids],  # R12
-            )
-
-        return ee_pos_w, ee_quat_w
+        """TCP pose in the world frame."""
+        return self._body_pose_to_tcp_pose(
+            self._asset.data.body_pos_w.torch[env_ids, self._body_idx],
+            self._asset.data.body_quat_w.torch[env_ids, self._body_idx],
+            env_ids,
+        )
 
 
 class _BaseCmdHandler:
@@ -752,6 +841,7 @@ class _GoToFrameHandler(_BaseCmdHandler):
         self.command_quat_b[:, 3] = 1.0
         self._held_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self._held_quat_b[:, 3] = 1.0
+        self._upward_flip = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._ori_threshold_rad = math.radians(self.cfg.orientation_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
@@ -759,6 +849,18 @@ class _GoToFrameHandler(_BaseCmdHandler):
         self.command_pos_b[env_ids] = ee_pos_b
         self.command_quat_b[env_ids] = ee_quat_b
         self._held_quat_b[env_ids] = ee_quat_b
+        self._upward_flip[env_ids] = False
+        if (
+            self.cfg.canonicalize_upward
+            and not self.cfg.hold_current_orientation
+            and self.cfg.target_position_env is None
+        ):
+            # Pick the symmetric grasp once per segment. Re-evaluating "up"
+            # every step flips the goal by 180 degrees when contact nudges a
+            # horizontal handle across +/-90 degrees, preventing completion.
+            _, target_quat_b = self.get_target_in_base_frame(env_ids)
+            upward_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
+            self._upward_flip[env_ids] = torch.abs(torch.sum(target_quat_b * upward_quat_b, dim=-1)) < 0.5
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         env_ids = torch.where(env_mask)[0]
@@ -827,7 +929,10 @@ class _GoToFrameHandler(_BaseCmdHandler):
             target_quat_w,
         )
         if self.cfg.canonicalize_upward:
-            target_quat_b = canonicalize_ee_orientation_upward(target_quat_b)
+            flip_x = target_quat_b.new_tensor([1.0, 0.0, 0.0, 0.0]).expand_as(target_quat_b)
+            target_quat_b = torch.where(
+                self._upward_flip[env_ids, None], math_utils.quat_mul(target_quat_b, flip_x), target_quat_b
+            )
         if self.cfg.hold_current_orientation:
             target_quat_b = self._held_quat_b[env_ids]
         if self.cfg.position_override_b is not None:
@@ -918,13 +1023,8 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
             try:
                 target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
-                tcp_to_flange_quat = math_utils.quat_inv(self._command_term._offset_rot[env_ids])
-                tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, self._command_term._offset_pos[env_ids])
-                flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
-                    target_pos_b,
-                    target_quat_b,
-                    tcp_to_flange_pos,
-                    tcp_to_flange_quat,
+                flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
+                    target_pos_b, target_quat_b, env_ids
                 )
                 # Skip the solver when already there (e.g. a home-to-home leg):
                 # publish the current pose/joints as a single waypoint instead
@@ -1207,15 +1307,8 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 ref_pos_w,
                 ref_quat.expand(num_waypoints, -1),
             )
-            offset_pos = self._command_term._offset_pos[rep].expand(num_waypoints, -1)
-            offset_rot = self._command_term._offset_rot[rep].expand(num_waypoints, -1)
-            tcp_to_flange_quat = math_utils.quat_inv(offset_rot)
-            tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, offset_pos)
-            flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
-                tcp_pos_b,
-                tcp_quat_b,
-                tcp_to_flange_pos,
-                tcp_to_flange_quat,
+            flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
+                tcp_pos_b, tcp_quat_b, rep
             )
             joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
             current = JointState.from_position(
@@ -1416,7 +1509,7 @@ class _GripperHandler(_BaseCmdHandler):
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         self._elapsed_s[env_mask] += self._dt
         # Hold the last pose while changing only the gripper command.
-        last_command = self._command_term.command[env_mask].clone()
+        last_command = self._command_term._command[env_mask].clone()
         last_command[:, 0] = 1.0 if self.cfg.open_gripper else -1.0
         return last_command
 
@@ -1425,8 +1518,8 @@ class _GripperHandler(_BaseCmdHandler):
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return (
-            self._command_term.command[env_ids, 1:4],
-            self._command_term.command[env_ids, 4:8],
+            self._command_term._command[env_ids, 1:4],
+            self._command_term._command[env_ids, 4:8],
         )
 
 
@@ -1744,15 +1837,8 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                     self.initial_quat_b[env_ids].expand(num_waypoints, -1),
                 )
 
-                offset_pos = self._command_term._offset_pos[env_ids].expand(num_waypoints, -1)
-                offset_rot = self._command_term._offset_rot[env_ids].expand(num_waypoints, -1)
-                tcp_to_flange_quat = math_utils.quat_inv(offset_rot)
-                tcp_to_flange_pos = -math_utils.quat_apply(tcp_to_flange_quat, offset_pos)
-                flange_pos_b, flange_quat_b = math_utils.combine_frame_transforms(
-                    tcp_pos_b,
-                    tcp_quat_b,
-                    tcp_to_flange_pos,
-                    tcp_to_flange_quat,
+                flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
+                    tcp_pos_b, tcp_quat_b, env_ids
                 )
 
                 joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
@@ -1913,6 +1999,15 @@ class SequentialPoseCommandCfg(CommandTermCfg):
     valve_ee_joint_angle_scale: float = 1.0
     """Scale from remaining valve error to the commanded EE arc angle."""
 
+    output_joint_positions: bool = False
+    """If True, ``command`` is IK joint positions plus the gripper bit.
+
+    Handlers still track a TCP pose internally. The published command matches
+    a ``JointPositionAction`` arm term followed by a binary gripper term.
+    """
+    ik_joint_names: Sequence[str] | None = None
+    """Arm joints for ``output_joint_positions``. Order is the command/action layout."""
+
     debug_vis: bool = False
 
     log_transitions: bool = False
@@ -1922,7 +2017,7 @@ class SequentialPoseCommandCfg(CommandTermCfg):
     """Warn + dump diagnostics when a segment exceeds this duration [s]. 0 disables."""
 
     path_debug_vis: bool = False
-    """Show the active cuRobo plan (waypoint spheres) and the next goal. Needs debug_vis."""
+    """Show the active GoTo/Rotate/Screw path or cuRobo plan and next goal. Needs debug_vis."""
 
     goal_pose_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(  # type: ignore
         prim_path="/Visuals/Command/pose_goal"
@@ -1988,7 +2083,10 @@ class GoToFrameCfg(BaseCmd):
     off-target while the task is physically done. None disables.
     """
     canonicalize_upward: bool = True
-    """If True, flip the target 180° about TCP +X when TCP +Z points down.
+    """If True, choose the upright TCP +X half-turn once at the segment start.
+
+    Keep that choice while following the moving reference so crossing a
+    horizontal pose does not abruptly reverse the orientation target.
 
     That assumes Spot's TCP (+Z up, +X approach). Franka TCP is +Z approach,
     +X hand-top — leave this False there so the authored frame rotation is

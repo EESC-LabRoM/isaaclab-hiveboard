@@ -508,6 +508,10 @@ def _route_command(env, command: torch.Tensor) -> torch.Tensor:
         return command
     if terms == ["gripper_action", "arm_action"] and dims == [1, 7]:
         return command
+    if terms == ["arm_action", "gripper_action"] and dims == [6, 1] and int(command.shape[-1]) == 7:
+        return command
+    if terms == ["gripper_action", "arm_action"] and dims == [1, 6] and int(command.shape[-1]) == 7:
+        return torch.cat((command[:, 6:7], command[:, 0:6]), dim=-1)
     return command
 
 

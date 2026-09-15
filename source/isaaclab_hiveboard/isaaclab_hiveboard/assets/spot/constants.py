@@ -33,7 +33,7 @@ SPOT_STOWED_JOINT_POS: dict[str, float] = {
     "arm_el0": 3.1415,
     "arm_el1": 1.5655,
     "arm_wr0": 0.00,
-    "arm_wr1": 1.5692,
+    "arm_wr1": 0.0,
     "arm_f1x": 0,
     "[fh]l_hx": 0.1,  # all left hip_x
     "[fh]r_hx": -0.1,  # all right hip_x
@@ -79,21 +79,21 @@ ARM_EFFORT_LIMIT: tuple[float, ...] = (90.9, 181.8, 90.9, 30.3, 30.3, 30.3, 15.3
 # ARM_DAMPING: tuple[float, ...] = (2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.32)
 ARM_STIFFNESS: tuple[float, ...] = (
     1020.0,  # sh0
-    10 * 255.0,  # sh1
-    10 * 204,  # el0
-    10 * 102,  # el1
-    10 * 102,  # wr0
-    10 * 102,  # wr1
+    255.0,  # sh1
+    204,  # el0
+    102,  # el1
+    102,  # wr0
+    102,  # wr1
     16,  # f1x
 )
 
 ARM_DAMPING: tuple[float, ...] = (
     10.2,
-    2.5 * 15.3,
-    2.5 * 10.2,  # Shoulder/Elbow
-    2.5 * 2.04,
-    2.5 * 2.04,
-    2.5 * 2.04,  # Wrist
+     15.3,
+     10.2,  # Shoulder/Elbow
+     2.04,
+     2.04,
+     2.04,  # Wrist
     0.32,  # Finger
 )
 ARM_ARMATURE: tuple[float, ...] = (0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.001)

@@ -20,6 +20,7 @@ from isaaclab_hiveboard.assets.spot.actuators import SpotKneeActuatorCfg
 from isaaclab_hiveboard.assets.spot.constants import (
     ARM_ARMATURE,
     ARM_DAMPING,
+    SPOT_STOWED_JOINT_POS,
     ARM_EFFORT_LIMIT,
     ARM_STIFFNESS,
     HIP_DAMPING,
@@ -158,16 +159,9 @@ SPOT_ARM_CFG = ArticulationCfg(
 # Newton MJWarp ignores runtime Implicit stiffness writes, so this config uses
 # explicit IdealPD (Lab computes torque and forwards it as joint_f).
 SPOT_ARM_UUC_USD = f"{ASSET_DIR}/spot/usd/uuc/spot_with_arm.usda"
-SPOT_ARM_UUC_BODY_PRIM = (
-    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/"
-    "arm_link_wr0/arm_link_wr1"
-)
-SPOT_ARM_UUC_WR0_PRIM = (
-    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/arm_link_wr0"
-)
-SPOT_ARM_UUC_EL1_PRIM = (
-    "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1"
-)
+SPOT_ARM_UUC_BODY_PRIM = "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/arm_link_wr0/arm_link_wr1"
+SPOT_ARM_UUC_WR0_PRIM = "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1/arm_link_wr0"
+SPOT_ARM_UUC_EL1_PRIM = "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0/arm_link_el1"
 SPOT_ARM_UUC_EL0_PRIM = "Geometry/body/arm_link_sh0/arm_link_sh1/arm_link_el0"
 SPOT_ARM_UUC_FNGR_PRIM = SPOT_ARM_UUC_BODY_PRIM + "/arm_link_fngr"
 SPOT_ARM_UUC_JAW_PRIM = SPOT_ARM_UUC_BODY_PRIM + "/arm_link_jaw"
@@ -191,7 +185,7 @@ SPOT_ARM_NEWTON_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=SPOT_DEFAULT_POS,
-        joint_pos=SPOT_DEFAULT_JOINT_POS,
+        joint_pos=SPOT_STOWED_JOINT_POS,
         joint_vel={".*": 0.0},
     ),
     actuators={
@@ -204,32 +198,53 @@ SPOT_ARM_NEWTON_CFG = ArticulationCfg(
             armature=0.01,
         ),
         "arm_sh0": IdealPDActuatorCfg(
-            joint_names_expr=["arm_sh0"], effort_limit=ARM_EFFORT_LIMIT[0], stiffness=ARM_STIFFNESS[0],
-            damping=ARM_DAMPING[0], armature=ARM_ARMATURE[0]
+            joint_names_expr=["arm_sh0"],
+            effort_limit=ARM_EFFORT_LIMIT[0],
+            stiffness=ARM_STIFFNESS[0],
+            damping=ARM_DAMPING[0],
+            armature=ARM_ARMATURE[0],
         ),
         "arm_sh1": IdealPDActuatorCfg(
-            joint_names_expr=["arm_sh1"], effort_limit=ARM_EFFORT_LIMIT[1], stiffness=ARM_STIFFNESS[1],
-            damping=ARM_DAMPING[1], armature=ARM_ARMATURE[1]
+            joint_names_expr=["arm_sh1"],
+            effort_limit=ARM_EFFORT_LIMIT[1],
+            stiffness=ARM_STIFFNESS[1],
+            damping=ARM_DAMPING[1],
+            armature=ARM_ARMATURE[1],
         ),
         "arm_el0": IdealPDActuatorCfg(
-            joint_names_expr=["arm_el0"], effort_limit=ARM_EFFORT_LIMIT[2], stiffness=ARM_STIFFNESS[2],
-            damping=ARM_DAMPING[2], armature=ARM_ARMATURE[2]
+            joint_names_expr=["arm_el0"],
+            effort_limit=ARM_EFFORT_LIMIT[2],
+            stiffness=ARM_STIFFNESS[2],
+            damping=ARM_DAMPING[2],
+            armature=ARM_ARMATURE[2],
         ),
         "arm_el1": IdealPDActuatorCfg(
-            joint_names_expr=["arm_el1"], effort_limit=ARM_EFFORT_LIMIT[3], stiffness=ARM_STIFFNESS[3],
-            damping=ARM_DAMPING[3], armature=ARM_ARMATURE[3]
+            joint_names_expr=["arm_el1"],
+            effort_limit=ARM_EFFORT_LIMIT[3],
+            stiffness=ARM_STIFFNESS[3],
+            damping=ARM_DAMPING[3],
+            armature=ARM_ARMATURE[3],
         ),
         "arm_wr0": IdealPDActuatorCfg(
-            joint_names_expr=["arm_wr0"], effort_limit=ARM_EFFORT_LIMIT[4], stiffness=ARM_STIFFNESS[4],
-            damping=ARM_DAMPING[4], armature=ARM_ARMATURE[4]
+            joint_names_expr=["arm_wr0"],
+            effort_limit=ARM_EFFORT_LIMIT[4],
+            stiffness=ARM_STIFFNESS[4],
+            damping=ARM_DAMPING[4],
+            armature=ARM_ARMATURE[4],
         ),
         "arm_wr1": IdealPDActuatorCfg(
-            joint_names_expr=["arm_wr1"], effort_limit=ARM_EFFORT_LIMIT[5], stiffness=ARM_STIFFNESS[5],
-            damping=ARM_DAMPING[5], armature=ARM_ARMATURE[5]
+            joint_names_expr=["arm_wr1"],
+            effort_limit=ARM_EFFORT_LIMIT[5],
+            stiffness=ARM_STIFFNESS[5],
+            damping=ARM_DAMPING[5],
+            armature=ARM_ARMATURE[5],
         ),
         "gripper": IdealPDActuatorCfg(
-            joint_names_expr=["arm_f1x"], effort_limit=ARM_EFFORT_LIMIT[6], stiffness=ARM_STIFFNESS[6],
-            damping=ARM_DAMPING[6], armature=ARM_ARMATURE[6]
+            joint_names_expr=["arm_f1x"],
+            effort_limit=ARM_EFFORT_LIMIT[6],
+            stiffness=ARM_STIFFNESS[6],
+            damping=ARM_DAMPING[6],
+            armature=ARM_ARMATURE[6],
         ),
     },
 )

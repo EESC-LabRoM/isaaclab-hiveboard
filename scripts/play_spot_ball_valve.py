@@ -35,6 +35,10 @@ def _route_command(env, command: torch.Tensor) -> torch.Tensor:
         return command
     if terms == ["arm_action", "gripper_action"] and dims == [7, 1]:
         return torch.cat((command[:, 1:8], command[:, 0:1]), dim=-1)
+    if terms == ["arm_action", "gripper_action"] and dims == [6, 1]:
+        if int(command.shape[-1]) == 7:
+            return command
+        return torch.cat((torch.zeros_like(command[:, 1:7]), command[:, 0:1]), dim=-1)
     raise RuntimeError(f"Unexpected action layout: terms={terms}, dimensions={dims}")
 
 
@@ -76,8 +80,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         type=float,
         default=None,
         help="Override episode length in sim-seconds (task default: 10 s = 200 steps). "
-        "Longer values run one uninterrupted episode without the reset snap "
-        "(arm teleport + valve back to -0.35 rad).",
+        "Longer values run one uninterrupted episode without an episode reset.",
     )
     parser.add_argument(
         "--valve-reset-angle",
@@ -115,8 +118,8 @@ def main() -> int:
     if args.episode_length_s is not None:
         env_cfg.episode_length_s = float(args.episode_length_s)
     if args.valve_reset_angle is not None:
-        params = env_cfg.events.reset_robot_joints.params
-        params["valve_joint_range"] = (float(args.valve_reset_angle), float(args.valve_reset_angle))
+        params = env_cfg.events.reset_valve_joint.params
+        params["position_range"] = (float(args.valve_reset_angle), float(args.valve_reset_angle))
     if args.valve_friction is not None:
         env_cfg.scene.ball_valve.actuators["joint_actuator"].friction = float(args.valve_friction)
     if args.collision_only:

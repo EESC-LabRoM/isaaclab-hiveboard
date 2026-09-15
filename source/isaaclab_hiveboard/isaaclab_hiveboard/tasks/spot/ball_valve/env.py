@@ -14,12 +14,14 @@ from isaaclab_physx.physics import PhysxCfg
 from isaaclab_tasks.utils import PresetCfg
 
 from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
-from isaaclab_hiveboard.tasks.spot.ball_valve.configs.actions import SpotIKAbsActionCfg
+from isaaclab_hiveboard.tasks.spot.ball_valve.configs.actions import SpotJointPositionActionCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.commands import FramePoseCommandsCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.events import ValveEventCfg, ValvePlayEventCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.scene import BallValveSceneCfg
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.terminations import DeltaCollectionTerminationsCfg
+
+from isaaclab_hiveboard.assets.spot.bench import DECIMATION, PHYSICS_DT
 
 
 @configclass
@@ -57,18 +59,21 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: BallValveSceneCfg = BallValveSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
-    actions: SpotIKAbsActionCfg = SpotIKAbsActionCfg()  # type: ignore
+    actions: SpotJointPositionActionCfg = SpotJointPositionActionCfg()  # type: ignore
     terminations: DeltaCollectionTerminationsCfg = DeltaCollectionTerminationsCfg()  # type: ignore
     events: ValveEventCfg = ValveEventCfg()  # type: ignore
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
-    sim: SimulationCfg = SimulationCfg(dt=1 / 600, render_interval=30, physics=SpotBallValvePhysicsCfg())  # type: ignore
+    sim: SimulationCfg = SimulationCfg(dt=1 / 200, render_interval=30, physics=SpotBallValvePhysicsCfg())  # type: ignore
     rewards = None
     recorders: SpotManipulationRecorderCfg = SpotManipulationRecorderCfg()
 
     def __post_init__(self):
         # 600 Hz physics / 30 = 20 Hz command and action rate.
-        self.decimation = 30
-        self.episode_length_s = 10.0
+        # 300 Hz physics / 15 = 20 Hz command and action rate.
+        # 300 Hz physics / 10 = 30 Hz command and action rate.
+        # 200 Hz physics / 10 = 20 Hz command and action rate.
+        self.decimation = 10
+        self.episode_length_s = 5.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"

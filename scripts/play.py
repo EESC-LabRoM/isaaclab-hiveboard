@@ -62,10 +62,15 @@ def _route_command(env, command: torch.Tensor) -> torch.Tensor:
     if terms == ["arm_action", "gripper_action"] and dims == [3, 1]:
         return torch.cat((command[:, 1:4], command[:, 0:1]), dim=-1)
     if terms == ["arm_action", "gripper_action"] and dims == [6, 1]:
+        if int(command.shape[-1]) == 7:
+            # Joint-position command already matches [q_arm, gripper].
+            return command
         # CuroboJointPositionAction ignores its input (command waypoints drive
         # it directly); the gripper still takes the command's open/close bit.
         return torch.cat((torch.zeros_like(command[:, 1:7]), command[:, 0:1]), dim=-1)
     if terms == ["gripper_action", "arm_action"] and dims == [1, 6]:
+        if int(command.shape[-1]) == 7:
+            return torch.cat((command[:, 6:7], command[:, 0:6]), dim=-1)
         return torch.cat((command[:, 0:1], torch.zeros_like(command[:, 1:7])), dim=-1)
     if terms == ["arm_action"] and dims == [7]:
         return command
@@ -246,6 +251,12 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK, help="Gym task id.")
     parser.add_argument("--setup", help="Command and TCP settings saved by scripts/command_edit.py.")
+    parser.add_argument(
+        "--show-command-path",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show the active path, target orientation and current TCP. Enabled by default with --setup.",
+    )
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
     parser.add_argument("--seed", type=int, default=None, help="Environment reset seed.")
     parser.add_argument(
@@ -347,6 +358,14 @@ def main() -> int:
         env_cfg.seed = args.seed
     if args.device is not None:
         env_cfg.sim.device = args.device
+
+    show_command_path = bool(args.setup) if args.show_command_path is None else args.show_command_path
+    pose_command = getattr(env_cfg.commands, "pose_command", None)
+    if show_command_path and hasattr(pose_command, "path_debug_vis"):
+        pose_command.debug_vis = True
+        pose_command.path_debug_vis = True
+    elif args.show_command_path is False and hasattr(pose_command, "path_debug_vis"):
+        pose_command.path_debug_vis = False
 
     if args.pose_debug:
         if hasattr(env_cfg.scene, "target_frame"):

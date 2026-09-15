@@ -88,6 +88,12 @@ uv run --python 3.12 python scripts/play.py \
 `--pose-debug-interval` steps. HDF5 episode traces (including named
 `evaluation` contact terms) are written under `logs/recorded_datasets/`.
 
+The valve reset uses Isaac Lab's standard `reset_root_state_uniform` and
+`reset_joints_by_offset` terms. Set a fixed custom start in
+`tasks/scenes/lever_valve.py` (`ball_valve.init_state.pos`, `.rot`, and
+`.joint_pos`), or edit the corresponding ranges in
+`tasks/spot/ball_valve/configs/events.py` for per-episode sampling.
+
 Run without a window:
 
 ```bash
@@ -236,20 +242,11 @@ then re-run and commit the script.
 
 ### Collecting Demonstrations
 
-Precompute reachable reset cache:
-
-```bash
-uv run python scripts/precompute_reset_states.py \
-  --headless --device cuda:0 \
-  --output_path logs/spot_reset_states.pt
-```
-
 Record 10 successful demonstrations to HDF5:
 
 ```bash
 uv run python scripts/collect_demos.py \
   --headless --device cuda:0 \
-  --reset_state_cache_path logs/spot_reset_states.pt \
   --num_demos 10
 ```
 
@@ -324,6 +321,18 @@ uv run python scripts/play.py \
   --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
   --setup logs/command_setup.json
 ```
+
+Replay with `--setup` automatically shows the active command path: yellow waypoint
+spheres, a green next-waypoint marker, RGB orientation frames along the path, and
+the current/target TCP poses. GoTo shows the remaining motion; Rotate/Screw shows
+the signed arc; cuRobo commands show their actual planned waypoints. The path
+disappears during gripper holds and when the sequence finishes. Use
+`--no-show-command-path` to hide the path, or `--show-command-path` to enable it
+without a setup file.
+
+GoTo's `canonicalize_upward` selects the upright grasp when the command starts
+and keeps that choice while following the reference. This prevents 180° target
+flips when a moving handle crosses a horizontal pose.
 
 The JSON stores command parameters and a body-to-TCP transform, with quaternions in
 `(x, y, z, w)` order. `play.py --setup` applies the offset to the command term, matching

@@ -25,6 +25,7 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     _RotateFrameHandler,
     _ScrewFrameHandler,
 )
+from isaaclab_hiveboard.utils.frame_sensors import refresh_frame_sensors as refresh_frame_sensors
 
 
 def tensor(value):
@@ -33,22 +34,6 @@ def tensor(value):
 
 def numpy(value):
     return tensor(value).detach().cpu().numpy()
-
-
-def refresh_frame_sensors(env):
-    """Sample Newton sites after reset without taking a physics step.
-
-    Isaac Lab's frame sensor copies native sensor buffers; FK alone does not
-    populate those buffers. Normally the simulation loop performs this update.
-    """
-    from isaaclab_newton.physics import NewtonManager
-
-    NewtonManager.forward()
-    for sensor in NewtonManager._newton_frame_transform_sensors:
-        sensor.update(NewtonManager.get_state())
-    for sensor in env.scene.sensors.values():
-        if hasattr(sensor.cfg, "target_frames"):
-            sensor.update(0.0, force_recompute=True)
 
 
 class _PreviewContext:

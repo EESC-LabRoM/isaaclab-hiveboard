@@ -19,9 +19,7 @@ class ObservationsCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        command = ObsTerm(
-            func=mdp.generated_commands, params={"command_name": "pose_command"}
-        )
+        command = ObsTerm(func=mdp.generated_commands, params={"command_name": "pose_command"})
         finger_contact = ObsTerm(
             func=spot_mdp.contact_net_forces_w,
             params={"sensor_cfg": SceneEntityCfg("finger_contact")},
@@ -65,19 +63,11 @@ class ObservationsCfg:
 
         arm_joint_pos = ObsTerm(
             func=mdp.joint_pos,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot", joint_names=ARM_JOINT_NAMES, preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES, preserve_order=True)},
         )
         object_joint_pos = ObsTerm(
             func=mdp.joint_pos,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "ball_valve", joint_names=["RevoluteJoint"], preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"], preserve_order=True)},
         )
         valve_task_direction = ObsTerm(
             func=spot_mdp.valve_task_direction,
@@ -87,9 +77,7 @@ class ObservationsCfg:
             func=spot_mdp.valve_current_angle,
             params={
                 "command_name": "pose_command",
-                "asset_cfg": SceneEntityCfg(
-                    "ball_valve", joint_names=["RevoluteJoint"], preserve_order=True
-                ),
+                "asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"], preserve_order=True),
             },
         )
         valve_goal_angle = ObsTerm(
@@ -103,40 +91,22 @@ class ObservationsCfg:
 
     @configclass
     class EvaluationCfg(ObsGroup):
-        tcp_pose_command = ObsTerm(
-            func=mdp.generated_commands, params={"command_name": "pose_command"}
-        )
+        tcp_pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "pose_command"})
         arm_joint_pos = ObsTerm(
             func=mdp.joint_pos,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot", joint_names=ARM_JOINT_NAMES, preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES, preserve_order=True)},
         )
         arm_joint_vel = ObsTerm(
             func=mdp.joint_vel,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot", joint_names=ARM_JOINT_NAMES, preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES, preserve_order=True)},
         )
         valve_angle = ObsTerm(
             func=mdp.joint_pos,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "ball_valve", joint_names=["RevoluteJoint"], preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"], preserve_order=True)},
         )
         valve_velocity = ObsTerm(
             func=mdp.joint_vel,
-            params={
-                "asset_cfg": SceneEntityCfg(
-                    "ball_valve", joint_names=["RevoluteJoint"], preserve_order=True
-                )
-            },
+            params={"asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"], preserve_order=True)},
         )
         valve_task_direction = ObsTerm(
             func=spot_mdp.valve_task_direction,
@@ -146,9 +116,7 @@ class ObservationsCfg:
             func=spot_mdp.valve_current_angle,
             params={
                 "command_name": "pose_command",
-                "asset_cfg": SceneEntityCfg(
-                    "ball_valve", joint_names=["RevoluteJoint"], preserve_order=True
-                ),
+                "asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"], preserve_order=True),
             },
         )
         valve_goal_angle = ObsTerm(

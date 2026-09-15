@@ -41,6 +41,8 @@ from isaaclab_hiveboard.assets.spot.spot import (
 
 _VALVE_CONTACT_FILTER = ["{ENV_REGEX_NS}/Valve/.*"]
 
+PI = 3.1415
+
 
 def _valve_contact(prim: str) -> ContactSensorCfg:
     return ContactSensorCfg(
@@ -125,13 +127,13 @@ class BenchValveSceneCfg(InteractiveSceneCfg):
         init_state=ArticulationCfg.InitialStateCfg(
             pos=VALVE_POS,
             rot=VALVE_QUAT_XYZW,
-            joint_pos={"RevoluteJoint": 0.0},
+            joint_pos={"RevoluteJoint": 0},
             joint_vel={".*": 0.0},
         ),
         actuators={
             "joint_actuator": ImplicitActuatorCfg(
                 joint_names_expr=["RevoluteJoint"],
-                stiffness=0.0,
+                stiffness=0.01,
                 damping=VALVE_DAMPING,
                 friction=VALVE_FRICTION,
                 armature=VALVE_ARMATURE,

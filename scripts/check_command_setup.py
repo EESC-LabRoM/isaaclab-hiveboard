@@ -25,10 +25,15 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     RotateFrameCfg,
     ScrewFrameCfg,
     SequentialPoseCommandCfg,
+    _GoToFrameHandler,
+    _GripperHandler,
 )
+from isaaclab_hiveboard.utils.command_path import active_command_path
 from isaaclab_hiveboard.utils.command_preview import PreviewIK, build_segments, pose_to_viser, viser_to_pose
 from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup, make_setup, save_setup, validate_setup
+from isaaclab_hiveboard.utils.frame_sensors import refresh_frame_sensors
 
+import isaaclab.utils.math as math_utils
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
 from isaaclab.sensors import FrameTransformerCfg
 
@@ -141,11 +146,87 @@ class SetupTests(unittest.TestCase):
 
 
 class GeometryTests(unittest.TestCase):
+    def test_upright_goal_stays_continuous_across_horizontal_and_can_complete(self):
+        term = geometry_term()
+        sensor = term._env.scene["target_frame"]
+        axis = torch.tensor([[1.0, 0, 0]])
+        for sign in (-1, 1):
+
+            def rotation(degrees):
+                return math_utils.quat_from_angle_axis(torch.tensor([math.radians(sign * degrees)]), axis)
+
+            sensor.data.target_quat_w.torch[:] = rotation(89.9)[:, None]
+            initial = (torch.zeros(1, 3), rotation(89.9))
+            cfg = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=True)
+            handler = build_segments(term, [cfg], initial)[0].handler
+            ids = torch.tensor([0])
+            for degrees in (90.1, 89.95, 90.05, 89.9):
+                expected = rotation(degrees)
+                sensor.data.target_quat_w.torch[:] = expected[:, None]
+                _, actual = handler.get_target_in_base_frame(ids)
+                torch.testing.assert_close(math_utils.quat_error_magnitude(actual, expected), torch.zeros(1))
+                # The measured TCP remains within 0.2 degrees; completion must
+                # not suddenly require turning to the opposite grasp.
+                self.assertTrue(handler.is_done(ids).item())
+
+    def test_upright_choice_is_per_environment_and_reselected_on_reset(self):
+        term = geometry_term()
+        term.num_envs = 2
+        term._asset.data.root_pos_w = proxy([[0, 0, 0], [0, 0, 0]])
+        term._asset.data.root_quat_w = proxy([[0, 0, 0, 1], [0, 0, 0, 1]])
+        sensor = term._env.scene["target_frame"]
+        sensor.data.target_pos_w = proxy([[[0, 0, 0]], [[0, 0, 0]]])
+        axis = torch.tensor([[1.0, 0, 0], [1.0, 0, 0]])
+
+        def rotations(degrees):
+            return math_utils.quat_from_angle_axis(torch.deg2rad(torch.tensor(degrees)), axis)
+
+        sensor.data.target_quat_w = NS(torch=rotations([100.0, 80.0])[:, None])
+        term._get_ee_in_base_frame = lambda ids: (
+            term._asset.data.root_pos_w.torch[ids],
+            term._asset.data.root_quat_w.torch[ids],
+        )
+        cfg = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=True)
+        handler = _GoToFrameHandler(cfg, term)
+        ids = torch.tensor([0, 1])
+        handler.reset(ids)
+        sensor.data.target_quat_w.torch[:] = rotations([80.0, 100.0])[:, None]
+        _, actual = handler.get_target_in_base_frame(ids)
+        expected = rotations([-100.0, 100.0])
+        torch.testing.assert_close(math_utils.quat_error_magnitude(actual, expected), torch.zeros(2), atol=1e-6, rtol=0)
+        handler.reset(torch.tensor([0]))
+        _, actual = handler.get_target_in_base_frame(ids)
+        expected = rotations([80.0, 100.0])
+        torch.testing.assert_close(math_utils.quat_error_magnitude(actual, expected), torch.zeros(2), atol=1e-6, rtol=0)
+
+    def test_reset_refreshes_native_frame_buffers_without_stepping_physics(self):
+        # FK changes the body state, but the frame sensor reads a separate
+        # native buffer. Both layers must be updated after every reset.
+        state = torch.zeros(1, 7)
+        native_buffer = torch.zeros_like(state)
+        frame_buffer = torch.zeros_like(state)
+        reset_pose = torch.tensor([[0.8, 0.1, 0.7, 0, 0, 0, 1.0]])
+        frame = NS(
+            cfg=NS(target_frames=["goal"]),
+            update=lambda dt, force_recompute: frame_buffer.copy_(native_buffer),
+        )
+        physics = NS(
+            forward=lambda: state.copy_(reset_pose),
+            get_state=lambda: state,
+            _newton_frame_transform_sensors=[NS(update=lambda current: native_buffer.copy_(current))],
+        )
+        env = NS(scene=NS(sensors={"target_frame": frame}), sim=NS(physics_manager=physics))
+        refresh_frame_sensors(env)
+        torch.testing.assert_close(frame_buffer, reset_pose)
+        reset_pose[:, 0] = 1.2
+        refresh_frame_sensors(env)
+        torch.testing.assert_close(frame_buffer, reset_pose)
+
     def test_unsampled_reference_is_rejected_instead_of_targeting_world_origin(self):
         term = geometry_term()
         term._env.scene["target_frame"].data.target_quat_w = proxy([[[0, 0, 0, 0]]])
         cfg = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=False)
-        initial = (torch.zeros(1, 3), torch.tensor([[0., 0, 0, 1]]))
+        initial = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
         with self.assertRaisesRegex(ValueError, "valid quaternion"):
             build_segments(term, [cfg], initial)
 
@@ -257,6 +338,69 @@ class GeometryTests(unittest.TestCase):
         self.assertLess(pos_error, 0.001)
         self.assertLess(rot_error, 0.1)
         self.assertAlmostEqual(float(robot.data.joint_pos.torch[0, 0]), a, places=3)
+
+
+class ReplayPathTests(unittest.TestCase):
+    def test_goto_draws_remaining_motion_without_advancing_handler(self):
+        term = geometry_term()
+        term._env.scene["target_frame"].data.target_pos_w = proxy([[[1, 0, 0]]])
+        term._env.scene["target_frame"].data.target_quat_w = proxy([[[0, 0, 1, 0]]])
+        initial = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
+        cfg = GoToFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            canonicalize_upward=False,
+            velocity=1.0,
+            angular_velocity=1.0,
+        )
+        handler = build_segments(term, [cfg], initial)[0].handler
+        before = handler.command_pos_b.clone()
+        command = torch.tensor([[1.0, 0.4, 0, 0, 0, 0, 0, 1]])
+        pos, quat, index = active_command_path(handler, command)
+        self.assertEqual(index, 0)
+        torch.testing.assert_close(pos[0], command[0, 1:4])
+        torch.testing.assert_close(pos[-1], torch.tensor([1.0, 0, 0]))
+        # Translation finishes before the slower orientation change.
+        torch.testing.assert_close(pos[16], pos[-1])
+        torch.testing.assert_close(quat[-1].abs(), torch.tensor([0.0, 0, 1, 0]), atol=1e-6, rtol=0)
+        torch.testing.assert_close(handler.command_pos_b, before)
+
+    def test_signed_screw_path_and_progress_marker(self):
+        term = geometry_term()
+        initial = (torch.tensor([[1.0, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        cfg = ScrewFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            axis=(0, 0, 1),
+            use_valve_angle=False,
+            angle_deg=-180,
+            axial_distance=0.4,
+        )
+        handler = build_segments(term, [cfg], initial)[0].handler
+        handler._progress_abs[0] = math.pi / 2
+        command = torch.tensor([[-1.0, 0, -1, 0.2, 0, 0, 0, 1]])
+        pos, quat, index = active_command_path(handler, command)
+        self.assertEqual(index, 16)
+        torch.testing.assert_close(pos[index], torch.tensor([0.0, -1, 0.2]), atol=1e-6, rtol=0)
+        torch.testing.assert_close(pos[-1], torch.tensor([-1.0, 0, 0.4]), atol=1e-6, rtol=0)
+        torch.testing.assert_close(quat[index], torch.tensor([0.0, 0, -math.sqrt(0.5), math.sqrt(0.5)]))
+        self.assertAlmostEqual(float(handler._progress_abs[0]), math.pi / 2, places=6)
+
+    def test_actual_curobo_path_takes_precedence_and_gripper_has_no_path(self):
+        term = geometry_term()
+        cfg = CuroboPlannedGoToFrameCfg(
+            frame_name="target_frame", target_frame_name="goal", robot_joint_names=["joint"]
+        )
+        handler = cfg.class_type(cfg, term)
+        handler._waypoint_pos_b = torch.tensor([[[0.0, 0, 0], [0.5, 0.4, 0.3], [1, 0, 0]]])
+        handler._waypoint_quat_b = torch.tensor([[[0.0, 0, 0, 1]] * 3])
+        handler._waypoint_index[0] = 3  # Completion sentinel stays within the marker array.
+        command = torch.tensor([[1.0, 0, 0, 0, 0, 0, 0, 1]])
+        pos, quat, index = active_command_path(handler, command)
+        self.assertEqual(index, 2)
+        torch.testing.assert_close(pos, handler._waypoint_pos_b[0])
+        torch.testing.assert_close(quat, handler._waypoint_quat_b[0])
+        self.assertIsNone(active_command_path(_GripperHandler(GripperCommand(), term), command))
 
 
 if __name__ == "__main__":

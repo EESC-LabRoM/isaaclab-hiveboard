@@ -88,9 +88,9 @@ class EeTrajDumper:
 
         ee_pos_b, ee_quat_b = self._cmd._get_ee_in_base_frame(env_ids)
         ee_pos_w, ee_quat_w = self._cmd._get_ee_in_world_frame(env_ids)
-        command = applied_command[i] if applied_command is not None else self._cmd.command[i]
-        cmd_pos_b = command[1:4]
-        cmd_quat_b = command[4:8]
+        pose_command = self._cmd._command[i]
+        cmd_pos_b = pose_command[1:4]
+        cmd_quat_b = pose_command[4:8]
         cmd_idx = (
             int(command_idx)
             if command_idx is not None
@@ -145,7 +145,7 @@ class EeTrajDumper:
             "time_s": step * float(self._env.step_dt),
             "command_idx": cmd_idx,
             "command_name": cmd_name,
-            "gripper_open": float(command[0].item()),
+            "gripper_open": float(pose_command[0].item()),
             "valve_joint_rad": valve_q,
             "radius_m": float(radius.item()),
             "axial_m": float(axial.item()),
