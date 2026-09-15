@@ -9,8 +9,6 @@ import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import BaseArticulation
-from isaaclab.controllers.differential_ik import DifferentialIKController
-from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
 from isaaclab.managers import CommandTerm
@@ -56,10 +54,6 @@ def _xyzw_to_wxyz(q: torch.Tensor) -> torch.Tensor:
 def _wxyz_to_xyzw(q: torch.Tensor) -> torch.Tensor:
     """Reorder cuRobo (w, x, y, z) quaternions to Isaac Lab (x, y, z, w)."""
     return q[..., [1, 2, 3, 0]]
-
-
-def _finite(*tensors: torch.Tensor) -> bool:
-    return all(bool(torch.isfinite(tensor).all()) for tensor in tensors)
 
 
 def _pose_str(p: torch.Tensor, q: torch.Tensor) -> str:
@@ -155,7 +149,7 @@ class SequentialPoseCommand(CommandTerm):
         - target end-effector orientation (xyzw) in the base frame
 
         With ``output_joint_positions`` (action positions, 1 + n joints):
-        - IK joint positions in ``ik_joint_names`` order
+        - cuRobo joint waypoints in ``robot_joint_names`` order
         - gripper status (positive open, negative close)
         """
         if self._joint_command is not None:
@@ -179,6 +173,8 @@ class SequentialPoseCommand(CommandTerm):
         self._prev_command_idx[env_ids] = 0
         for handler in self._command_handlers:
             handler.reset(env_ids)
+        if self._joint_command is not None:
+            self._write_joint_command(self._asset.data.joint_pos.torch[:, self._ik_joint_ids])
         # Isaac Lab's reset() observes the command *before* the first
         # command_manager.compute(). Without this, play.py would step the
         # uninitialized buffer (TCP at the origin) and pull the arm off the
@@ -197,34 +193,31 @@ class SequentialPoseCommand(CommandTerm):
         self._sync_joint_command()
 
     def _initialize_joint_output(self) -> None:
-        """Build the optional joint-position command buffers and DLS solver."""
+        """Publish cuRobo joint waypoints as the command when requested."""
         self._joint_command = None
-        self._ik_controller = None
         self._ik_joint_ids = None
         if not self.cfg.output_joint_positions:
             return
         self._ik_joint_ids = self._resolve_ik_joint_ids()
-        self._ik_jacobi_body_idx = self._body_idx - 1 if self._asset.is_fixed_base else self._body_idx
-        self._ik_jacobi_joint_ids = [int(j) + int(self._asset.num_base_dofs) for j in self._ik_joint_ids]
-        self._ik_controller = DifferentialIKController(
-            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
-            num_envs=self.num_envs,
-            device=self.device,
-        )
         self._joint_command = torch.zeros(
             self.num_envs, len(self._ik_joint_ids) + 1, device=self.device, dtype=torch.float32
         )
-        self._write_joint_command(self._asset.data.default_joint_pos.torch[:, self._ik_joint_ids])
+        self._write_joint_command(self._asset.data.joint_pos.torch[:, self._ik_joint_ids])
 
     def _resolve_ik_joint_ids(self) -> list[int]:
-        if not self.cfg.ik_joint_names:
-            raise ValueError("output_joint_positions requires ik_joint_names")
-        joint_ids, joint_names = self._asset.find_joints(list(self.cfg.ik_joint_names), preserve_order=True)
-        if len(joint_ids) != len(self.cfg.ik_joint_names):
+        names = self.cfg.ik_joint_names
+        if not names:
+            for cmd in self.cfg.commands:
+                names = getattr(cmd, "robot_joint_names", None)
+                if names:
+                    break
+        if not names:
             raise ValueError(
-                f"Expected {len(self.cfg.ik_joint_names)} IK joints {list(self.cfg.ik_joint_names)}, "
-                f"found {len(joint_ids)}: {joint_names}"
+                "output_joint_positions requires ik_joint_names or a cuRobo command with robot_joint_names"
             )
+        joint_ids, joint_names = self._asset.find_joints(list(names), preserve_order=True)
+        if len(joint_ids) != len(names):
+            raise ValueError(f"Expected {len(names)} IK joints {list(names)}, found {len(joint_ids)}: {joint_names}")
         return list(joint_ids)
 
     def _write_joint_command(self, arm_pos: torch.Tensor) -> None:
@@ -232,43 +225,13 @@ class SequentialPoseCommand(CommandTerm):
         self._joint_command[:, -1] = self._command[:, 0]
 
     def _sync_joint_command(self) -> None:
-        """Publish IK joint targets for the current TCP command."""
+        """Copy cuRobo q_des into the published command; otherwise hold the last joints."""
         if self._joint_command is None:
             return
-        env_ids = slice(None)
-        target_pos_b, target_quat_b = self._tcp_pose_to_body_pose(
-            self._command[:, 1:4], self._command[:, 4:8], env_ids
-        )
-        body_pos_b, body_quat_b = self._body_pose_in_base(env_ids)
-        joint_pos = self._asset.data.joint_pos.torch[:, self._ik_joint_ids]
-        jacobian = self._body_jacobian_in_base()
-        if not _finite(body_pos_b, jacobian):
-            self._write_joint_command(joint_pos)
-            return
-        self._write_joint_command(
-            self._solve_body_ik(target_pos_b, target_quat_b, body_pos_b, body_quat_b, jacobian, joint_pos)
-        )
-
-    def _body_jacobian_in_base(self) -> torch.Tensor:
-        jacobian = self._asset.data.body_link_jacobian_w.torch[
-            :, self._ik_jacobi_body_idx, :, self._ik_jacobi_joint_ids
-        ].clone()
-        world_to_base = math_utils.matrix_from_quat(math_utils.quat_inv(self._asset.data.root_quat_w.torch))
-        jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
-        jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
-        return jacobian
-
-    def _solve_body_ik(
-        self,
-        target_pos_b: torch.Tensor,
-        target_quat_b: torch.Tensor,
-        body_pos_b: torch.Tensor,
-        body_quat_b: torch.Tensor,
-        jacobian: torch.Tensor,
-        joint_pos: torch.Tensor,
-    ) -> torch.Tensor:
-        self._ik_controller.set_command(torch.cat((target_pos_b, target_quat_b), dim=-1), body_pos_b, body_quat_b)
-        return self._ik_controller.compute(body_pos_b, body_quat_b, jacobian, joint_pos)
+        active, q_des = self.get_curobo_joint_targets()
+        if q_des.shape[1] != 0 and torch.any(active):
+            self._joint_command[active, :-1] = q_des[active]
+        self._joint_command[:, -1] = self._command[:, 0]
 
     def _initialize_valve_task(self) -> None:
         """Resolve and validate the optional valve articulation and task limits."""
@@ -551,12 +514,9 @@ class SequentialPoseCommand(CommandTerm):
     def get_curobo_joint_targets(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return direct joint targets for environments executing a cuRobo term.
 
-        The normal command remains a TCP pose so that the existing gripper and
-        differential-IK action interface is unchanged.  During a planned
-        segment, though, applying that pose through DLS can select a different
-        redundant-joint branch than the one cuRobo validated.  The matching
-        action term uses this method to apply the planner's exact joint
-        waypoint instead.
+        Used when ``output_joint_positions`` is set, and by
+        :class:`~isaaclab_hiveboard.mdp.actions.curobo_joint_action.CuroboJointPositionAction`.
+        Inactive or unplanned segments leave the last joints unchanged.
         """
         targets = torch.zeros(self.num_envs, 0, device=self.device, dtype=self._command.dtype)
         active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -2000,13 +1960,13 @@ class SequentialPoseCommandCfg(CommandTermCfg):
     """Scale from remaining valve error to the commanded EE arc angle."""
 
     output_joint_positions: bool = False
-    """If True, ``command`` is IK joint positions plus the gripper bit.
+    """If True, ``command`` is cuRobo joint waypoints plus the gripper bit.
 
-    Handlers still track a TCP pose internally. The published command matches
-    a ``JointPositionAction`` arm term followed by a binary gripper term.
+    Handlers still track a TCP pose internally. Between plans the last
+    joints are held. Matches a ``JointPositionAction`` arm term plus gripper.
     """
     ik_joint_names: Sequence[str] | None = None
-    """Arm joints for ``output_joint_positions``. Order is the command/action layout."""
+    """Arm joints for ``output_joint_positions``. Defaults to the cuRobo command's names."""
 
     debug_vis: bool = False
 

@@ -95,6 +95,73 @@ def validate_command(cmd) -> None:
             raise ValueError("A frame-relative command needs a target frame")
 
 
+PLANNER_FIELDS = (
+    "robot_joint_names",
+    "robot_curobo_yaml",
+    "robot_urdf",
+    "num_ik_seeds",
+    "num_trajopt_seeds",
+    "max_plan_attempts",
+    "interpolation_buffer_size",
+    "max_joint_step",
+)
+
+
+def _params(cmd, cls) -> dict:
+    names = {field.name for field in dataclasses.fields(cls)} - {"class_type"}
+    return {name: copy.deepcopy(getattr(cmd, name)) for name in names if hasattr(cmd, name)}
+
+
+def is_curobo_command(cmd) -> bool:
+    return isinstance(cmd, (CuroboPlannedGoToFrameCfg, CuroboPlannedRotateFrameCfg))
+
+
+def planner_settings(commands) -> dict:
+    """Robot / solver fields copied from the first cuRobo command in ``commands``."""
+    for cmd in commands:
+        if not is_curobo_command(cmd):
+            continue
+        settings = {}
+        for name in PLANNER_FIELDS:
+            if hasattr(cmd, name):
+                settings[name] = copy.deepcopy(getattr(cmd, name))
+        if settings.get("robot_joint_names"):
+            return settings
+    raise ValueError(
+        "No cuRobo planner settings on this sequence. Insert or convert after a CuroboPlanned command, "
+        "or start from a task that already uses cuRobo."
+    )
+
+
+def as_curobo_command(cmd, planner: dict):
+    """Keep Cartesian fields; attach cuRobo planner settings."""
+    if is_curobo_command(cmd):
+        return copy.deepcopy(cmd)
+    if isinstance(cmd, GoToFrameCfg):
+        cls, params = CuroboPlannedGoToFrameCfg, _params(cmd, GoToFrameCfg)
+    elif isinstance(cmd, RotateFrameCfg) and not isinstance(cmd, ScrewFrameCfg):
+        cls, params = CuroboPlannedRotateFrameCfg, _params(cmd, RotateFrameCfg)
+    else:
+        raise ValueError(f"Cannot use a cuRobo plan for {type(cmd).__name__}")
+    allowed = {field.name for field in dataclasses.fields(cls)} - {"class_type"}
+    params.update({name: copy.deepcopy(value) for name, value in planner.items() if name in allowed})
+    result = cls(**params)
+    validate_command(result)
+    return result
+
+
+def as_direct_command(cmd):
+    """Drop planner fields and keep the Cartesian GoTo / Rotate command."""
+    if isinstance(cmd, CuroboPlannedGoToFrameCfg):
+        result = GoToFrameCfg(**_params(cmd, GoToFrameCfg))
+    elif isinstance(cmd, CuroboPlannedRotateFrameCfg):
+        result = RotateFrameCfg(**_params(cmd, RotateFrameCfg))
+    else:
+        return copy.deepcopy(cmd)
+    validate_command(result)
+    return result
+
+
 def encode_command(cmd) -> dict:
     validate_command(cmd)
     return {

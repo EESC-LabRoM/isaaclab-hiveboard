@@ -63,7 +63,7 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
     terminations: DeltaCollectionTerminationsCfg = DeltaCollectionTerminationsCfg()  # type: ignore
     events: ValveEventCfg = ValveEventCfg()  # type: ignore
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
-    sim: SimulationCfg = SimulationCfg(dt=1 / 200, render_interval=30, physics=SpotBallValvePhysicsCfg())  # type: ignore
+    sim: SimulationCfg = SimulationCfg(dt=1 / 200, render_interval=1, physics=SpotBallValvePhysicsCfg())  # type: ignore
     rewards = None
     recorders: SpotManipulationRecorderCfg = SpotManipulationRecorderCfg()
 
@@ -72,7 +72,7 @@ class SpotBallValveEnvCfg(ManagerBasedRLEnvCfg):
         # 300 Hz physics / 15 = 20 Hz command and action rate.
         # 300 Hz physics / 10 = 30 Hz command and action rate.
         # 200 Hz physics / 10 = 20 Hz command and action rate.
-        self.decimation = 10
+        self.decimation = 15
         self.episode_length_s = 5.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"

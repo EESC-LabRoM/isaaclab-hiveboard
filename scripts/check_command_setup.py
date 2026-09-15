@@ -30,7 +30,17 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
 )
 from isaaclab_hiveboard.utils.command_path import active_command_path
 from isaaclab_hiveboard.utils.command_preview import PreviewIK, build_segments, pose_to_viser, viser_to_pose
-from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup, make_setup, save_setup, validate_setup
+from isaaclab_hiveboard.utils.command_setup import (
+    apply_setup,
+    as_curobo_command,
+    as_direct_command,
+    is_curobo_command,
+    load_setup,
+    make_setup,
+    planner_settings,
+    save_setup,
+    validate_setup,
+)
 from isaaclab_hiveboard.utils.frame_sensors import refresh_frame_sensors
 
 import isaaclab.utils.math as math_utils
@@ -98,6 +108,34 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(commands[1].duration_s, 0.7)
         self.assertFalse(commands[2].use_valve_angle)
         self.assertNotIn("class_type", loaded["commands"][0]["parameters"])
+
+    def test_curobo_toggle_preserves_cartesian_fields_and_planner(self):
+        planned = CuroboPlannedGoToFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            target_offset_pos=(0.1, 0.0, 0.0),
+            robot_joint_names=["arm_sh0", "arm_sh1"],
+            robot_curobo_yaml="spot.yaml",
+            num_ik_seeds=8,
+        )
+        servo = as_direct_command(planned)
+        self.assertIsInstance(servo, GoToFrameCfg)
+        self.assertFalse(is_curobo_command(servo))
+        self.assertEqual(servo.target_offset_pos, (0.1, 0.0, 0.0))
+        restored = as_curobo_command(servo, planner_settings([planned]))
+        self.assertIsInstance(restored, CuroboPlannedGoToFrameCfg)
+        self.assertEqual(restored.target_offset_pos, (0.1, 0.0, 0.0))
+        self.assertEqual(restored.robot_joint_names, ["arm_sh0", "arm_sh1"])
+        self.assertEqual(restored.num_ik_seeds, 8)
+        rotate = RotateFrameCfg(
+            frame_name="target_frame", target_frame_name="goal", use_valve_angle=False, angle_deg=40
+        )
+        planned_rotate = as_curobo_command(rotate, planner_settings([planned]))
+        self.assertTrue(is_curobo_command(planned_rotate))
+        self.assertEqual(planned_rotate.angle_deg, 40)
+        self.assertEqual(planned_rotate.robot_joint_names, ["arm_sh0", "arm_sh1"])
+        with self.assertRaisesRegex(ValueError, "Cannot use a cuRobo plan"):
+            as_curobo_command(GripperCommand(), planner_settings([planned]))
 
     def test_apply_synchronizes_offsets_and_rejects_bad_reference_without_mutation(self):
         action = DifferentialInverseKinematicsActionCfg(asset_name="robot", body_name="wrist")

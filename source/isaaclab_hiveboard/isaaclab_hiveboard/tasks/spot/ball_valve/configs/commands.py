@@ -1,18 +1,25 @@
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_hiveboard.assets import SPOT_EE, as_command_offset
+from isaaclab_hiveboard.assets import ASSET_DIR, SPOT_EE, as_command_offset
 from isaaclab_hiveboard.assets.spot.constants import ARM_JOINT_NAMES
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
-    GoToFrameCfg,
+    CuroboPlannedGoToFrameCfg,
+    CuroboPlannedRotateFrameCfg,
     GripperCommand,
-    RotateFrameCfg,
     SequentialPoseCommandCfg,
 )
+
+SPOT_ARM_6 = list(ARM_JOINT_NAMES[:-1])
+_CUROBO = {
+    "robot_joint_names": SPOT_ARM_6,
+    "robot_curobo_yaml": f"{ASSET_DIR}/spot/cumotion/spot_arm.yaml",
+    "robot_urdf": f"{ASSET_DIR}/spot/spot_with_arm.urdf",
+}
 
 
 @configclass
 class FramePoseCommandsCfg:
-    """Command specifications for the RMP."""
+    """cuRobo joint plans for the ball-valve sequence."""
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
@@ -20,7 +27,6 @@ class FramePoseCommandsCfg:
         resampling_time_range=(1e6, 1e6),
         debug_vis=False,
         output_joint_positions=True,
-        ik_joint_names=list(ARM_JOINT_NAMES[:-1]),
         valve_asset_name="ball_valve",
         valve_joint_name="RevoluteJoint",
         open_task_prob=0.0,
@@ -30,31 +36,32 @@ class FramePoseCommandsCfg:
         valve_min_delta_rad=0.35,
         valve_ee_joint_angle_scale=1.0,
         commands=[
-            GoToFrameCfg(
+            CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.03,
                 target_frame_name="approaching",
                 velocity=0.25,
+                **_CUROBO,
             ),
-            GoToFrameCfg(
+            CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=True,
                 distance_threshold=0.02,
                 target_frame_name="lever_pivot",
                 velocity=0.15,
+                **_CUROBO,
             ),
             GripperCommand(open_gripper=False, duration_s=0.3),
-            RotateFrameCfg(
+            CuroboPlannedRotateFrameCfg(
                 frame_name="target_frame",
                 target_frame_name="rotate_frame",
-                # Fallback only; the command term uses the remaining valve error.
                 angle_deg=-90,
                 angular_velocity=0.3,
                 angle_threshold_deg=0.25,
                 gripper_open=False,
+                **_CUROBO,
             ),
-            # Hold the finished pose so the end state reads on video.
             GripperCommand(open_gripper=False, duration_s=0.5),
         ],
         body_offset=as_command_offset(SPOT_EE),

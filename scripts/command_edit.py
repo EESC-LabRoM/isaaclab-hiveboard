@@ -9,8 +9,9 @@
     uv run python scripts/command_edit.py
     uv run python scripts/command_edit.py --setup logs/command_setup.json
 
-This is a kinematic authoring preview. Run saved settings through play.py to
-evaluate cuRobo plans, gripper contact, forces and task success.
+This is a kinematic authoring preview. Tick **cuRobo plan** on a GoTo/Rotate, or
+insert a Curobo command, to save CuroboPlanned* terms. play.py then executes
+those joint plans; the editor itself never launches cuRobo.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     GoToFrameCfg,
     GripperCommand,
     RotateFrameCfg,
+    ScrewFrameCfg,
     SequentialPoseCommand,
     SequentialPoseCommandCfg,
 )
@@ -50,8 +52,12 @@ from isaaclab_hiveboard.utils.command_preview import (
 )
 from isaaclab_hiveboard.utils.command_setup import (
     apply_setup,
+    as_curobo_command,
+    as_direct_command,
+    is_curobo_command,
     load_setup,
     make_setup,
+    planner_settings,
     save_setup,
     validate_command,
     validate_setup,
@@ -62,6 +68,13 @@ import isaaclab.utils.math as math_utils
 from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
+COMMAND_LABELS = {
+    "CuroboPlannedGoToFrame": "cuRobo GoTo",
+    "CuroboPlannedRotateFrame": "cuRobo Rotate",
+    "GoToFrame": "GoTo",
+    "RotateFrame": "Rotate",
+    "ScrewFrame": "Screw",
+}
 
 
 class _PreviewCommand(SequentialPoseCommand):
@@ -121,7 +134,8 @@ class CommandEditor:
         gui.add_markdown(
             "## HiveBoard command setup\n"
             "Drag a goal or rotation reference. RGB axes are X/Y/Z. "
-            "**Kinematic preview**: objects stay at their reset poses.",
+            "**Kinematic preview**: objects stay at their reset poses. "
+            "Enable **cuRobo plan** to save planned joint commands for play.py.",
             order=0,
         )
         self.status = gui.add_markdown("Loading…", order=1)
@@ -138,9 +152,7 @@ class CommandEditor:
                 self._button("Move earlier", lambda: self.move(-1))
                 self._button("Move later", lambda: self.move(1))
                 self._button("Delete command", self.delete)
-                self.add_kind = gui.add_dropdown(
-                    "New command", options=["GoTo", "Open gripper", "Close gripper", "Rotate"]
-                )
+                self.add_kind = gui.add_dropdown("New command", options=self._insert_kinds())
                 self._button("Insert after selected", self.insert)
         with gui.add_folder("Tool center point (TCP)", order=4, expand_by_default=False):
             gui.add_markdown(
@@ -210,7 +222,7 @@ class CommandEditor:
             kind = (
                 ("Open gripper" if cfg.open_gripper else "Close gripper")
                 if isinstance(cfg, GripperCommand)
-                else type(cfg).__name__.removesuffix("Cfg")
+                else COMMAND_LABELS.get(type(cfg).__name__.removesuffix("Cfg"), type(cfg).__name__.removesuffix("Cfg"))
             )
             label = f"{i}: {kind}"
             if getattr(cfg, "target_frame_name", ""):
@@ -236,6 +248,11 @@ class CommandEditor:
             self.markers.append(marker)
         self.selection.options = options
         self.selection.value = options[self.selected]
+        if hasattr(self, "add_kind"):
+            kinds = self._insert_kinds()
+            self.add_kind.options = kinds
+            if self.add_kind.value not in kinds:
+                self.add_kind.value = kinds[0]
 
     def select(self, index):
         self.playing = False
@@ -280,6 +297,14 @@ class CommandEditor:
                 self._field("open_gripper", "Open gripper", boolean=True)
                 self._field("duration_s", "Hold (s)", minimum=0.01)
             else:
+                if isinstance(cfg, (GoToFrameCfg, RotateFrameCfg)) and not isinstance(cfg, ScrewFrameCfg):
+                    planned = is_curobo_command(cfg)
+                    handle = self.server.gui.add_checkbox("cuRobo plan", initial_value=planned)
+                    handle.on_update(self._enqueue(self.set_curobo, epoch=self.epoch))
+                    if planned:
+                        self.server.gui.add_markdown(
+                            "play.py follows cuRobo joint waypoints. This editor still previews the Cartesian path."
+                        )
                 self._reference_ui(cfg)
                 self._field("gripper_open", "Keep gripper open", boolean=True)
                 self._field("angle_deg", "Angle (deg)")
@@ -520,15 +545,33 @@ class CommandEditor:
         self.selected = min(self.selected, len(self.commands) - 1)
         self.changed()
 
+    def _insert_kinds(self) -> list[str]:
+        kinds = ["GoTo", "Curobo GoTo", "Open gripper", "Close gripper", "Rotate", "Curobo Rotate"]
+        if any(is_curobo_command(cmd) for cmd in self.commands):
+            return ["Curobo GoTo", "Curobo Rotate", "Open gripper", "Close gripper", "GoTo", "Rotate"]
+        return kinds
+
+    def _planner_settings(self) -> dict:
+        return planner_settings((*self.commands, *self.term.cfg.commands))
+
+    def set_curobo(self, enabled: bool):
+        cfg = self.commands[self.selected]
+        self.commands[self.selected] = (
+            as_curobo_command(cfg, self._planner_settings()) if enabled else as_direct_command(cfg)
+        )
+        self.changed()
+
     def insert(self):
         kind = self.add_kind.value
         if "gripper" in kind:
             cfg = GripperCommand(open_gripper=kind.startswith("Open"), duration_s=0.3)
-        elif kind == "Rotate":
+        elif "Rotate" in kind:
             if not self.reference_options:
                 raise ValueError("Rotate needs a scene frame sensor")
             frame, target = next(iter(self.reference_options.values()))
             cfg = RotateFrameCfg(frame_name=frame, target_frame_name=target, use_valve_angle=False)
+            if kind.startswith("Curobo"):
+                cfg = as_curobo_command(cfg, self._planner_settings())
         else:
             pose = self.ik.tcp_pose_w()
             cfg = GoToFrameCfg(
@@ -538,6 +581,8 @@ class CommandEditor:
                 target_position_env=tuple(float(v) for v in numpy(pose[0] - self.env.scene.env_origins)[0]),
                 target_orientation_env=tuple(float(v) for v in numpy(pose[1])[0]),
             )
+            if kind.startswith("Curobo"):
+                cfg = as_curobo_command(cfg, self._planner_settings())
         self.commands.insert(self.selected + 1, cfg)
         self.selected += 1
         self.changed()

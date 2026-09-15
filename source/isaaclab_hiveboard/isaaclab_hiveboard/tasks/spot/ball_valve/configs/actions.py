@@ -6,7 +6,7 @@ from isaaclab_hiveboard.assets.spot.constants import ARM_JOINT_NAMES
 
 @configclass
 class SpotJointPositionActionCfg:
-    """Absolute arm joint positions from the sequential command, plus a binary gripper."""
+    """Absolute arm joint positions from cuRobo waypoints, plus a binary gripper."""
 
     arm_action = JointPositionActionCfg(
         asset_name="robot",

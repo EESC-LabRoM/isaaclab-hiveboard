@@ -19,6 +19,11 @@ class ValveEventCfg:
         mode="startup",
         params={"asset_cfg": SceneEntityCfg("robot"), "gravcomp": 1.0},
     )
+    valve_gravcomp = EventTerm(
+        func=apply_articulation_gravcomp,
+        mode="startup",
+        params={"asset_cfg": SceneEntityCfg("ball_valve"), "gravcomp": 1.0},
+    )
 
     robot_physics_material = EventTerm(
         func=mdp.randomize_rigid_body_material,
