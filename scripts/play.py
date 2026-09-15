@@ -245,6 +245,7 @@ def _print_pose(base, step: int, env_index: int) -> None:
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK, help="Gym task id.")
+    parser.add_argument("--setup", help="Command and TCP settings saved by scripts/command_edit.py.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
     parser.add_argument("--seed", type=int, default=None, help="Environment reset seed.")
     parser.add_argument(
@@ -337,6 +338,10 @@ def main() -> int:
     args, hydra_args = _parse_args()
     sys.argv = [sys.argv[0], *hydra_args]
     env_cfg, _ = resolve_task_config(args.task, "")
+    if args.setup:
+        from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup
+
+        apply_setup(env_cfg, load_setup(args.setup), task=args.task)
     env_cfg.scene.num_envs = args.num_envs
     if args.seed is not None:
         env_cfg.seed = args.seed

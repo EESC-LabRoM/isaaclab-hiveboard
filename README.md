@@ -273,3 +273,64 @@ isaaclab-hiveboard/
             ├── tasks/           # Robot tasks (spot/, franka/, anymal/)
             └── utils/           # Diagnostics & metrics
 ```
+
+## Interactive command setup
+
+Use the Newton Viser editor to author a `SequentialPoseCommand` task in your browser:
+
+```bash
+just edit-commands
+# Open http://localhost:8080
+
+# Choose another task or reopen saved settings:
+just edit-commands --task Isaac-HiveBoard-Spot-BenchValve-Play-v0
+just edit-commands --setup logs/command_setup.json
+
+# Optionally use the CUDA device:
+just edit-commands --device cuda:0
+```
+
+The editor defaults to CPU and does not require CUDA. The default task is
+`Isaac-HiveBoard-Spot-BallValve-Play-v0`. Supply the same `--task`
+when loading settings authored for another task. `--port` changes the browser port;
+`--out` chooses the save file. Settings are saved only when you click **Save setup**.
+
+- **GoTo:** select a bead or command, then drag its position and orientation. Choose
+  an object frame in **Reference** to keep the goal relative to that object, or use
+  a fixed environment pose. Edit speeds, tolerances and the gripper state below it.
+- **Rotate / Screw:** drag the reference pivot, set the axis in that reference frame,
+  and adjust the signed angle, angular speed and screw travel. The arc is shown in
+  3D. **Use remaining valve angle** preserves valve-task behavior; turn it off to
+  use the entered angle.
+- **Open / Close gripper:** choose the state and hold duration. Duplicate, insert,
+  reorder or delete commands with the sequence controls.
+- **TCP offset:** enable **Drag TCP offset** to hold the robot still while placing
+  the tool center point relative to its end-effector body. Numeric translation and
+  XYZ Euler rotation controls are also available. Turn calibration off to see the
+  arm match the selected goal using that offset.
+- **Preview:** scrub a command or play the sequence. Position and orientation
+  residuals show whether IK reached the goal. Unreachable goals remain editable.
+
+The editor loads the task's scene once and uses its robot Jacobian for subsequent
+edits. This is a **kinematic preview**: objects stay at their reset poses, and IK
+does not check collisions, forces or grasp success. cuRobo command settings survive
+save/load, but preview does not run the planner. Editing a goal with a dense cuRobo
+reference clears that reference so the edited endpoint is used on replay.
+
+Validate the saved setup with the task's normal physics and command handlers:
+
+```bash
+uv run python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
+  --setup logs/command_setup.json
+```
+
+The JSON stores command parameters and a body-to-TCP transform, with quaternions in
+`(x, y, z, w)` order. `play.py --setup` applies the offset to the command term, matching
+IK action and `ee_tcp` sensor before creating the environment. Existing task Python
+configs are not rewritten. For programmatic use, call
+`isaaclab_hiveboard.utils.command_setup.apply_setup(env_cfg, data, task=task_id)`
+before `gym.make()`. Joint-trajectory-only tasks continue to use `scripts/traj_edit.py`.
+
+Checks: `just check-command-setup`; scene and Viser startup:
+`just edit-commands --device cpu --smoke-test`.

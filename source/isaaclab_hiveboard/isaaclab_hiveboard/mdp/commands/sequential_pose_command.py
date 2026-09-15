@@ -697,6 +697,14 @@ class _BaseCmdHandler:
         command[:, 4:8] = quat
         return command
 
+    def _apply_target_offset(self, pos: torch.Tensor, quat: torch.Tensor):
+        """Compose the authored goal/pivot offset in its reference frame."""
+        return math_utils.combine_frame_transforms(
+            pos, quat,
+            pos.new_tensor(self.cfg.target_offset_pos).expand_as(pos),
+            quat.new_tensor(self.cfg.target_offset_rot).expand_as(quat),
+        )
+
     def _step_pos_towards(
         self,
         current: torch.Tensor,
@@ -809,6 +817,8 @@ class _GoToFrameHandler(_BaseCmdHandler):
             return target_pos_b, (self._held_quat_b[env_ids] if target_quat_w is None else target_quat_b)
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
         target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
+
+        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w)
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
@@ -1452,7 +1462,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
     def reset(self, env_ids: torch.Tensor):
         self._progress_abs[env_ids] = 0.0
 
-        if self._command_term._valve_asset is not None:
+        if self._command_term._valve_asset is not None and self.cfg.use_valve_angle:
             self._command_term.recompute_valve_rotate_angle(env_ids)
             self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[env_ids]
         else:
@@ -1554,6 +1564,8 @@ class _RotateFrameHandler(_BaseCmdHandler):
         # Target pose in base frame
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
         target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
+
+        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w)
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
@@ -1944,6 +1956,10 @@ class GoToFrameCfg(BaseCmd):
     """Name of the frame used for pose commands."""
     target_frame_name: str = MISSING  # type: ignore
     """Index of the frame used for pose commands."""
+    target_offset_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Goal translation in the selected target frame [m]; ignored for fixed env goals."""
+    target_offset_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    """Goal rotation (xyzw) in the selected target frame; ignored for fixed env goals."""
     target_position_env: tuple[float, float, float] | None = None
     """Optional fixed position relative to the environment origin.
 
@@ -2020,10 +2036,16 @@ class RotateFrameCfg(BaseCmd):
     """Name of the frame used to rotate around."""
     target_frame_name: str = "rotate_frame"
     """Name of the frame used to rotate around."""
+    target_offset_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Rotation-center translation in the selected reference frame [m]."""
+    target_offset_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    """Rotation-axis frame orientation (xyzw) relative to the selected reference."""
     axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
     """Rotation axis expressed in ``target_frame_name`` coordinates."""
     angle_deg: float = -90.0
     """Angle in degrees to rotate around :attr:`axis`."""
+    use_valve_angle: bool = True
+    """Use the remaining task valve angle when available; False uses angle_deg."""
     angular_velocity: float = 0.3
     """Angular speed of the commanded arc [rad/s]."""
     gripper_open: bool = False

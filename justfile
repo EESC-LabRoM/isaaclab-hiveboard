@@ -39,6 +39,14 @@ retarget-spot-traj *args:
 edit-spot-traj *args:
     uv run python scripts/traj_edit.py {{args}} physics=newton_mjwarp --visualizer none
 
+# Drag GoTo goals, rotation references and the TCP offset in a browser
+edit-commands *args:
+    uv run python scripts/command_edit.py {{args}}
+
+# CPU checks for command setup files, frame transforms and offset IK
+check-command-setup:
+    uv run python scripts/check_command_setup.py
+
 # Build Spot ball-valve EE paths: Newton beads + terminal goal editor
 build-valve-path *args:
     uv run python scripts/valve_path_tui.py {{args}} physics=newton_mjwarp --visualizer newton
