@@ -29,7 +29,14 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     _GripperHandler,
 )
 from isaaclab_hiveboard.utils.command_path import active_command_path
-from isaaclab_hiveboard.utils.command_preview import PreviewIK, build_segments, pose_to_viser, viser_to_pose
+from isaaclab_hiveboard.utils.command_preview import (
+    PreviewIK,
+    Segment,
+    build_segments,
+    concat_segment_tcp,
+    pose_to_viser,
+    viser_to_pose,
+)
 from isaaclab_hiveboard.utils.command_setup import (
     apply_setup,
     as_curobo_command,
@@ -321,6 +328,37 @@ class GeometryTests(unittest.TestCase):
         segment = build_segments(term, [cfg], initial)[0]
         self.assertAlmostEqual(float(segment.handler.angle_rad_tensor[0]), math.pi / 2, places=6)
 
+    def test_segment_samples_curobo_preview_plan(self):
+        cfg = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=False)
+        start = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
+        end = (torch.tensor([[1.0, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        segment = Segment(cfg, start, end, 1.0)
+        cfg._preview_plan = {
+            "joints": torch.tensor([[0.0, 0.0], [1.0, 2.0]]),
+            "joint_names": ["arm_sh0", "arm_sh1"],
+            "tcp_pos_b": torch.tensor([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0]]),
+            "tcp_quat_b": torch.tensor([[0.0, 0, 0, 1], [0.0, 0, 0, 1]]),
+        }
+        pos, _ = segment.sample(0.5)
+        torch.testing.assert_close(pos[0], torch.tensor([0.2, 0.0, 0.0]))
+        joints, names = segment.sample_joints(0.5)
+        torch.testing.assert_close(joints, torch.tensor([0.5, 1.0]))
+        self.assertEqual(names, ["arm_sh0", "arm_sh1"])
+
+    def test_concat_segment_tcp_drops_duplicate_endpoints(self):
+        start = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
+        mid = (torch.tensor([[0.4, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        end = (torch.tensor([[0.8, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        first = Segment(GoToFrameCfg(frame_name="target_frame", target_frame_name="goal"), start, mid, 0.16)
+        second = Segment(GoToFrameCfg(frame_name="target_frame", target_frame_name="goal"), mid, end, 0.16)
+        hold = Segment(GripperCommand(open_gripper=False, duration_s=0.3), end, end, 0.3)
+        pos, _, ranges = concat_segment_tcp([first, second, hold], dt=0.05)
+        self.assertEqual(len(ranges), 3)
+        self.assertEqual(ranges[0][0], 0)
+        self.assertEqual(ranges[1][0], ranges[0][1])
+        self.assertEqual(ranges[2][1] - ranges[2][0], 1)
+        self.assertEqual(int(pos.shape[0]), ranges[-1][1])
+
     def test_viser_quaternion_order_round_trip(self):
         pose = (torch.tensor([[1.0, 2, 3]]), torch.tensor([[0.5, -0.5, 0.5, -0.5]]))
         converted = pose_to_viser(pose)
@@ -376,6 +414,8 @@ class GeometryTests(unittest.TestCase):
         self.assertLess(pos_error, 0.001)
         self.assertLess(rot_error, 0.1)
         self.assertAlmostEqual(float(robot.data.joint_pos.torch[0, 0]), a, places=3)
+        self.assertEqual(ik.last_debug["jacobian_body"], 0)
+        self.assertLess(ik.last_debug["pos_error_mm"], 1.0)
 
 
 class ReplayPathTests(unittest.TestCase):

@@ -10,8 +10,8 @@
     uv run python scripts/command_edit.py --setup logs/command_setup.json
 
 This is a kinematic authoring preview. Tick **cuRobo plan** on a GoTo/Rotate, or
-insert a Curobo command, to save CuroboPlanned* terms. play.py then executes
-those joint plans; the editor itself never launches cuRobo.
+insert a Curobo command, then **Plan with cuRobo** so the path and robot pose
+are the same joint waypoints play.py executes.
 """
 
 from __future__ import annotations
@@ -44,7 +44,9 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
 from isaaclab_hiveboard.utils.command_preview import (
     PreviewIK,
     build_segments,
+    format_ik_debug,
     numpy,
+    plan_curobo_segments,
     pose_to_viser,
     refresh_frame_sensors,
     tensor,
@@ -105,6 +107,9 @@ class CommandEditor:
         self.panel = None
         self.gizmo_poses = {}
         self.markers = []
+        self.command_fields = {}
+        self.angle_note = None
+        self.reference_note = None
         self.reference_options = {}
         for sensor_name, sensor in env.scene.sensors.items():
             if sensor_name == "ee_frame":
@@ -113,6 +118,7 @@ class CommandEditor:
                 self.reference_options[f"{sensor_name}/{frame.name}"] = (sensor_name, frame.name)
         self._create_ui()
         self.rebuild()
+        self.plan_with_curobo()
         self.show_selected()
 
     def _enqueue(self, callback, *, epoch=None):
@@ -135,7 +141,7 @@ class CommandEditor:
             "## HiveBoard command setup\n"
             "Drag a goal or rotation reference. RGB axes are X/Y/Z. "
             "**Kinematic preview**: objects stay at their reset poses. "
-            "Enable **cuRobo plan** to save planned joint commands for play.py.",
+            "Enable **cuRobo plan**, then **Plan with cuRobo** to preview the same joint path as play.py.",
             order=0,
         )
         self.status = gui.add_markdown("Loading…", order=1)
@@ -147,6 +153,8 @@ class CommandEditor:
             self._button("Preview sequence", self.play)
             self._button("Pause", lambda: setattr(self, "playing", False))
             self._button("Reset robot pose", self.reset)
+            self._button("Plan with cuRobo", self.plan_with_curobo)
+            self._button("Dump IK debug", self.dump_ik_debug)
             with gui.add_folder("Edit sequence", expand_by_default=False):
                 self._button("Duplicate command", self.duplicate)
                 self._button("Move earlier", lambda: self.move(-1))
@@ -303,7 +311,7 @@ class CommandEditor:
                     handle.on_update(self._enqueue(self.set_curobo, epoch=self.epoch))
                     if planned:
                         self.server.gui.add_markdown(
-                            "play.py follows cuRobo joint waypoints. This editor still previews the Cartesian path."
+                            "Click **Plan with cuRobo** to preview the same joint waypoints play.py executes."
                         )
                 self._reference_ui(cfg)
                 self._field("gripper_open", "Keep gripper open", boolean=True)
@@ -386,17 +394,65 @@ class CommandEditor:
             visible=isinstance(cfg, RotateFrameCfg),
         )
 
+    def plan_with_curobo(self):
+        self.playing = False
+        self.status.content = "Planning with cuRobo…"
+        try:
+            count = plan_curobo_segments(self.term, self.segments, self.ik)
+        except Exception as err:
+            print(f"[EDITOR] cuRobo planning failed: {err}", flush=True)
+            self.status.content = f"**cuRobo planning failed:** {err}"
+            return
+        print(f"[EDITOR] cuRobo planned {count}/{len(self.segments)} segments", flush=True)
+        self.rebuild()
+        self.preview()
+
+    def _clear_preview_plan(self, cfg=None):
+        cfg = self.commands[self.selected] if cfg is None else cfg
+        if hasattr(cfg, "_preview_plan"):
+            cfg._preview_plan = None
+
+    def dump_ik_debug(self):
+        cfg = self.commands[self.selected]
+        extra = {
+            "command": f"{self.selected} {type(cfg).__name__}",
+            "progress": round(float(self.fraction), 3),
+            "gripper_open": bool(getattr(cfg, "gripper_open", getattr(cfg, "open_gripper", False))),
+            "canonicalize_upward": getattr(cfg, "canonicalize_upward", None),
+            "preview": "curobo" if getattr(cfg, "_preview_plan", None) is not None else "dls",
+            "plan_waypoints": (
+                int(cfg._preview_plan["joints"].shape[0]) if getattr(cfg, "_preview_plan", None) is not None else 0
+            ),
+        }
+        text = format_ik_debug({**extra, **self.ik.last_debug})
+        print(f"[EDITOR IK]\n{text}", flush=True)
+        self.status.content = f"```\n{text}\n```"
+
     def preview(self):
         segment = self.segments[self.selected]
         goal = segment.sample(self.fraction)
         if not self.calibrate.value:
             start = time.perf_counter()
-            pos_error, rot_error = self.ik.solve(goal, segment.gripper_open, self.ik_iters)
+            joints = segment.sample_joints(self.fraction)
+            if joints is not None:
+                q_arm, names = joints
+                self.ik.apply_named_joints(names, q_arm, segment.gripper_open)
+                self.ik.measure(goal)
+                source = "cuRobo joints"
+            else:
+                self.ik.solve(goal, segment.gripper_open, self.ik_iters)
+                source = "DLS preview"
             elapsed = (time.perf_counter() - start) * 1000
-            result = "Reached" if pos_error < 0.005 and rot_error < 3 else "IK residual — inspect reach / joint limits"
+            pos_error = self.ik.last_debug.get("pos_error_mm", float("nan"))
+            rot_error = self.ik.last_debug.get("rot_error_deg", float("nan"))
+            result = "Reached" if pos_error < 5 and rot_error < 3 else "Residual — inspect reach / joint limits"
+            debug = self.ik.last_debug
             self.status.content = (
-                f"{'**Unsaved** · ' if self.dirty else ''}{result}\n\n"
-                f"Position **{pos_error * 1000:.1f} mm** · Rotation **{rot_error:.1f}°** · Solve {elapsed:.0f} ms"
+                f"{'**Unsaved** · ' if self.dirty else ''}{result} · {source}\n\n"
+                f"Position **{pos_error:.1f} mm** · Rotation **{rot_error:.1f}°** · {elapsed:.0f} ms\n\n"
+                f"TCP goal RPY {debug.get('tcp_goal_rpy_deg')}  +X {debug.get('tcp_goal_+X')}  +Z {debug.get('tcp_goal_+Z')}\n\n"
+                f"TCP actual RPY {debug.get('tcp_actual_rpy_deg')}  +X {debug.get('tcp_actual_+X')}  +Z {debug.get('tcp_actual_+Z')}\n\n"
+                f"Flange actual RPY {debug.get('flange_actual_rpy_deg')}  +X {debug.get('flange_actual_+X')}"
             )
         else:
             self.status.content = "**TCP calibration** — the robot stays still while you move the offset."
@@ -420,12 +476,27 @@ class CommandEditor:
         if name in {"target_offset_pos", "target_offset_rot", "target_position_env", "target_orientation_env"}:
             self._clear_reference_path(candidate)
         validate_command(candidate)
+        self._clear_preview_plan(candidate)
         self.commands[self.selected] = candidate
-        self.changed(refresh_panel=name in {"position_override_b", "axis_position_override_b"})
+        pose_fields = {
+            "target_offset_pos",
+            "target_offset_rot",
+            "target_position_env",
+            "target_orientation_env",
+            "angle_deg",
+            "axis",
+            "axial_distance",
+        }
+        self.changed(
+            refresh_panel=name in {"position_override_b", "axis_position_override_b"},
+            replan=name in pose_fields,
+        )
 
-    def changed(self, *, refresh_panel=True):
+    def changed(self, *, refresh_panel=True, replan=False):
         self.dirty, self.playing = True, False
         self.rebuild()
+        if replan and any(is_curobo_command(cmd) for cmd in self.commands):
+            self.plan_with_curobo()
         if refresh_panel:
             self.show_selected()
         else:
@@ -448,7 +519,8 @@ class CommandEditor:
                 cfg.target_position_env = cfg.target_orientation_env = None
             self._store_relative_pose(cfg, pose_w)
         self._clear_reference_path(cfg)
-        self.changed()
+        self._clear_preview_plan(cfg)
+        self.changed(replan=True)
 
     def _store_relative_pose(self, cfg, pose_w):
         sensor = self.env.scene[cfg.frame_name]
@@ -484,6 +556,7 @@ class CommandEditor:
             else:
                 self._store_relative_pose(cfg, pose_w)
             self._clear_reference_path(cfg)
+            self._clear_preview_plan(cfg)
         # Keep the same UI generation while a drag is in flight.
         self.dirty = True
         self.rebuild()
@@ -515,6 +588,11 @@ class CommandEditor:
         self.calibrate.value = False
         self.ik.reset()
         self.selected, self.fraction = 0, 0.0
+        if any(
+            is_curobo_command(segment.cfg) and getattr(segment.cfg, "_preview_plan", None) is None
+            for segment in getattr(self, "segments", ())
+        ):
+            self.plan_with_curobo()
         self.rebuild()
         self.show_selected()
         self.playing = True
@@ -529,7 +607,7 @@ class CommandEditor:
     def duplicate(self):
         self.commands.insert(self.selected + 1, copy.deepcopy(self.commands[self.selected]))
         self.selected += 1
-        self.changed()
+        self.changed(replan=is_curobo_command(self.commands[self.selected]))
 
     def move(self, delta):
         target = self.selected + delta
@@ -559,7 +637,7 @@ class CommandEditor:
         self.commands[self.selected] = (
             as_curobo_command(cfg, self._planner_settings()) if enabled else as_direct_command(cfg)
         )
-        self.changed()
+        self.changed(replan=enabled)
 
     def insert(self):
         kind = self.add_kind.value
@@ -585,7 +663,7 @@ class CommandEditor:
                 cfg = as_curobo_command(cfg, self._planner_settings())
         self.commands.insert(self.selected + 1, cfg)
         self.selected += 1
-        self.changed()
+        self.changed(replan=is_curobo_command(cfg))
 
     def payload(self):
         return make_setup(self.task, self.term.cfg, self.commands, self.ik.offset)
@@ -648,9 +726,6 @@ def _parse_args():
     parser.add_argument("--smoke-test", action="store_true", help="Construct scene/UI, solve once and exit.")
     add_launcher_args(parser)
     args, hydra_args = setup_preset_cli(parser)
-    # A single kinematic preview is small; CPU avoids CUDA solver startup and
-    # works on machines used to author tasks away from the training workstation.
-    args.device = args.device or "cpu"
     if args.ik_iters < 1:
         parser.error("--ik-iters must be positive")
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
@@ -711,6 +786,7 @@ def main():
                 viewer.log_state(NewtonManager.get_state())
                 viewer.end_frame()
                 if args.smoke_test:
+                    editor.dump_ik_debug()
                     print(f"[SMOKE] {len(editor.commands)} commands; {editor.status.content}", flush=True)
                     break
                 time.sleep(max(0, 1 / 30 - (time.perf_counter() - start)))
