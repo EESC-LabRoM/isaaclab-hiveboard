@@ -56,8 +56,10 @@ SMALL_VALVE_USD = os.path.join(
 CIRCUIT_BREAKER_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Circuit Breaker", "Circuit_Breaker_Assembly.urdf"
 )
+# urdf-usd-converter base (usd/uuc/) + baked CoACD overlay. See
+# scripts/generate_newton_usd.py.
 CIRCUIT_BREAKER_USD = os.path.join(
-    HIVEBOARD_SIM_DIR, "Circuit Breaker", "Circuit_Breaker_Assembly.usd"
+    ASSET_DIR, "hiveboard", "circuit_breaker", "usd", "Circuit_Breaker_uuc_newton.usda"
 )
 BUTTON_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Button", "Button_Assembly.urdf")
 BUTTON_USD = os.path.join(HIVEBOARD_SIM_DIR, "Button", "Button_Assembly.usd")

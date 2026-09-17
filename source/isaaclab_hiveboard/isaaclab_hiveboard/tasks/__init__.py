@@ -39,6 +39,24 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-CircuitBreaker-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.circuit_breaker.env:SpotCircuitBreakerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-CircuitBreaker-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.circuit_breaker.env:SpotCircuitBreakerEnvCfg_PLAY",
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Spot-BenchValve-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

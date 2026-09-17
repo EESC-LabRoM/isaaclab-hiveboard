@@ -9,6 +9,10 @@ from .ball_valve.env import (
     SpotBallValveEnvCfg,
     SpotBallValveEnvCfg_PLAY,
 )
+from .circuit_breaker.env import (
+    SpotCircuitBreakerEnvCfg,
+    SpotCircuitBreakerEnvCfg_PLAY,
+)
 from .bench_valve.env import (
     SpotBenchValveEnvCfg,
     SpotBenchValveEnvCfg_PLAY,
@@ -24,6 +28,8 @@ from .gains.env import (
 __all__ = [
     "SpotBallValveEnvCfg",
     "SpotBallValveEnvCfg_PLAY",
+    "SpotCircuitBreakerEnvCfg",
+    "SpotCircuitBreakerEnvCfg_PLAY",
     "SpotBenchValveEnvCfg",
     "SpotBenchValveEnvCfg_PLAY",
     "SpotCuroboValveEnvCfg",

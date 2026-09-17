@@ -13,6 +13,8 @@ Valve: UUC conversion into ``ball_valve/usd/uuc/`` plus a CoACD overlay
 (``Ball_Valve_uuc_newton.usda``). A single UUC convexHull wraps the lever in
 ~3x phantom volume; Newton hardcodes CoACD threshold=0.5, so parts are baked
 here (``coacd`` + ``trimesh``, generation-time only).
+Circuit breaker: UUC conversion of the HiveBoard
+``Circuit_Breaker_Assembly.urdf`` plus the same CoACD overlay.
 
 UUC needs a Python that can ``import urdf_usd_converter`` (isolated venv;
 the project venv does not ship it). Overlay rewrite is kitless.
@@ -51,6 +53,19 @@ VALVE_TARGETS: tuple[tuple[str, str, float], ...] = (
     ("Geometry/valvula_esfera", "Mesh_1", 0.1),
     ("Geometry/valvula_esfera/alavanca_pivot", "Mesh_1_1", 0.05),
 )
+
+BREAKER_URDF = (
+    REPO_ROOT / "dependencies/HiveBoard/Simulation/Circuit Breaker/Circuit_Breaker_Assembly.urdf"
+)
+BREAKER_USD_DIR = EXT_ASSETS / "hiveboard/circuit_breaker/usd"
+BREAKER_UUC_DIR = BREAKER_USD_DIR / "uuc"
+BREAKER_OVERLAY = BREAKER_USD_DIR / "Circuit_Breaker_uuc_newton.usda"
+BREAKER_TARGETS: tuple[tuple[str, str, float], ...] = (
+    ("Geometry/World", "tn__corpo1_dC_Corpo1_Mesh_1", 0.1),
+    ("Geometry/World/lever_pivot", "tn__Alavanca1_zH_Corpo1_Mesh_1", 0.05),
+)
+
+DEFAULT_UUC_PYTHON = str(REPO_ROOT / "dependencies/urdf-usd-converter/.venv/bin/python")
 
 SPOT_MESH_DIR = EXT_ASSETS / "spot/meshes"
 
@@ -262,45 +277,52 @@ def _op_lines(prim) -> list[str]:
     return lines
 
 
-def render_valve_overlay() -> str:
+def render_coacd_overlay(
+    *,
+    urdf: Path,
+    uuc_dir: Path,
+    usda_name: str,
+    default_prim: str,
+    targets: tuple[tuple[str, str, float], ...],
+) -> str:
     """Disable UUC single hulls and add baked CoACD parts in the mesh xform."""
     from pxr import Usd  # noqa: PLC0415
 
-    base = VALVE_UUC_DIR / "Ball_Valve.usda"
+    base = uuc_dir / usda_name
     stage = Usd.Stage.Open(str(base))
     if not stage:
         raise RuntimeError(f"pxr could not open UUC base: {base}")
-    link_meshes = urdf_link_collision_meshes(VALVE_URDF)
+    link_meshes = urdf_link_collision_meshes(urdf)
     api_list = ", ".join(f'"{api}"' for api in MESH_COLLISION_APIS)
     lines = [
         "#usda 1.0",
         "(",
-        '    defaultPrim = "Ball_Valve"',
+        f'    defaultPrim = "{default_prim}"',
         "    metersPerUnit = 1",
         '    upAxis = "Z"',
         ")",
         "",
         "# Overlay over the urdf-usd-converter base (usd/uuc/). UUC already places",
-        "# collision schemas on the meshes; this swaps the two single-hull colliders",
-        "# for baked CoACD parts (a lone convexHull wraps the lever in ~3x phantom",
+        "# collision schemas on the meshes; this swaps the single-hull colliders",
+        "# for baked CoACD parts (a lone convexHull wraps thin levers in ~3x phantom",
         "# volume).",
-        'def Xform "Ball_Valve" (',
-        "    prepend references = @./uuc/Ball_Valve.usda@</Ball_Valve>",
+        f'def Xform "{default_prim}" (',
+        f"    prepend references = @./uuc/{usda_name}@</{default_prim}>",
         ")",
         "{",
     ]
     tree: dict = {}
     contents: dict[tuple[str, ...], list[str]] = {}
-    for link_path, mesh_name, threshold in VALVE_TARGETS:
+    for link_path, mesh_name, threshold in targets:
         link = link_path.split("/")[-1]
-        mesh_path = f"/Ball_Valve/{link_path}/{mesh_name}"
+        mesh_path = f"/{default_prim}/{link_path}/{mesh_name}"
         prim = stage.GetPrimAtPath(mesh_path)
         if not prim or not prim.IsValid():
             raise RuntimeError(f"UUC base target missing: {mesh_path}")
         mesh_files = link_meshes.get(link, [])
         if len(mesh_files) != 1:
             raise RuntimeError(f"Expected 1 URDF collision mesh for link '{link}', got {mesh_files}")
-        parts = decompose_mesh(resolve_mesh_file(mesh_files[0], VALVE_URDF), threshold)
+        parts = decompose_mesh(resolve_mesh_file(mesh_files[0], urdf), threshold)
         print(f"[DECOMP] {link}/{mesh_name}: {len(parts)} parts (threshold={threshold})")
         elems = tuple(link_path.split("/"))
         node = tree
@@ -344,6 +366,26 @@ def render_valve_overlay() -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_valve_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=VALVE_URDF,
+        uuc_dir=VALVE_UUC_DIR,
+        usda_name="Ball_Valve.usda",
+        default_prim="Ball_Valve",
+        targets=VALVE_TARGETS,
+    )
+
+
+def render_breaker_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=BREAKER_URDF,
+        uuc_dir=BREAKER_UUC_DIR,
+        usda_name="Circuit_Breaker_Assembly.usda",
+        default_prim="Circuit_Breaker_Assembly",
+        targets=BREAKER_TARGETS,
+    )
+
+
 def verify() -> list[str]:
     """Check generated UUC USD resolves. Empty list = ok."""
     from pxr import Usd, UsdGeom  # noqa: PLC0415
@@ -380,6 +422,18 @@ def verify() -> list[str]:
             )
             if not lever or not lever.IsValid():
                 problems.append("valve overlay missing CoACD lever part_0")
+    if not BREAKER_OVERLAY.exists():
+        problems.append(f"missing circuit breaker overlay: {BREAKER_OVERLAY}")
+    else:
+        stage = Usd.Stage.Open(str(BREAKER_OVERLAY))
+        if not stage:
+            problems.append(f"pxr could not open {BREAKER_OVERLAY}")
+        else:
+            lever = stage.GetPrimAtPath(
+                "/Circuit_Breaker_Assembly/Geometry/World/lever_pivot/decomp_lever_pivot/part_0"
+            )
+            if not lever or not lever.IsValid():
+                problems.append("circuit breaker overlay missing CoACD lever part_0")
     return problems
 
 
@@ -387,13 +441,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--assets",
-        choices=["all", "spot", "ball_valve"],
+        choices=["all", "spot", "ball_valve", "circuit_breaker"],
         default="all",
         help="Which asset to process (default: all).",
     )
     parser.add_argument(
         "--uuc-python",
-        default="/tmp/opencode/uuc-venv/bin/python",
+        default=DEFAULT_UUC_PYTHON,
         help="Python with urdf_usd_converter importable.",
     )
     parser.add_argument(
@@ -419,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     want_spot = args.assets in ("all", "spot")
     want_valve = args.assets in ("all", "ball_valve")
+    want_breaker = args.assets in ("all", "circuit_breaker")
 
     if args.verify_only:
         problems = verify()
@@ -427,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             for problem in problems:
                 print(f"  - {problem}")
             return 1
-        print("[OK] Spot UUC + valve overlay resolve")
+        print("[OK] Spot UUC + valve overlay + circuit breaker overlay resolve")
         return 0
 
     if args.strip_obj:
@@ -443,11 +498,19 @@ def main(argv: list[str] | None = None) -> int:
         if want_valve:
             run_uuc_conversion(VALVE_URDF, VALVE_UUC_DIR, args.uuc_python)
             print(f"[UUC] ball_valve: {VALVE_UUC_DIR / 'Ball_Valve.usda'}")
+        if want_breaker:
+            run_uuc_conversion(BREAKER_URDF, BREAKER_UUC_DIR, args.uuc_python)
+            print(f"[UUC] circuit_breaker: {BREAKER_UUC_DIR / 'Circuit_Breaker_Assembly.usda'}")
 
     if want_valve:
         text = render_valve_overlay()
         VALVE_OVERLAY.write_text(text, encoding="utf-8")
         print(f"[OVERLAY] wrote {VALVE_OVERLAY} ({len(text) // 1024} KiB)")
+    if want_breaker:
+        text = render_breaker_overlay()
+        BREAKER_OVERLAY.parent.mkdir(parents=True, exist_ok=True)
+        BREAKER_OVERLAY.write_text(text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {BREAKER_OVERLAY} ({len(text) // 1024} KiB)")
 
     problems = verify()
     for problem in problems:
