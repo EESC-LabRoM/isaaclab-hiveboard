@@ -1,6 +1,6 @@
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
-from isaaclab_hiveboard.tasks.franka.circuit_breaker.configs.actions import FrankaIKAbsActionCfg
+from .configs.actions import FrankaLampActionsCfg
 from .configs.scene import FrankaLampSceneCfg
 from .configs.commands import FramePoseCommandsCfg
 from .configs.observations import ObservationsCfg
@@ -11,7 +11,7 @@ from .configs.events import FrankaLampEventCfg
 class FrankaLampEnvCfg(ManagerBasedRLEnvCfg):
     scene: FrankaLampSceneCfg = FrankaLampSceneCfg(num_envs=1, env_spacing=3.0)  # type: ignore
     observations: ObservationsCfg = ObservationsCfg()  # type: ignore
-    actions: FrankaIKAbsActionCfg = FrankaIKAbsActionCfg()  # type: ignore
+    actions: FrankaLampActionsCfg = FrankaLampActionsCfg()  # type: ignore
     terminations: TerminationsCfg = TerminationsCfg()  # type: ignore
     events: FrankaLampEventCfg = FrankaLampEventCfg()  # type: ignore
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()  # type: ignore
@@ -19,7 +19,8 @@ class FrankaLampEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 5
-        self.episode_length_s = 20.0
+        # Sixteen quarter-turn/regrasp cycles remove the bulb by 24 mm.
+        self.episode_length_s = 100.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "lamp"
         self.viewer.body_name = "lamp_pivot"
