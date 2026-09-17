@@ -53,12 +53,32 @@ uv sync
 | `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
 | `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
 | `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
+| `Isaac-HiveBoard-Franka-GateValveSmall-v0` | Franka FR3 | Small Gate Valve | Differential IK; four 90° grasp/release cycles |
 
 List all available tasks:
 
 ```bash
 uv run python scripts/list_envs.py
 ```
+
+The Franka small gate valve uses a horizontal, floor-fixed panel with the valve
+in its central cell. Franka approaches from above and performs four quarter-turns,
+opening and lifting its gripper before each wrist reset. Success requires the
+measured stem travel to reach 360° from closed (within 5°), followed by release
+and retreat. The valve is passive; the shared asset's prismatic joint stays fixed.
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-GateValveSmall-v0" --pose-debug
+```
+
+Tune its authored TCP poses in
+`tasks/franka/gate_valve_small/configs/scene.py`: `APPROACH_OFFSET` controls
+the clearance/reset height, `GRASP_OFFSET` controls contact depth, and
+`GRASP_ORIENTATION` controls the wrist orientation. In this floor-mounted
+scene, a more-negative Y offset is higher above the valve. Tune motion speed
+in `configs/commands.py` with `LINEAR_VELOCITY` and `ANGULAR_VELOCITY`.
+`TURN_COMMAND_DEG` compensates for gripper/contact compliance; task success is
+always evaluated from measured stem rotation.
 
 ---
 

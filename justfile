@@ -27,6 +27,10 @@ play-spot-small-valve:
 play-franka-lever:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-LeverValve-v0" --pose-debug
 
+# Play Franka small gate valve with pose diagnostics
+play-franka-small-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-GateValveSmall-v0" --pose-debug
+
 # Play Franka Circuit Breaker with pose diagnostics
 play-franka-breaker:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug

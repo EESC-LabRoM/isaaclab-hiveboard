@@ -242,6 +242,10 @@ def main():
         from isaaclab_hiveboard.tasks.franka.lever_valve.env import FrankaLeverValveEnvCfg
 
         env_cfg = FrankaLeverValveEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Franka-GateValveSmall-v0":
+        from isaaclab_hiveboard.tasks.franka.gate_valve_small.env import FrankaGateValveSmallEnvCfg
+
+        env_cfg = FrankaGateValveSmallEnvCfg()
     elif args_cli.task == "Isaac-HiveBoard-Franka-Lamp-v0":
         from isaaclab_hiveboard.tasks.franka.lamp.env import FrankaLampEnvCfg
 

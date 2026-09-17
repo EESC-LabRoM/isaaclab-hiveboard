@@ -69,6 +69,7 @@ tests/
 !/tests/
 /tests/*
 !/tests/test_franka_lever_valve_ik.py
+!/tests/test_franka_gate_valve_small.py
 
 # Docker history
 .isaac-lab-docker-history
