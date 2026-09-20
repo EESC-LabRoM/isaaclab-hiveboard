@@ -12,6 +12,27 @@ import gymnasium as gym
 ##
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-Lamp-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg"},
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Lamp-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lamp.env:FrankaLampEnvCfg"},
+)
+
+gym.register(
+    id="Spot-Manipulation-Lamp",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg"},
+)
+
+gym.register(
     id="validate_command_spot",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

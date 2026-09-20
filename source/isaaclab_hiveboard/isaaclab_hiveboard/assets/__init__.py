@@ -51,6 +51,7 @@ _EXPORT_MODULES = {
     "KEY_USD": ".hiveboard",
     "LAMP_URDF": ".hiveboard",
     "LAMP_USD": ".hiveboard",
+    "LAMP_NEWTON_USD": ".hiveboard",
     "SHOCK_ABSORBER_URDF": ".hiveboard",
     "SHOCK_ABSORBER_USD": ".hiveboard",
     "SMALL_VALVE_URDF": ".hiveboard",

@@ -57,6 +57,8 @@ curobo`, and `--extra data`.
 | `Isaac-HiveBoard-Spot-CircuitBreaker-v0` | Spot + Arm | Circuit Breaker | Sequential Pose IK |
 | `Isaac-HiveBoard-Spot-HighTorqueValve-v0` | Spot + Arm | Gate Valve | Multi-revolution IK |
 | `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
+| `Isaac-HiveBoard-Spot-Lamp-v0` | Spot + Arm | Screw-in Lamp | TCP pose IK with screw coupling |
+| `Isaac-HiveBoard-Franka-Lamp-v0` | Franka FR3 | Screw-in Lamp | TCP pose IK with screw coupling |
 | `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
 | `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
 
@@ -105,6 +107,22 @@ uv run --python 3.12 python scripts/play.py \
 `scripts/play_spot_ball_valve.py` is the pass/fail demo runner: it exits
 nonzero unless the physical valve joint reaches the sampled endpoint within
 the 15-degree success tolerance.
+
+### Newton lamp tasks
+
+Generate the lamp asset once, then run either robot with the kitless player:
+
+```bash
+uv run python scripts/generate_newton_usd.py --assets lamp
+uv run python scripts/play.py --task Isaac-HiveBoard-Spot-Lamp-v0 physics=newton_mjwarp --visualizer newton
+uv run python scripts/play.py --task Isaac-HiveBoard-Franka-Lamp-v0 physics=newton_mjwarp --visualizer newton
+```
+
+The original HiveBoard lamp USD remains in `dependencies/HiveBoard/Simulation/Lamp/`.
+Newton uses the generated USD with the URDF's primitive bulb colliders, plus
+an environment-side 6 mm/revolution screw coupling. The default sequence uses
+sixteen quarter turns. Franka's public FR3 USD is downloaded on first use.
+Pass `--device cpu --visualizer none --max-steps 5` for a short headless check.
 
 ### Website Spot valve playback
 

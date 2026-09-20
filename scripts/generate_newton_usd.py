@@ -17,6 +17,8 @@ Circuit breaker: UUC conversion of the HiveBoard
 ``Circuit_Breaker_Assembly.urdf`` plus the same CoACD overlay.
 High-torque / small gate valves: UUC conversion of the HiveBoard URDFs
 plus the same CoACD overlay.
+Lamp: UUC conversion of the HiveBoard lamp URDF, including its primitive
+bulb colliders. The environment implements the revolute/prismatic coupling.
 
 UUC needs a Python that can ``import urdf_usd_converter`` (isolated venv;
 the project venv does not ship it). Overlay rewrite is kitless.
@@ -89,6 +91,9 @@ SM_TARGETS: tuple[tuple[str, str, float], ...] = (
 )
 
 DEFAULT_UUC_PYTHON = str(REPO_ROOT / "dependencies/urdf-usd-converter/.venv/bin/python")
+
+LAMP_URDF = REPO_ROOT / "dependencies/HiveBoard/Simulation/Lamp/Lamp_Assembly.urdf"
+LAMP_UUC_DIR = EXT_ASSETS / "hiveboard/lamp/usd/uuc"
 
 SPOT_MESH_DIR = EXT_ASSETS / "spot/meshes"
 
@@ -431,7 +436,7 @@ def render_sm_overlay() -> str:
 
 def verify() -> list[str]:
     """Check generated UUC USD resolves. Empty list = ok."""
-    from pxr import Usd, UsdGeom  # noqa: PLC0415
+    from pxr import Usd, UsdGeom, UsdPhysics  # noqa: PLC0415
 
     problems = []
     spot = SPOT_UUC_DIR / "spot_with_arm.usda"
@@ -499,6 +504,24 @@ def verify() -> list[str]:
             )
             if not stem or not stem.IsValid():
                 problems.append("small valve overlay missing CoACD eixo_trans part_0")
+    lamp = LAMP_UUC_DIR / "Lamp_Assembly.usda"
+    if not lamp.exists():
+        problems.append(f"missing lamp UUC: {lamp}")
+    else:
+        stage = Usd.Stage.Open(str(lamp))
+        if not stage:
+            problems.append(f"pxr could not open {lamp}")
+        else:
+            bulb = stage.GetPrimAtPath("/Lamp_Assembly/Geometry/World/rotation_pivot/lamp_pivot")
+            if not bulb or not bulb.HasAPI(UsdPhysics.RigidBodyAPI):
+                problems.append("lamp UUC missing lamp_pivot rigid body")
+            for name, joint_type in (
+                ("RevoluteJoint", UsdPhysics.RevoluteJoint),
+                ("PrismaticJoint", UsdPhysics.PrismaticJoint),
+            ):
+                joint = stage.GetPrimAtPath(f"/Lamp_Assembly/Physics/{name}")
+                if not joint or not joint.IsA(joint_type):
+                    problems.append(f"lamp UUC missing {name}")
     return problems
 
 
@@ -506,7 +529,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--assets",
-        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve"],
+        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve", "lamp"],
         default="all",
         help="Which asset to process (default: all).",
     )
@@ -541,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     want_breaker = args.assets in ("all", "circuit_breaker")
     want_ht = args.assets in ("all", "high_torque_valve")
     want_sm = args.assets in ("all", "small_valve")
+    want_lamp = args.assets in ("all", "lamp")
 
     if args.verify_only:
         problems = verify()
@@ -558,6 +582,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.skip_conversion:
+        if want_lamp:
+            run_uuc_conversion(LAMP_URDF, LAMP_UUC_DIR, args.uuc_python)
+            print(f"[UUC] lamp: {LAMP_UUC_DIR / 'Lamp_Assembly.usda'}")
         if want_spot:
             strip_spot_obj_topology()
             run_uuc_conversion(SPOT_URDF, SPOT_UUC_DIR, args.uuc_python)

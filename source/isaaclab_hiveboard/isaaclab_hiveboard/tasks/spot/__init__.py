@@ -29,6 +29,7 @@ from .high_torque_valve.env import (
     SpotHighTorqueValveEnvCfg,
     SpotHighTorqueValveEnvCfg_PLAY,
 )
+from .lamp.env import SpotLampEnvCfg
 from .small_valve.env import (
     SpotSmallValveEnvCfg,
     SpotSmallValveEnvCfg_PLAY,
@@ -46,6 +47,7 @@ __all__ = [
     "SpotGainsEnvCfg_PLAY",
     "SpotHighTorqueValveEnvCfg",
     "SpotHighTorqueValveEnvCfg_PLAY",
+    "SpotLampEnvCfg",
     "SpotSmallValveEnvCfg",
     "SpotSmallValveEnvCfg_PLAY",
 ]
