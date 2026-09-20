@@ -42,14 +42,16 @@ BALL_VALVE_FRICTION_RING_URDF = os.path.join(
 HIGH_TORQUE_VALVE_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "High Torque Valve", "High_Torque_Valve.urdf"
 )
+# urdf-usd-converter base (usd/uuc/) + baked CoACD overlay. See
+# scripts/generate_newton_usd.py.
 HIGH_TORQUE_VALVE_USD = os.path.join(
-    HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "High Torque Valve", "High_Torque_Valve.usd"
+    ASSET_DIR, "hiveboard", "high_torque_valve", "usd", "High_Torque_Valve_uuc_newton.usda"
 )
 SMALL_VALVE_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "Small Valve", "Small_Valve.urdf"
 )
 SMALL_VALVE_USD = os.path.join(
-    HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "Small Valve", "Small_Valve.usd"
+    ASSET_DIR, "hiveboard", "small_valve", "usd", "Small_Valve_uuc_newton.usda"
 )
 
 # HiveBoard Interactive Objects - Electrical & Mechanical

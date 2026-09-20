@@ -16,15 +16,18 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
 import torch
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
+    CuroboPlannedRotateFrameCfg,
     GoToFrameCfg,
     GripperCommand,
     RotateFrameCfg,
     ScrewFrameCfg,
     SequentialPoseCommandCfg,
+    _CuroboPlannedRotateFrameHandler,
     _GoToFrameHandler,
     _GripperHandler,
 )
@@ -32,8 +35,14 @@ from isaaclab_hiveboard.utils.command_path import active_command_path
 from isaaclab_hiveboard.utils.command_preview import (
     PreviewIK,
     Segment,
+    apply_authored_command_field,
     build_segments,
     concat_segment_tcp,
+    effective_arc_caption,
+    format_editor_plan_failure,
+    format_infeasible_rotation_message,
+    invalidate_preview_plans_from,
+    _plan_curobo_per_segment,
     pose_to_viser,
     viser_to_pose,
 )
@@ -328,6 +337,29 @@ class GeometryTests(unittest.TestCase):
         segment = build_segments(term, [cfg], initial)[0]
         self.assertAlmostEqual(float(segment.handler.angle_rad_tensor[0]), math.pi / 2, places=6)
 
+    def test_editing_angle_deg_disables_valve_angle_and_caption_names_the_source(self):
+        cfg = RotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            use_valve_angle=True,
+            angle_deg=90.0,
+        )
+        self.assertTrue(apply_authored_command_field(cfg, "angle_deg", -45.0))
+        self.assertEqual(cfg.angle_deg, -45.0)
+        self.assertFalse(cfg.use_valve_angle)
+        self.assertFalse(apply_authored_command_field(cfg, "angle_deg", -90.0))
+        handler = NS(angle_rad_tensor=torch.tensor([-math.pi / 2]))
+        self.assertEqual(
+            effective_arc_caption(cfg, handler),
+            "Effective arc: **-90.0°** (from Angle (deg))",
+        )
+        cfg.use_valve_angle = True
+        cfg.angle_deg = 90.0
+        self.assertIn("Angle (deg)=90 is unused", effective_arc_caption(cfg, handler))
+        cfg.max_ee_rotation_deg = 60.0
+        cfg.use_valve_angle = False
+        self.assertIn("clamped to ±60°", effective_arc_caption(cfg, handler))
+
     def test_segment_samples_curobo_preview_plan(self):
         cfg = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=False)
         start = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
@@ -344,6 +376,43 @@ class GeometryTests(unittest.TestCase):
         joints, names = segment.sample_joints(0.5)
         torch.testing.assert_close(joints, torch.tensor([0.5, 1.0]))
         self.assertEqual(names, ["arm_sh0", "arm_sh1"])
+
+    def test_stale_preview_plan_disconnects_until_later_legs_are_invalidated(self):
+        identity = torch.tensor([[0.0, 0, 0, 1]])
+        first = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=False)
+        second = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal", canonicalize_upward=False)
+        first_seg = Segment(first, (torch.zeros(1, 3), identity), (torch.tensor([[0.4, 0, 0]]), identity), 0.16)
+        second_seg = Segment(second, (torch.tensor([[0.4, 0, 0]]), identity), (torch.tensor([[0.8, 0, 0]]), identity), 0.16)
+        second._preview_plan = {
+            "joints": torch.zeros(2, 1),
+            "joint_names": ["arm_sh0"],
+            "tcp_pos_b": torch.tensor([[0.1, 0.0, 0.0], [0.8, 0.0, 0.0]]),
+            "tcp_quat_b": torch.tensor([[0.0, 0, 0, 1], [0.0, 0, 0, 1]]),
+        }
+        first_seg.end = (torch.tensor([[0.55, 0, 0]]), identity)
+        second_seg.start = first_seg.end
+        gap = torch.linalg.vector_norm(second_seg.sample(0.0)[0] - first_seg.end[0])
+        self.assertGreater(float(gap), 0.2)
+        invalidate_preview_plans_from([first, second], 1)
+        torch.testing.assert_close(second_seg.sample(0.0)[0], first_seg.end[0])
+        pos, _, _ = concat_segment_tcp([first_seg, second_seg], dt=0.05)
+        self.assertFalse(bool(torch.any(torch.abs(pos[:, 0] - 0.1) < 1e-3)))
+
+    def test_concat_ignores_cached_plan_so_replanning_uses_live_geometry(self):
+        identity = torch.tensor([[0.0, 0, 0, 1]])
+        start = (torch.zeros(1, 3), identity)
+        mid = (torch.tensor([[0.4, 0, 0]]), identity)
+        end = (torch.tensor([[0.8, 0, 0]]), identity)
+        first = Segment(GoToFrameCfg(frame_name="target_frame", target_frame_name="goal"), start, mid, 0.16)
+        second = Segment(GoToFrameCfg(frame_name="target_frame", target_frame_name="goal"), mid, end, 0.16)
+        second.cfg._preview_plan = {
+            "joints": torch.zeros(2, 1),
+            "joint_names": ["arm_sh0"],
+            "tcp_pos_b": torch.tensor([[0.0, 1.0, 0.0], [0.8, 1.0, 0.0]]),
+            "tcp_quat_b": torch.tensor([[0.0, 0, 0, 1], [0.0, 0, 0, 1]]),
+        }
+        pos, _, _ = concat_segment_tcp([first, second], dt=0.05)
+        self.assertLess(float(torch.max(torch.abs(pos[:, 1]))), 1e-5)
 
     def test_concat_segment_tcp_drops_duplicate_endpoints(self):
         start = (torch.zeros(1, 3), torch.tensor([[0.0, 0, 0, 1]]))
@@ -479,6 +548,245 @@ class ReplayPathTests(unittest.TestCase):
         torch.testing.assert_close(pos, handler._waypoint_pos_b[0])
         torch.testing.assert_close(quat, handler._waypoint_quat_b[0])
         self.assertIsNone(active_command_path(_GripperHandler(GripperCommand(), term), command))
+
+
+class RotateGraspPlaneTests(unittest.TestCase):
+    """The TCP must orbit in the grasp plane, not snap onto the hub first."""
+
+    def _handler(self, initial, *, hub=(0.0, 0.0, 0.0), axis=(0.0, 0.0, 1.0), angle_deg=-90.0, cls=RotateFrameCfg):
+        term = geometry_term()
+        term._env.scene["target_frame"].data.target_pos_w = proxy([[list(hub)]])
+        cfg = cls(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            axis=axis,
+            angle_deg=angle_deg,
+            use_valve_angle=False,
+            angular_velocity=0.3,
+        )
+        return build_segments(term, [cfg], initial)[0]
+
+    def test_angle_zero_stays_at_grasp_not_hub_plane(self):
+        initial = (torch.tensor([[1.0, 0.0, 0.05]]), torch.tensor([[0.0, 0, 0, 1]]))
+        segment = self._handler(initial)
+        handler = segment.handler
+        torch.testing.assert_close(handler.axial_vec, torch.tensor([[0.0, 0.0, 0.05]]))
+        torch.testing.assert_close(handler.radius_vec, torch.tensor([[1.0, 0.0, 0.0]]))
+        handler.angle_rad_tensor[0] = 0.0
+        pos, _ = handler.get_target_in_base_frame(torch.tensor([0]))
+        torch.testing.assert_close(pos, initial[0], atol=1e-6, rtol=0)
+        pos0, _ = segment.sample(0.0)
+        torch.testing.assert_close(pos0, initial[0], atol=1e-6, rtol=0)
+
+    def test_orbit_keeps_stem_offset(self):
+        initial = (torch.tensor([[1.0, 0.0, 0.05]]), torch.tensor([[0.0, 0, 0, 1]]))
+        segment = self._handler(initial, angle_deg=-90)
+        pos, _ = segment.handler.get_target_in_base_frame(torch.tensor([0]))
+        torch.testing.assert_close(pos, torch.tensor([[0.0, -1.0, 0.05]]), atol=1e-6, rtol=0)
+        pos_half, _ = segment.sample(0.5)
+        torch.testing.assert_close(pos_half, torch.tensor([[0.7071068, -0.7071068, 0.05]]), atol=1e-5, rtol=0)
+
+    def test_first_update_does_not_slide_along_axis(self):
+        initial = (torch.tensor([[1.0, 0.0, 0.05]]), torch.tensor([[0.0, 0, 0, 1]]))
+        handler = self._handler(initial).handler
+        command = handler.update(torch.tensor([True]))
+        # 0.3 rad/s * 0.05 s is a tiny yaw; Z must not jump from 0.05 to the hub.
+        self.assertAlmostEqual(float(command[0, 3]), 0.05, places=5)
+        self.assertGreater(float(command[0, 1]), 0.99)
+
+    def test_small_valve_like_stem_offset_does_not_retract_to_hub(self):
+        # Same geometry as the play dump: hub 7 mm further along +X than the TCP.
+        hub = (0.957, 0.0, 0.0)
+        tcp = torch.tensor([[0.950, 0.0237, 0.0]])
+        initial = (tcp, torch.tensor([[0.0, 0, 0, 1]]))
+        handler = self._handler(initial, hub=hub, axis=(1.0, 0.0, 0.0), angle_deg=-90).handler
+        saved_angle = float(handler.angle_rad_tensor[0])
+        handler.angle_rad_tensor[0] = 0.0
+        pos0, _ = handler.get_target_in_base_frame(torch.tensor([0]))
+        torch.testing.assert_close(pos0, tcp, atol=1e-6, rtol=0)
+        handler.angle_rad_tensor[0] = saved_angle
+        command = handler.update(torch.ones(1, dtype=torch.bool))
+        # Sliding onto the hub would move X from 0.950 to 0.957 on the first tick.
+        self.assertAlmostEqual(float(command[0, 1]), 0.950, places=4)
+        path, _, _ = active_command_path(handler, command)
+        torch.testing.assert_close(path[0], tcp[0], atol=1e-5, rtol=0)
+        torch.testing.assert_close(path[:, 0], torch.full((path.shape[0],), 0.950), atol=1e-5, rtol=0)
+
+    def test_screw_keeps_grasp_offset_and_adds_pitch(self):
+        initial = (torch.tensor([[1.0, 0.0, 0.05]]), torch.tensor([[0.0, 0, 0, 1]]))
+        segment = self._handler(initial, angle_deg=-180, cls=ScrewFrameCfg)
+        segment.cfg.axial_distance = 0.4
+        pos, _ = segment.sample(0.5)
+        torch.testing.assert_close(pos, torch.tensor([[0.0, -1.0, 0.25]]), atol=1e-6, rtol=0)
+
+    def test_max_ee_rotation_clamps_commanded_arc(self):
+        initial = (torch.tensor([[1.0, 0.0, 0.0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        term = geometry_term()
+        cfg = RotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            axis=(0.0, 0.0, 1.0),
+            angle_deg=-180.0,
+            use_valve_angle=False,
+            max_ee_rotation_deg=90.0,
+        )
+        handler = build_segments(term, [cfg], initial)[0].handler
+        self.assertAlmostEqual(float(handler.angle_rad_tensor[0]), -math.pi / 2, places=6)
+        cfg.max_ee_rotation_deg = 0.0
+        handler = build_segments(term, [cfg], initial)[0].handler
+        self.assertAlmostEqual(float(handler.angle_rad_tensor[0]), -math.pi, places=6)
+
+    def test_discontinuous_curobo_arc_raises_instead_of_falling_back(self):
+        term = geometry_term()
+        cfg = CuroboPlannedRotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            robot_joint_names=["arm_sh0", "arm_el0"],
+            use_valve_angle=False,
+            max_joint_step=0.15,
+        )
+        handler = _CuroboPlannedRotateFrameHandler(cfg, term)
+        waypoints = torch.zeros(1, 3, 2)
+        waypoints[0, 1, 0] = 0.4
+        with self.assertRaisesRegex(RuntimeError, r"infeasible: max joint step=0\.400 rad"):
+            handler._raise_if_joint_discontinuity(waypoints, ["arm_sh0", "arm_el0"])
+
+    def test_infeasible_arc_dump_includes_robot_state_and_requested_plan(self):
+        term = geometry_term()
+        robot = term._asset
+        robot.find_joints = lambda names, preserve_order=True: ([0, 1], list(names))
+        robot.data.joint_pos = proxy([[0.11, -0.22]])
+        robot.data.joint_pos_limits = proxy([[[-1.0, 1.0], [-2.0, 2.0]]])
+        cfg = CuroboPlannedRotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            robot_joint_names=["arm_sh0", "arm_wr1"],
+            use_valve_angle=False,
+            angle_deg=-90.0,
+            max_joint_step=0.15,
+        )
+        handler = _CuroboPlannedRotateFrameHandler(cfg, term)
+        handler.angle_rad_tensor[:] = -math.pi / 2
+        handler.axis_pos_b[:] = torch.tensor([0.5, 0.0, 0.4])
+        handler.rot_axis_b[:] = torch.tensor([-1.0, 0.0, 0.0])
+        handler.radius_vec[:] = torch.tensor([0.0, 0.08, 0.0])
+        handler.axial_vec[:] = torch.tensor([0.01, 0.0, 0.0])
+        n_wp = 5
+        waypoints = torch.zeros(1, n_wp, 2)
+        waypoints[0, :, 0] = torch.tensor([0.11, 0.32, 0.32, 0.32, 0.32])
+        waypoints[0, :, 1] = torch.tensor([0.0, 0.05, 0.10, 0.45, 0.50])
+        tcp_pos = torch.zeros(n_wp, 3)
+        tcp_pos[:, 0] = 0.51
+        tcp_pos[:, 1] = torch.linspace(0.08, -0.08, n_wp)
+        tcp_pos[:, 2] = 0.4
+        tcp_quat = torch.zeros(n_wp, 4)
+        tcp_quat[:, 3] = 1.0
+        angles = torch.linspace(0.0, -math.pi / 2, n_wp)
+        with self.assertRaises(RuntimeError) as caught:
+            handler._raise_if_joint_discontinuity(
+                waypoints,
+                ["arm_sh0", "arm_wr1"],
+                tcp_pos_b=tcp_pos,
+                tcp_quat_b=tcp_quat,
+                angles=angles,
+            )
+        dump = str(caught.exception)
+        self.assertIn("waypoint 2->3, joint arm_wr1", dump)
+        self.assertIn("robot state (grasp seed / waypoint 0)", dump)
+        self.assertIn("arm_sh0=0.1100", dump)
+        self.assertIn("measured:", dump)
+        self.assertIn("arm_wr1=-0.2200", dump)
+        self.assertIn("limits:", dump)
+        self.assertIn("requested arc", dump)
+        self.assertIn("angle=-90.00 deg", dump)
+        self.assertIn("radius=0.0800 m", dump)
+        self.assertIn("axial_offset=0.0100 m", dump)
+        self.assertIn("arm_wr1=0.350@2->3 <<", dump)
+        self.assertIn("all joints exceeding max_joint_step=0.150 rad", dump)
+        self.assertIn("arm_sh0 0.210 rad at 0->1", dump)
+        self.assertIn("arm_wr1 0.350 rad at 2->3 << worst", dump)
+        self.assertIn("before limits:", dump)
+        self.assertIn("after  limits:", dump)
+        self.assertIn("tcp step:", dump)
+        self.assertIn("[0]", dump)
+        self.assertIn("[2]", dump)
+        self.assertIn("[3]", dump)
+        self.assertIn("<< jump from 0 on arm_sh0", dump)
+        self.assertIn("<< jump from 2 on arm_wr1", dump)
+
+    def test_infeasible_rotation_message_tells_user_to_reduce_the_arc(self):
+        err = RuntimeError(
+            "cuRobo valve arc is infeasible: "
+            "max joint step=0.338 rad > max_joint_step=0.150 rad "
+            "(waypoint 134->135, joint arm_wr1)\n--- robot state ---"
+        )
+        handler = NS(angle_rad_tensor=torch.tensor([-math.pi]))
+        message = format_infeasible_rotation_message(err, handler)
+        self.assertTrue(message.startswith("Rotation is infeasible."))
+        self.assertIn("waypoint 134->135, joint arm_wr1", message)
+        self.assertIn("Commanded arc is -180.0°", message)
+        self.assertIn("max_ee_rotation_deg", message)
+        self.assertNotIn("--- robot state ---", message)
+        status = format_editor_plan_failure(RuntimeError(message))
+        self.assertIn("**Rotation is infeasible**", status)
+        self.assertIn("Reduce the rotation", status)
+
+    def test_editor_rotate_plan_raises_instead_of_dls_fallback(self):
+        term = geometry_term()
+        cfg = CuroboPlannedRotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            robot_joint_names=["arm_sh0", "arm_wr1"],
+            use_valve_angle=False,
+            angle_deg=-180.0,
+            max_joint_step=0.15,
+        )
+        identity = torch.tensor([[0.0, 0, 0, 1]])
+        segment = Segment(cfg, (torch.zeros(1, 3), identity), (torch.zeros(1, 3), identity), 1.0)
+        solved = {"dls": False}
+
+        class StubIK:
+            def reset(self):
+                return None
+
+            def write(self, q):
+                return None
+
+            def solve(self, *args, **kwargs):
+                solved["dls"] = True
+                raise AssertionError("infeasible rotate must not fall back to DLS")
+
+            def apply_named_joints(self, *args, **kwargs):
+                return None
+
+            def _gripper_q(self, q, gripper_open):
+                return q
+
+            robot = term._asset
+
+        class FakeHandler:
+            def __init__(self, cfg, command_term):
+                self.cfg = cfg
+                self.angle_rad_tensor = torch.tensor([-math.pi])
+
+            def reset(self, env_ids):
+                return None
+
+            def _plan(self, env_ids):
+                raise RuntimeError(
+                    "cuRobo valve arc is infeasible: "
+                    "max joint step=0.338 rad > max_joint_step=0.150 rad "
+                    "(waypoint 134->135, joint arm_wr1)"
+                )
+
+        with patch(
+            "isaaclab_hiveboard.utils.command_preview._CuroboPlannedRotateFrameHandler",
+            FakeHandler,
+        ):
+            with self.assertRaisesRegex(RuntimeError, r"Rotation is infeasible"):
+                _plan_curobo_per_segment(term, [segment], StubIK())
+        self.assertFalse(solved["dls"])
+        self.assertIsNone(cfg._preview_plan)
 
 
 if __name__ == "__main__":

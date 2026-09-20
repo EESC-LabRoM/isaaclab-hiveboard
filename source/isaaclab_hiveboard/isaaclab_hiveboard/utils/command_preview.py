@@ -64,6 +64,34 @@ def format_ik_debug(report: dict) -> str:
     return "\n".join(f"{key}: {value}" for key, value in report.items())
 
 
+def apply_authored_command_field(cfg, name: str, value) -> bool:
+    """Write a GUI field onto a command.
+
+    Editing ``angle_deg`` turns off ``use_valve_angle`` so the typed angle is
+    the arc that preview and play execute. Returns True when sibling fields
+    changed and the editor panel should refresh.
+    """
+    setattr(cfg, name, value)
+    if name == "angle_deg" and getattr(cfg, "use_valve_angle", False):
+        cfg.use_valve_angle = False
+        return True
+    return False
+
+
+def effective_arc_caption(cfg, handler) -> str:
+    """Explain which authored field produced ``handler.angle_rad_tensor``."""
+    deg = math.degrees(float(handler.angle_rad_tensor[0]))
+    authored = float(getattr(cfg, "angle_deg", 0.0))
+    if getattr(cfg, "use_valve_angle", False):
+        source = f"from remaining valve angle; Angle (deg)={authored:g} is unused"
+    else:
+        source = "from Angle (deg)"
+    limit = float(getattr(cfg, "max_ee_rotation_deg", 0.0) or 0.0)
+    if limit > 0.0:
+        source += f", clamped to ±{limit:g}°"
+    return f"Effective arc: **{deg:.1f}°** ({source})"
+
+
 def numpy(value):
     return tensor(value).detach().cpu().numpy()
 
@@ -97,18 +125,18 @@ class Segment:
     def gripper_open(self):
         return self.cfg.open_gripper if isinstance(self.cfg, GripperCommand) else self.cfg.gripper_open
 
-    def sample(self, fraction: float):
+    def sample(self, fraction: float, *, use_cached_plan: bool = True):
         fraction = min(1.0, max(0.0, fraction))
         if isinstance(self.cfg, GripperCommand):
             return self.start
-        plan = getattr(self.cfg, "_preview_plan", None)
+        plan = getattr(self.cfg, "_preview_plan", None) if use_cached_plan else None
         if plan is not None:
             return _interp_pose(plan["tcp_pos_b"], plan["tcp_quat_b"], fraction)
         p0, q0 = self.start
         if isinstance(self.cfg, RotateFrameCfg):
             h = self.handler
             angle = h.angle_rad_tensor * fraction
-            pos = h.axis_pos_b + h._rodrigues_rotate(h.radius_vec, h.rot_axis_b, angle)
+            pos = h.axis_pos_b + h.axial_vec + h._rodrigues_rotate(h.radius_vec, h.rot_axis_b, angle)
             if isinstance(self.cfg, ScrewFrameCfg):
                 pos += h.rot_axis_b * (fraction * self.cfg.axial_distance)
             quat = math_utils.quat_mul(math_utils.quat_from_angle_axis(angle, h.rot_axis_b), q0)
@@ -184,8 +212,23 @@ def _preview_waypoint_count(segment: Segment, dt: float) -> int:
     return int(min(16, max(2, math.ceil(float(segment.duration) / 0.08))))
 
 
+def invalidate_preview_plans_from(commands, index: int = 0) -> None:
+    """Drop cached cuRobo polylines from ``index`` onward.
+
+    Later legs store TCP waypoints that start at the previous command's old
+    endpoint. After an edit those paths no longer chain; rebuild must sample
+    live geometry instead of the stale plan.
+    """
+    for cfg in commands[index:]:
+        if hasattr(cfg, "_preview_plan"):
+            cfg._preview_plan = None
+
+
 def _stacked_tcp(segment: Segment, count: int) -> tuple[torch.Tensor, torch.Tensor]:
-    poses = [segment.sample(0.0 if count == 1 else i / (count - 1)) for i in range(count)]
+    poses = [
+        segment.sample(0.0 if count == 1 else i / (count - 1), use_cached_plan=False)
+        for i in range(count)
+    ]
     pos = torch.cat([p for p, _ in poses], dim=0)
     quat = torch.cat([q for _, q in poses], dim=0)
     return pos, quat
@@ -322,8 +365,39 @@ def _retarget_tcp_sequence(term, tcp_pos_b: torch.Tensor, tcp_quat_b: torch.Tens
         return joints
 
 
+def format_infeasible_rotation_message(err: BaseException, handler=None) -> str:
+    """Editor-facing summary: the rotate arc cannot be tracked as a joint path."""
+    header = str(err).strip().splitlines()[0]
+    if header.startswith("Rotation is infeasible"):
+        return str(err).strip()
+    angle_txt = ""
+    if handler is not None and getattr(handler, "angle_rad_tensor", None) is not None:
+        angle_txt = f" Commanded arc is {math.degrees(float(handler.angle_rad_tensor[0])):.1f}°."
+    return (
+        "Rotation is infeasible. "
+        f"{header}"
+        f"{angle_txt} "
+        "The wrist cannot follow this arc as a continuous joint path. "
+        "Reduce the rotation (max_ee_rotation_deg or angle_deg, or disable use_valve_angle) and plan again."
+    )
+
+
+def format_editor_plan_failure(err: BaseException) -> str:
+    """Markdown status for a failed Plan-with-cuRobo click."""
+    text = str(err).strip()
+    first = text.splitlines()[0] if text else "unknown error"
+    if "infeasible" in text.lower():
+        body = first if first.startswith("Rotation is infeasible") else format_infeasible_rotation_message(err)
+        return f"**Rotation is infeasible**\n\n{body}"
+    return f"**cuRobo planning failed:** {first}"
+
+
 def plan_curobo_segments(term, segments: list[Segment], ik: "PreviewIK") -> int:
-    """Retarget the whole Cartesian sequence in one cuRobo pass, then split onto commands."""
+    """Retarget the Cartesian sequence, then re-plan rotates with the play handler.
+
+    Whole-sequence retarget is a coarse preview. Rotate feasibility must use the
+    same dense local-IK arc as play.py; an infeasible wrist path raises.
+    """
     from isaaclab_hiveboard.utils.command_setup import planner_settings
 
     ik.reset()
@@ -349,8 +423,61 @@ def plan_curobo_segments(term, segments: list[Segment], ik: "PreviewIK") -> int:
             "tcp_quat_b": tcp_quat[start:end].detach(),
         }
         planned += 1
+    _plan_curobo_rotates_like_play(term, segments, ik)
     ik.reset()
     return planned
+
+
+def _write_segment_end(ik: "PreviewIK", segment: Segment) -> None:
+    if isinstance(segment.cfg, GripperCommand):
+        ik.write(ik._gripper_q(tensor(ik.robot.data.joint_pos).clone(), segment.gripper_open))
+        return
+    joints = segment.sample_joints(1.0)
+    if joints is not None:
+        q_arm, names = joints
+        ik.apply_named_joints(names, q_arm, segment.gripper_open)
+        return
+    ik.solve(segment.end, segment.gripper_open)
+
+
+def _plan_rotate_like_play(term, cfg, ik: "PreviewIK") -> None:
+    """Plan one rotate with the play.py handler. Raises if the joint arc is infeasible."""
+    ids = torch.tensor([0], device=term.device, dtype=torch.long)
+    handler = _CuroboPlannedRotateFrameHandler(cfg, term)
+    handler.reset(ids)
+    try:
+        handler._plan(ids)
+    except RuntimeError as err:
+        cfg._preview_plan = None
+        raise RuntimeError(format_infeasible_rotation_message(err, handler)) from err
+    if handler._fallback or handler._joint_waypoints is None:
+        cfg._preview_plan = None
+        raise RuntimeError(
+            format_infeasible_rotation_message(
+                RuntimeError("cuRobo rotate planner did not produce a joint arc"),
+                handler,
+            )
+        )
+    wp = handler._joint_waypoints
+    if wp.ndim == 3:
+        wp = wp[0]
+    cfg._preview_plan = {
+        "joints": wp.detach(),
+        "joint_names": list(cfg.robot_joint_names),
+        "tcp_pos_b": handler._waypoint_pos_b[0].detach(),
+        "tcp_quat_b": handler._waypoint_quat_b[0].detach(),
+    }
+    ik.apply_named_joints(list(cfg.robot_joint_names), wp[-1], cfg.gripper_open)
+
+
+def _plan_curobo_rotates_like_play(term, segments: list[Segment], ik: "PreviewIK") -> None:
+    """Replace coarse rotate previews with play-density plans; raise if infeasible."""
+    ik.reset()
+    for segment in segments:
+        if isinstance(segment.cfg, CuroboPlannedRotateFrameCfg):
+            _plan_rotate_like_play(term, segment.cfg, ik)
+            continue
+        _write_segment_end(ik, segment)
 
 
 def _plan_curobo_per_segment(term, segments: list[Segment], ik: "PreviewIK") -> int:
@@ -365,15 +492,14 @@ def _plan_curobo_per_segment(term, segments: list[Segment], ik: "PreviewIK") -> 
         if isinstance(cfg, GripperCommand):
             ik.write(ik._gripper_q(tensor(ik.robot.data.joint_pos).clone(), segment.gripper_open))
             continue
+        if isinstance(cfg, CuroboPlannedRotateFrameCfg):
+            _plan_rotate_like_play(term, cfg, ik)
+            planned += 1
+            continue
         if not is_curobo_command(cfg):
             ik.solve(segment.end, segment.gripper_open)
             continue
-        handler_cls = (
-            _CuroboPlannedRotateFrameHandler
-            if isinstance(cfg, CuroboPlannedRotateFrameCfg)
-            else _CuroboPlannedGoToFrameHandler
-        )
-        handler = handler_cls(cfg, term)
+        handler = _CuroboPlannedGoToFrameHandler(cfg, term)
         try:
             handler.reset(ids)
             handler._plan(ids)

@@ -65,7 +65,7 @@ def validate_command(cmd) -> None:
             value = getattr(cmd, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-    for name in ("distance_threshold", "orientation_threshold_deg", "angle_threshold_deg"):
+    for name in ("distance_threshold", "orientation_threshold_deg", "angle_threshold_deg", "max_ee_rotation_deg"):
         if hasattr(cmd, name):
             value = getattr(cmd, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:

@@ -65,6 +65,16 @@ def _pose_str(p: torch.Tensor, q: torch.Tensor) -> str:
     )
 
 
+def _vec_str(t: torch.Tensor, prec: int = 4) -> str:
+    vals = t.detach().reshape(-1).cpu().tolist()
+    return "[" + ", ".join(f"{v:.{prec}f}" for v in vals) + "]"
+
+
+def _joints_str(names: Sequence[str], q: torch.Tensor, prec: int = 4) -> str:
+    vals = q.detach().reshape(-1).cpu().tolist()
+    return "  ".join(f"{name}={value:.{prec}f}" for name, value in zip(names, vals))
+
+
 class SequentialPoseCommand(CommandTerm):
     """A command term that executes a sequence of commands for a robot's end-effector."""
 
@@ -1510,6 +1520,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         self.final_quat_b = torch.zeros(self._num_envs, 4, device=self._device)
         self.rot_axis_b = torch.zeros(self._num_envs, 3, device=self._device)
         self.radius_vec = torch.zeros(self._num_envs, 3, device=self._device)
+        self.axial_vec = torch.zeros(self._num_envs, 3, device=self._device)
         self._angle_threshold_rad = math.radians(self.cfg.angle_threshold_deg)
 
     def reset(self, env_ids: torch.Tensor):
@@ -1520,6 +1531,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
             self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[env_ids]
         else:
             self.angle_rad_tensor[env_ids] = math.radians(self.cfg.angle_deg)
+        self._clamp_ee_rotation(env_ids)
 
         ee_pos_b, self.initial_quat_b[env_ids] = self._command_term._get_ee_in_base_frame(env_ids)
 
@@ -1547,12 +1559,15 @@ class _RotateFrameHandler(_BaseCmdHandler):
         if self._command_term.cfg.debug_vis:
             print("Rotation axis: ", self.rot_axis_b[env_ids])
 
-        # vector from rotation center to initial ee pos, which describes
-        # our expected motion
+        # Split EE-to-hub into in-plane radius (orbits) and axial offset (held).
+        # Dropping the axial part would snap the TCP onto the hub plane on the
+        # first step, so the hand slides along the stem instead of spinning.
         radius_vec = ee_pos_b - self.axis_pos_b[env_ids]
         self.radius_vec[env_ids] = self._get_ortogonal_vector(radius_vec, self.rot_axis_b[env_ids])
+        self.axial_vec[env_ids] = radius_vec - self.radius_vec[env_ids]
         if self._command_term.cfg.debug_vis:
             print("Radius vector: ", self.radius_vec[env_ids])
+            print("Axial offset: ", self.axial_vec[env_ids])
 
         # Get final motion poses
         angle = self.angle_rad_tensor[env_ids]
@@ -1564,7 +1579,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         angle = self.angle_rad_tensor[env_ids]
 
         v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
-        final_pose_b = self.axis_pos_b[env_ids] + v_rot
+        final_pose_b = self.axis_pos_b[env_ids] + self.axial_vec[env_ids] + v_rot
 
         total_rotation = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
         final_quat = math_utils.quat_mul(total_rotation, self.initial_quat_b[env_ids])
@@ -1598,7 +1613,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         # -- position
         # rotate radius vector using Rodrigues' rotation formula
         v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
-        target_pos_b = self.axis_pos_b[env_ids] + v_rot
+        target_pos_b = self.axis_pos_b[env_ids] + self.axial_vec[env_ids] + v_rot
 
         # Same signed angle-axis as the position orbit. Slerping to the
         # endpoint via quat_box_minus is ambiguous at ±180 deg and can spin
@@ -1632,6 +1647,13 @@ class _RotateFrameHandler(_BaseCmdHandler):
                     target_pos_b[:, axis] = float(value)
 
         return target_pos_b, target_quat_b
+
+    def _clamp_ee_rotation(self, env_ids: torch.Tensor) -> None:
+        limit_deg = float(getattr(self.cfg, "max_ee_rotation_deg", 0.0) or 0.0)
+        if limit_deg <= 0.0:
+            return
+        max_rad = math.radians(limit_deg)
+        self.angle_rad_tensor[env_ids] = self.angle_rad_tensor[env_ids].clamp(-max_rad, max_rad)
 
 
 class _ScrewFrameHandler(_RotateFrameHandler):
@@ -1682,7 +1704,7 @@ class _ScrewFrameHandler(_RotateFrameHandler):
             )
 
         v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
-        target_pos_b = self.axis_pos_b[env_ids] + v_rot + self._axial_offset(env_ids, angle)
+        target_pos_b = self.axis_pos_b[env_ids] + self.axial_vec[env_ids] + v_rot + self._axial_offset(env_ids, angle)
         delta_q = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
         target_quat_b = math_utils.quat_mul(delta_q, self.initial_quat_b[env_ids])
         return self._pack_command(self.cfg.gripper_open, target_pos_b, target_quat_b)
@@ -1716,8 +1738,30 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return _RotateFrameHandler.get_target_in_base_frame(self, env_ids)
 
+    def update(self, env_mask: torch.Tensor) -> torch.Tensor:
+        """Follow the retargeted joint arc. Do not fall back to Cartesian servo."""
+        env_ids = torch.where(env_mask)[0]
+        if self._waypoint_pos_b is None:
+            self._plan(env_ids)
+        last = self._waypoint_pos_b.shape[1] - 1
+        index = torch.clamp(self._waypoint_index[env_ids], max=last)
+        pos = self._waypoint_pos_b[env_ids, index]
+        quat = self._waypoint_quat_b[env_ids, index]
+        self._joint_target[env_ids] = self._joint_waypoints[env_ids, index]
+        self._waypoint_index[env_ids] = index + 1
+        return self._pack_command(self.cfg.gripper_open, pos, quat)
+
+    def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self._waypoint_pos_b is None:
+            return torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
+        return self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
+
     def _plan(self, env_ids: torch.Tensor) -> None:
-        """Retarget the complete Cartesian arc from the current grasp state."""
+        """Retarget the complete Cartesian arc from the current grasp state.
+
+        An infeasible arc raises. There is no Cartesian-servo fallback: that
+        path used ``_GoToFrameHandler`` state this handler never initializes.
+        """
         if len(env_ids) != 1:
             raise RuntimeError("CuroboPlannedRotateFrameCfg currently supports one environment.")
 
@@ -1775,116 +1819,356 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
 
             if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
                 raise ValueError("CuroboPlannedRotateFrameCfg requires pose_command.body_offset")
-            try:
-                final_angle = self.angle_rad_tensor[env_ids][0]
-                step_angle = self.cfg.angular_velocity * self._dt
-                num_steps = max(1, int(math.ceil(abs(float(final_angle.item())) / step_angle)))
-                num_waypoints = num_steps + 1
-                angles = torch.linspace(
-                    0.0,
-                    float(final_angle.item()),
-                    num_waypoints,
-                    device=self._device,
-                    dtype=torch.float32,
+            final_angle = self.angle_rad_tensor[env_ids][0]
+            step_angle = self.cfg.angular_velocity * self._dt
+            num_steps = max(1, int(math.ceil(abs(float(final_angle.item())) / step_angle)))
+            num_waypoints = num_steps + 1
+            angles = torch.linspace(
+                0.0,
+                float(final_angle.item()),
+                num_waypoints,
+                device=self._device,
+                dtype=torch.float32,
+            )
+            axis_b = self.rot_axis_b[env_ids].expand(num_waypoints, -1)
+            radius_b = self.radius_vec[env_ids].expand(num_waypoints, -1)
+            axis_pos_b = self.axis_pos_b[env_ids].expand(num_waypoints, -1)
+            tcp_pos_b = (
+                axis_pos_b
+                + self.axial_vec[env_ids].expand(num_waypoints, -1)
+                + self._rodrigues_rotate(radius_b, axis_b, angles)
+            )
+            delta_quat_b = math_utils.quat_from_angle_axis(angles, axis_b)
+            tcp_quat_b = math_utils.quat_mul(
+                delta_quat_b,
+                self.initial_quat_b[env_ids].expand(num_waypoints, -1),
+            )
+
+            flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
+                tcp_pos_b, tcp_quat_b, env_ids
+            )
+
+            joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
+            current = JointState.from_position(
+                self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
+                joint_names=joint_names,
+            )
+
+            curobo_flange = retargeter.kinematics.compute_kinematics(current).tool_poses.get_link_pose(tool_frame)
+            isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
+                self._asset.data.root_pos_w.torch[env_ids],
+                self._asset.data.root_quat_w.torch[env_ids],
+                self._asset.data.body_pos_w.torch[env_ids, self._command_term._body_idx],
+                self._asset.data.body_quat_w.torch[env_ids, self._command_term._body_idx],
+            )
+            # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
+            flange_quat_inv_c = math_utils.quat_inv(_wxyz_to_xyzw(curobo_flange.quaternion))
+            flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
+            curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
+                isaac_flange_pos_b,
+                isaac_flange_quat_b,
+                flange_pos_inv_c,
+                flange_quat_inv_c,
+            )
+            flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                curobo_base_pos_b.expand(num_waypoints, -1),
+                curobo_base_quat_b.expand(num_waypoints, -1),
+                flange_pos_b,
+                flange_quat_b,
+            )
+
+            with torch.inference_mode(False), torch.enable_grad():
+                current = JointState.from_position(current.position.clone(), joint_names=joint_names)
+                arc_targets = SequenceGoalToolPose(
+                    tool_frames=[tool_frame],
+                    position=flange_pos_c[:, None, None, None, :].clone(),
+                    quaternion=_xyzw_to_wxyz(flange_quat_c[:, None, None, None, :].clone()),
                 )
-                axis_b = self.rot_axis_b[env_ids].expand(num_waypoints, -1)
-                radius_b = self.radius_vec[env_ids].expand(num_waypoints, -1)
-                axis_pos_b = self.axis_pos_b[env_ids].expand(num_waypoints, -1)
-                tcp_pos_b = axis_pos_b + self._rodrigues_rotate(radius_b, axis_b, angles)
-                delta_quat_b = math_utils.quat_from_angle_axis(angles, axis_b)
-                tcp_quat_b = math_utils.quat_mul(
-                    delta_quat_b,
-                    self.initial_quat_b[env_ids].expand(num_waypoints, -1),
+                # Do not call solve_sequence(): it reset()s and global-IKs
+                # frame 0, which can pick a different arm configuration than
+                # the measured grasp. Seed local IK from the grasp and keep
+                # waypoint 0 as those joints (angle 0 is the current TCP).
+                retargeter.reset()
+                retargeter._prev_solution = current.position.clone()
+                if current.velocity is not None:
+                    retargeter._prev_velocity = current.velocity.clone()
+                frame_solutions = [current.position.clone()]
+                for index in range(1, arc_targets.num_frames):
+                    frame_solutions.append(
+                        retargeter.solve_frame(arc_targets.get_frame(index))
+                        .joint_state.reorder(joint_names)
+                        .position
+                    )
+                joint_waypoints = torch.stack(frame_solutions, dim=1)
+
+            self._raise_if_joint_discontinuity(
+                joint_waypoints,
+                joint_names,
+                tcp_pos_b=tcp_pos_b,
+                tcp_quat_b=tcp_quat_b,
+                flange_pos_b=flange_pos_b,
+                flange_quat_b=flange_quat_b,
+                angles=angles,
+            )
+
+            self._waypoint_pos_b = tcp_pos_b.unsqueeze(0)
+            self._waypoint_quat_b = tcp_quat_b.unsqueeze(0)
+            self._joint_waypoints = joint_waypoints
+            self._joint_target = torch.zeros(
+                self._num_envs,
+                len(joint_names),
+                device=self._device,
+                dtype=self._joint_waypoints.dtype,
+            )
+            print(f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints for the valve arc.")
+
+    def _raise_if_joint_discontinuity(
+        self,
+        joint_waypoints: torch.Tensor,
+        joint_names: list[str],
+        *,
+        tcp_pos_b: torch.Tensor | None = None,
+        tcp_quat_b: torch.Tensor | None = None,
+        flange_pos_b: torch.Tensor | None = None,
+        flange_quat_b: torch.Tensor | None = None,
+        angles: torch.Tensor | None = None,
+        context: int = 2,
+    ) -> None:
+        if joint_waypoints.shape[1] < 2:
+            return
+        deltas = torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1])
+        max_joint_step = torch.max(deltas)
+        if max_joint_step <= self.cfg.max_joint_step:
+            return
+        abs_d = deltas[0]
+        n_joints = abs_d.shape[-1]
+        flat = int(torch.argmax(abs_d).item())
+        waypoint_i = flat // n_joints
+        joint_i = flat % n_joints
+        header = (
+            "cuRobo valve arc is infeasible: "
+            f"max joint step={float(max_joint_step.item()):.3f} rad > "
+            f"max_joint_step={self.cfg.max_joint_step:.3f} rad "
+            f"(waypoint {waypoint_i}->{waypoint_i + 1}, joint {joint_names[joint_i]})"
+        )
+        dump = self._format_infeasible_arc_dump(
+            header=header,
+            joint_waypoints=joint_waypoints,
+            joint_names=joint_names,
+            waypoint_i=waypoint_i,
+            joint_i=joint_i,
+            abs_d=abs_d,
+            tcp_pos_b=tcp_pos_b,
+            tcp_quat_b=tcp_quat_b,
+            flange_pos_b=flange_pos_b,
+            flange_quat_b=flange_quat_b,
+            angles=angles,
+            context=context,
+        )
+        print(dump, flush=True)
+        raise RuntimeError(dump)
+
+    def _format_infeasible_arc_dump(
+        self,
+        *,
+        header: str,
+        joint_waypoints: torch.Tensor,
+        joint_names: list[str],
+        waypoint_i: int,
+        joint_i: int,
+        abs_d: torch.Tensor,
+        tcp_pos_b: torch.Tensor | None,
+        tcp_quat_b: torch.Tensor | None,
+        flange_pos_b: torch.Tensor | None,
+        flange_quat_b: torch.Tensor | None,
+        angles: torch.Tensor | None,
+        context: int,
+    ) -> str:
+        q_seed = joint_waypoints[0, 0]
+        lines = [
+            header,
+            "--- robot state (grasp seed / waypoint 0) ---",
+            f"  {_joints_str(joint_names, q_seed)}",
+        ]
+        live_q = self._measured_arm_q(joint_names)
+        if live_q is not None:
+            lines.append(f"  measured: {_joints_str(joint_names, live_q)}")
+        limit_line = self._joint_limit_line(joint_names, q_seed)
+        if limit_line:
+            lines.append(limit_line)
+
+        final_angle = float(self.angle_rad_tensor[0].item()) if hasattr(self, "angle_rad_tensor") else float("nan")
+        lines.extend(
+            [
+                "--- requested arc ---",
+                (
+                    f"  angle={math.degrees(final_angle):.2f} deg "
+                    f"({final_angle:.4f} rad)  cfg.angle_deg={getattr(self.cfg, 'angle_deg', float('nan'))}  "
+                    f"max_ee_rotation_deg={getattr(self.cfg, 'max_ee_rotation_deg', 0.0)}"
+                ),
+            ]
+        )
+        if hasattr(self, "rot_axis_b"):
+            radius = float(torch.linalg.vector_norm(self.radius_vec[0]).item())
+            axial = float(torch.linalg.vector_norm(self.axial_vec[0]).item())
+            step_angle = float(self.cfg.angular_velocity) * self._dt
+            lines.extend(
+                [
+                    f"  hub_b={_vec_str(self.axis_pos_b[0])}  axis_b={_vec_str(self.rot_axis_b[0])}",
+                    f"  radius={radius:.4f} m  axial_offset={axial:.4f} m",
+                    (
+                        f"  n_waypoints={joint_waypoints.shape[1]}  dt={self._dt:.4f} s  "
+                        f"ang_vel={self.cfg.angular_velocity:.3f} rad/s  step_angle={step_angle:.4f} rad"
+                    ),
+                ]
+            )
+
+        per_joint_max = abs_d.max(dim=0).values
+        per_joint_at = abs_d.argmax(dim=0)
+        max_bits = []
+        for name, mag, at in zip(joint_names, per_joint_max, per_joint_at):
+            mark = " <<" if name == joint_names[joint_i] else ""
+            max_bits.append(f"{name}={float(mag):.3f}@{int(at)}->{int(at) + 1}{mark}")
+        lines.extend(
+            [
+                "--- retargeted joints: per-joint max |Δq| (rad) ---",
+                "  " + "  ".join(max_bits),
+            ]
+        )
+
+        over = (abs_d > self.cfg.max_joint_step).nonzero(as_tuple=False)
+        over_jumps = [(int(wp), int(j)) for wp, j in over[:8]]
+        if over_jumps:
+            lines.append(
+                f"--- all joints exceeding max_joint_step={self.cfg.max_joint_step:.3f} rad ---"
+            )
+            for wp, j in over_jumps:
+                mark = " << worst" if (wp, j) == (waypoint_i, joint_i) else ""
+                lines.append(
+                    f"  {joint_names[j]} {float(abs_d[wp, j]):.3f} rad at {wp}->{wp + 1}{mark}"
                 )
 
-                flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
-                    tcp_pos_b, tcp_quat_b, env_ids
-                )
-
-                joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
-                current = JointState.from_position(
-                    self._asset.data.joint_pos.torch[env_ids][:, joint_ids],
+        for wp, j in over_jumps or [(waypoint_i, joint_i)]:
+            lines.extend(
+                self._format_jump_block(
+                    joint_waypoints=joint_waypoints,
                     joint_names=joint_names,
+                    waypoint_i=wp,
+                    joint_i=j,
+                    tcp_pos_b=tcp_pos_b,
+                    tcp_quat_b=tcp_quat_b,
+                    flange_pos_b=flange_pos_b,
+                    flange_quat_b=flange_quat_b,
                 )
+            )
 
-                curobo_flange = retargeter.kinematics.compute_kinematics(current).tool_poses.get_link_pose(tool_frame)
-                isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
-                    self._asset.data.root_pos_w.torch[env_ids],
-                    self._asset.data.root_quat_w.torch[env_ids],
-                    self._asset.data.body_pos_w.torch[env_ids, self._command_term._body_idx],
-                    self._asset.data.body_quat_w.torch[env_ids, self._command_term._body_idx],
+        n_wp = joint_waypoints.shape[1]
+        window_wps = [wp for wp, _ in over_jumps] or [waypoint_i]
+        lo = max(0, min(window_wps) - context)
+        hi = min(n_wp - 1, max(window_wps) + 1 + context)
+        jump_at = {wp + 1: (wp, j) for wp, j in (over_jumps or [(waypoint_i, joint_i)])}
+        lines.append(
+            f"--- plan around discontinuities [{lo}..{hi}] ---"
+        )
+        for index in range(lo, hi + 1):
+            bits = [f"  [{index}]"]
+            if angles is not None:
+                bits.append(f"ang={float(angles[index].item()):+.4f} rad")
+            if tcp_pos_b is not None and tcp_quat_b is not None:
+                bits.append("tcp " + _pose_str(tcp_pos_b[index : index + 1], tcp_quat_b[index : index + 1]))
+            if flange_pos_b is not None and flange_quat_b is not None:
+                bits.append(
+                    "flange " + _pose_str(flange_pos_b[index : index + 1], flange_quat_b[index : index + 1])
                 )
-                # cuRobo quaternions are (w, x, y, z); math_utils is (x, y, z, w).
-                flange_quat_inv_c = math_utils.quat_inv(_wxyz_to_xyzw(curobo_flange.quaternion))
-                flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
-                curobo_base_pos_b, curobo_base_quat_b = math_utils.combine_frame_transforms(
-                    isaac_flange_pos_b,
-                    isaac_flange_quat_b,
-                    flange_pos_inv_c,
-                    flange_quat_inv_c,
-                )
-                flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
-                    curobo_base_pos_b.expand(num_waypoints, -1),
-                    curobo_base_quat_b.expand(num_waypoints, -1),
-                    flange_pos_b,
-                    flange_quat_b,
-                )
+            bits.append("q " + _joints_str(joint_names, joint_waypoints[0, index]))
+            limit_at = self._joint_limit_line(joint_names, joint_waypoints[0, index])
+            if limit_at and index in jump_at:
+                bits.append(limit_at.strip())
+            lines.append("  ".join(bits))
+            if index in jump_at:
+                src, j = jump_at[index]
+                lines.append(f"       << jump from {src} on {joint_names[j]}")
+        return "\n".join(lines)
 
-                with torch.inference_mode(False), torch.enable_grad():
-                    current = JointState.from_position(current.position.clone(), joint_names=joint_names)
-                    arc_targets = SequenceGoalToolPose(
-                        tool_frames=[tool_frame],
-                        position=flange_pos_c[:, None, None, None, :].clone(),
-                        quaternion=_xyzw_to_wxyz(flange_quat_c[:, None, None, None, :].clone()),
-                    )
-                    if hasattr(retargeter, "_set_initial_joint_state"):
-                        result = retargeter.solve_sequence(
-                            arc_targets,
-                            initial_joint_state=current,
-                        )
-                        joint_waypoints = result.joint_state.reorder(joint_names).position
-                    else:
-                        # Compatibility with installed cuRobo releases that
-                        # predate the initial_joint_state sequence API. This is
-                        # equivalent to solve_sequence(), but preserves the
-                        # measured grasp branch before calling solve_frame().
-                        retargeter.reset()
-                        retargeter._prev_solution = current.position.clone()
-                        retargeter._prev_velocity = current.velocity.clone()
-                        frame_solutions = [
-                            retargeter.solve_frame(arc_targets.get_frame(index))
-                            .joint_state.reorder(joint_names)
-                            .position
-                            for index in range(arc_targets.num_frames)
-                        ]
-                        joint_waypoints = torch.stack(frame_solutions, dim=1)
+    def _format_jump_block(
+        self,
+        *,
+        joint_waypoints: torch.Tensor,
+        joint_names: list[str],
+        waypoint_i: int,
+        joint_i: int,
+        tcp_pos_b: torch.Tensor | None,
+        tcp_quat_b: torch.Tensor | None,
+        flange_pos_b: torch.Tensor | None,
+        flange_quat_b: torch.Tensor | None,
+    ) -> list[str]:
+        q_a = joint_waypoints[0, waypoint_i]
+        q_b = joint_waypoints[0, waypoint_i + 1]
+        signed = q_b - q_a
+        lines = [f"--- jump {waypoint_i}->{waypoint_i + 1} on {joint_names[joint_i]}  Δq ---"]
+        jump_bits = []
+        for name, dq in zip(joint_names, signed.detach().cpu().tolist()):
+            mark = " <<" if name == joint_names[joint_i] else ""
+            jump_bits.append(f"{name}={dq:+.4f}{mark}")
+        lines.append("  " + "  ".join(jump_bits))
+        before = self._joint_limit_line(joint_names, q_a)
+        after = self._joint_limit_line(joint_names, q_b)
+        if before:
+            lines.append(f"  before {before.strip()}")
+        if after:
+            lines.append(f"  after  {after.strip()}")
+        pose_step = self._pose_step_line("tcp", tcp_pos_b, tcp_quat_b, waypoint_i)
+        if pose_step:
+            lines.append(pose_step)
+        pose_step = self._pose_step_line("flange", flange_pos_b, flange_quat_b, waypoint_i)
+        if pose_step:
+            lines.append(pose_step)
+        return lines
 
-                max_joint_step = torch.max(torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1]))
-                if max_joint_step > self.cfg.max_joint_step:
-                    raise RuntimeError(
-                        "cuRobo retargeted arc contains a joint discontinuity: "
-                        f"max joint step={float(max_joint_step.item()):.3f} rad"
-                    )
+    @staticmethod
+    def _pose_step_line(
+        label: str,
+        pos: torch.Tensor | None,
+        quat: torch.Tensor | None,
+        waypoint_i: int,
+    ) -> str | None:
+        if pos is None or quat is None:
+            return None
+        dpos = float(torch.linalg.vector_norm(pos[waypoint_i + 1] - pos[waypoint_i]).item())
+        dori = float(
+            torch.linalg.vector_norm(
+                math_utils.quat_box_minus(
+                    quat[waypoint_i + 1 : waypoint_i + 2],
+                    quat[waypoint_i : waypoint_i + 1],
+                )
+            ).item()
+        )
+        return f"  {label} step: Δpos={dpos:.4f} m  Δori={dori:.4f} rad"
 
-                self._waypoint_pos_b = tcp_pos_b.unsqueeze(0)
-                self._waypoint_quat_b = tcp_quat_b.unsqueeze(0)
-                self._joint_waypoints = joint_waypoints
-                self._joint_target = torch.zeros(
-                    self._num_envs,
-                    len(joint_names),
-                    device=self._device,
-                    dtype=self._joint_waypoints.dtype,
-                )
-                print(f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints for the valve arc.")
-            except Exception as err:
-                # A throwing solver must not kill the episode: degrade to
-                # direct servo like a failed plan.
-                print(
-                    f"[WARN] cuRobo arc retarget threw ({type(err).__name__}: {err}); falling back",
-                    flush=True,
-                )
-                self._fallback = True
-                return
+    def _measured_arm_q(self, joint_names: list[str]) -> torch.Tensor | None:
+        try:
+            joint_ids, _ = self._asset.find_joints(joint_names, preserve_order=True)
+            q = self._asset.data.joint_pos
+            if hasattr(q, "torch"):
+                q = q.torch
+            return q[0, joint_ids]
+        except (AttributeError, TypeError, IndexError, ValueError):
+            return None
+
+    def _joint_limit_line(self, joint_names: list[str], q: torch.Tensor) -> str | None:
+        try:
+            joint_ids, _ = self._asset.find_joints(joint_names, preserve_order=True)
+            limits = self._asset.data.joint_pos_limits
+            if hasattr(limits, "torch"):
+                limits = limits.torch
+            lo_hi = limits[0, joint_ids]
+        except (AttributeError, TypeError, IndexError, ValueError):
+            return None
+        bits = []
+        for name, value, bound in zip(joint_names, q.detach().cpu().tolist(), lo_hi.detach().cpu().tolist()):
+            lo, hi = float(bound[0]), float(bound[1])
+            bits.append(f"{name}={value:.4f} in [{lo:.4f}, {hi:.4f}] to_lo={value - lo:.4f} to_hi={hi - value:.4f}")
+        return "  limits: " + "  ".join(bits)
 
 
 @configclass
@@ -2110,6 +2394,8 @@ class RotateFrameCfg(BaseCmd):
     """Status of the gripper during the command."""
     angle_threshold_deg: float = 5.0
     """Remaining commanded arc at which the command is done [deg]."""
+    max_ee_rotation_deg: float = 0.0
+    """Clamp |arc| to this many degrees. ``0`` leaves the commanded angle unchanged."""
     axis_position_override_b: tuple[float | None, float | None, float | None] | None = None
     """Optional per-axis rotation-center overrides in the robot base frame."""
 

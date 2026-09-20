@@ -39,7 +39,11 @@ def active_command_path(handler, command: torch.Tensor, env_index: int = 0, samp
         angle = handler.angle_rad_tensor[env_index] * fraction
         axis = handler.rot_axis_b[env_index : env_index + 1].expand(samples, -1)
         radius = handler.radius_vec[env_index : env_index + 1].expand(samples, -1)
-        pos = handler.axis_pos_b[env_index] + handler._rodrigues_rotate(radius, axis, angle)
+        pos = (
+            handler.axis_pos_b[env_index]
+            + handler.axial_vec[env_index]
+            + handler._rodrigues_rotate(radius, axis, angle)
+        )
         if isinstance(handler.cfg, ScrewFrameCfg):
             pos = pos + axis * (fraction * handler.cfg.axial_distance)[:, None]
         quat = math_utils.quat_mul(

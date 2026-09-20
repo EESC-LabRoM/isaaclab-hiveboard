@@ -15,6 +15,8 @@ Valve: UUC conversion into ``ball_valve/usd/uuc/`` plus a CoACD overlay
 here (``coacd`` + ``trimesh``, generation-time only).
 Circuit breaker: UUC conversion of the HiveBoard
 ``Circuit_Breaker_Assembly.urdf`` plus the same CoACD overlay.
+High-torque / small gate valves: UUC conversion of the HiveBoard URDFs
+plus the same CoACD overlay.
 
 UUC needs a Python that can ``import urdf_usd_converter`` (isolated venv;
 the project venv does not ship it). Overlay rewrite is kitless.
@@ -63,6 +65,27 @@ BREAKER_OVERLAY = BREAKER_USD_DIR / "Circuit_Breaker_uuc_newton.usda"
 BREAKER_TARGETS: tuple[tuple[str, str, float], ...] = (
     ("Geometry/World", "tn__corpo1_dC_Corpo1_Mesh_1", 0.1),
     ("Geometry/World/lever_pivot", "tn__Alavanca1_zH_Corpo1_Mesh_1", 0.05),
+)
+
+HT_URDF = (
+    REPO_ROOT / "dependencies/HiveBoard/Simulation/Valves/Gate Valve/High Torque Valve/High_Torque_Valve.urdf"
+)
+HT_USD_DIR = EXT_ASSETS / "hiveboard/high_torque_valve/usd"
+HT_UUC_DIR = HT_USD_DIR / "uuc"
+HT_OVERLAY = HT_USD_DIR / "High_Torque_Valve_uuc_newton.usda"
+HT_TARGETS: tuple[tuple[str, str, float], ...] = (
+    ("Geometry/World/base", "Corpo1__2__1", 0.1),
+    ("Geometry/World/nut", "Corpo1__1__1", 0.05),
+)
+
+SM_URDF = REPO_ROOT / "dependencies/HiveBoard/Simulation/Valves/Gate Valve/Small Valve/Small_Valve.urdf"
+SM_USD_DIR = EXT_ASSETS / "hiveboard/small_valve/usd"
+SM_UUC_DIR = SM_USD_DIR / "uuc"
+SM_OVERLAY = SM_USD_DIR / "Small_Valve_uuc_newton.usda"
+SM_TARGETS: tuple[tuple[str, str, float], ...] = (
+    ("Geometry/valvula_gaveta", "Mesh_1_1", 0.2),
+    ("Geometry/valvula_gaveta/pivot_registro", "Cylinder_1", 0.1),
+    ("Geometry/valvula_gaveta/pivot_registro/eixo_trans", "Mesh_22_1", 0.2),
 )
 
 DEFAULT_UUC_PYTHON = str(REPO_ROOT / "dependencies/urdf-usd-converter/.venv/bin/python")
@@ -386,6 +409,26 @@ def render_breaker_overlay() -> str:
     )
 
 
+def render_ht_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=HT_URDF,
+        uuc_dir=HT_UUC_DIR,
+        usda_name="High_Torque_Valve.usda",
+        default_prim="High_Torque_Valve",
+        targets=HT_TARGETS,
+    )
+
+
+def render_sm_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=SM_URDF,
+        uuc_dir=SM_UUC_DIR,
+        usda_name="Small_Valve.usda",
+        default_prim="Small_Valve",
+        targets=SM_TARGETS,
+    )
+
+
 def verify() -> list[str]:
     """Check generated UUC USD resolves. Empty list = ok."""
     from pxr import Usd, UsdGeom  # noqa: PLC0415
@@ -434,6 +477,28 @@ def verify() -> list[str]:
             )
             if not lever or not lever.IsValid():
                 problems.append("circuit breaker overlay missing CoACD lever part_0")
+    if not HT_OVERLAY.exists():
+        problems.append(f"missing high-torque valve overlay: {HT_OVERLAY}")
+    else:
+        stage = Usd.Stage.Open(str(HT_OVERLAY))
+        if not stage:
+            problems.append(f"pxr could not open {HT_OVERLAY}")
+        else:
+            nut = stage.GetPrimAtPath("/High_Torque_Valve/Geometry/World/nut/decomp_nut/part_0")
+            if not nut or not nut.IsValid():
+                problems.append("high-torque overlay missing CoACD nut part_0")
+    if not SM_OVERLAY.exists():
+        problems.append(f"missing small valve overlay: {SM_OVERLAY}")
+    else:
+        stage = Usd.Stage.Open(str(SM_OVERLAY))
+        if not stage:
+            problems.append(f"pxr could not open {SM_OVERLAY}")
+        else:
+            stem = stage.GetPrimAtPath(
+                "/Small_Valve/Geometry/valvula_gaveta/pivot_registro/eixo_trans/decomp_eixo_trans/part_0"
+            )
+            if not stem or not stem.IsValid():
+                problems.append("small valve overlay missing CoACD eixo_trans part_0")
     return problems
 
 
@@ -441,7 +506,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--assets",
-        choices=["all", "spot", "ball_valve", "circuit_breaker"],
+        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve"],
         default="all",
         help="Which asset to process (default: all).",
     )
@@ -474,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
     want_spot = args.assets in ("all", "spot")
     want_valve = args.assets in ("all", "ball_valve")
     want_breaker = args.assets in ("all", "circuit_breaker")
+    want_ht = args.assets in ("all", "high_torque_valve")
+    want_sm = args.assets in ("all", "small_valve")
 
     if args.verify_only:
         problems = verify()
@@ -482,7 +549,7 @@ def main(argv: list[str] | None = None) -> int:
             for problem in problems:
                 print(f"  - {problem}")
             return 1
-        print("[OK] Spot UUC + valve overlay + circuit breaker overlay resolve")
+        print("[OK] Spot UUC + HiveBoard overlays resolve")
         return 0
 
     if args.strip_obj:
@@ -501,6 +568,12 @@ def main(argv: list[str] | None = None) -> int:
         if want_breaker:
             run_uuc_conversion(BREAKER_URDF, BREAKER_UUC_DIR, args.uuc_python)
             print(f"[UUC] circuit_breaker: {BREAKER_UUC_DIR / 'Circuit_Breaker_Assembly.usda'}")
+        if want_ht:
+            run_uuc_conversion(HT_URDF, HT_UUC_DIR, args.uuc_python)
+            print(f"[UUC] high_torque_valve: {HT_UUC_DIR / 'High_Torque_Valve.usda'}")
+        if want_sm:
+            run_uuc_conversion(SM_URDF, SM_UUC_DIR, args.uuc_python)
+            print(f"[UUC] small_valve: {SM_UUC_DIR / 'Small_Valve.usda'}")
 
     if want_valve:
         text = render_valve_overlay()
@@ -511,6 +584,16 @@ def main(argv: list[str] | None = None) -> int:
         BREAKER_OVERLAY.parent.mkdir(parents=True, exist_ok=True)
         BREAKER_OVERLAY.write_text(text, encoding="utf-8")
         print(f"[OVERLAY] wrote {BREAKER_OVERLAY} ({len(text) // 1024} KiB)")
+    if want_ht:
+        text = render_ht_overlay()
+        HT_OVERLAY.parent.mkdir(parents=True, exist_ok=True)
+        HT_OVERLAY.write_text(text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {HT_OVERLAY} ({len(text) // 1024} KiB)")
+    if want_sm:
+        text = render_sm_overlay()
+        SM_OVERLAY.parent.mkdir(parents=True, exist_ok=True)
+        SM_OVERLAY.write_text(text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {SM_OVERLAY} ({len(text) // 1024} KiB)")
 
     problems = verify()
     for problem in problems:

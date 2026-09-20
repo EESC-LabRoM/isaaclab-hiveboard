@@ -57,6 +57,42 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-HighTorqueValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.high_torque_valve.env:SpotHighTorqueValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-HighTorqueValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.high_torque_valve.env:SpotHighTorqueValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-SmallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.small_valve.env:SpotSmallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-SmallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.small_valve.env:SpotSmallValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Spot-BenchValve-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

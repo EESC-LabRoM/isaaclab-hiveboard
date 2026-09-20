@@ -43,8 +43,12 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
 )
 from isaaclab_hiveboard.utils.command_preview import (
     PreviewIK,
+    apply_authored_command_field,
     build_segments,
+    effective_arc_caption,
+    format_editor_plan_failure,
     format_ik_debug,
+    invalidate_preview_plans_from,
     numpy,
     plan_curobo_segments,
     pose_to_viser,
@@ -102,6 +106,7 @@ class CommandEditor:
         self.ik_iters = ik_iters
         self.selected, self.fraction = 0, 1.0
         self.playing, self.dirty = False, False
+        self.plan_error = None
         self.pending = queue.SimpleQueue()
         self.epoch = 0
         self.panel = None
@@ -316,6 +321,12 @@ class CommandEditor:
                 self._reference_ui(cfg)
                 self._field("gripper_open", "Keep gripper open", boolean=True)
                 self._field("angle_deg", "Angle (deg)")
+                if isinstance(cfg, RotateFrameCfg) and cfg.use_valve_angle:
+                    self.server.gui.add_markdown(
+                        "Angle (deg) is unused while **Use remaining valve angle** is on. "
+                        "Edit Angle to switch to a fixed arc."
+                    )
+                self._field("max_ee_rotation_deg", "Max EE rotation (deg)", minimum=0.0)
                 self._field("axial_distance", "Screw travel (m)")
                 self._field("axis", "Axis in reference frame", vector=True)
                 self._field("use_valve_angle", "Use remaining valve angle", boolean=True)
@@ -331,8 +342,9 @@ class CommandEditor:
                     self._field("canonicalize_upward", "Keep TCP upright", boolean=True)
                     self._field("hold_current_orientation", "Hold starting orientation", boolean=True)
                 if isinstance(cfg, RotateFrameCfg):
-                    angle = float(self.segments[self.selected].handler.angle_rad_tensor[0])
-                    self.angle_note = self.server.gui.add_markdown(f"Effective arc: **{math.degrees(angle):.1f}°**")
+                    self.angle_note = self.server.gui.add_markdown(
+                        effective_arc_caption(cfg, self.segments[self.selected].handler)
+                    )
                 if getattr(cfg, "reference_pos_env", None) is not None:
                     self.reference_note = self.server.gui.add_markdown(
                         "Dense cuRobo reference is active. Editing this goal clears that reference."
@@ -396,21 +408,28 @@ class CommandEditor:
 
     def plan_with_curobo(self):
         self.playing = False
+        self.plan_error = None
         self.status.content = "Planning with cuRobo…"
+        invalidate_preview_plans_from(self.commands, 0)
+        self.segments = build_segments(self.term, self.commands, self.ik.initial_pose_b())
         try:
             count = plan_curobo_segments(self.term, self.segments, self.ik)
         except Exception as err:
+            invalidate_preview_plans_from(self.commands, 0)
             print(f"[EDITOR] cuRobo planning failed: {err}", flush=True)
-            self.status.content = f"**cuRobo planning failed:** {err}"
+            self.plan_error = format_editor_plan_failure(err)
+            self.ik.reset()
+            self.rebuild()
+            self.status.content = self.plan_error
             return
         print(f"[EDITOR] cuRobo planned {count}/{len(self.segments)} segments", flush=True)
         self.rebuild()
         self.preview()
 
     def _clear_preview_plan(self, cfg=None):
-        cfg = self.commands[self.selected] if cfg is None else cfg
-        if hasattr(cfg, "_preview_plan"):
+        if cfg is not None and hasattr(cfg, "_preview_plan"):
             cfg._preview_plan = None
+        invalidate_preview_plans_from(self.commands, self.selected)
 
     def dump_ik_debug(self):
         cfg = self.commands[self.selected]
@@ -459,11 +478,12 @@ class CommandEditor:
         self._update_pose(self.actual_tcp, self.ik.tcp_pose_w())
         self._update_pose(self.desired_tcp, self.ik.to_world(*goal))
         if self.angle_note is not None:
-            angle = float(segment.handler.angle_rad_tensor[0])
-            self.angle_note.content = f"Effective arc: **{math.degrees(angle):.1f}°**"
+            self.angle_note.content = effective_arc_caption(segment.cfg, segment.handler)
         if self.reference_note is not None:
             self.reference_note.visible = getattr(segment.cfg, "reference_pos_env", None) is not None
         self.sync_gizmos()
+        if self.plan_error:
+            self.status.content = self.plan_error
 
     def _clear_reference_path(self, cfg):
         if getattr(cfg, "reference_pos_env", None) is not None:
@@ -472,7 +492,7 @@ class CommandEditor:
 
     def edit(self, name, value):
         candidate = copy.deepcopy(self.commands[self.selected])
-        setattr(candidate, name, value)
+        siblings_changed = apply_authored_command_field(candidate, name, value)
         if name in {"target_offset_pos", "target_offset_rot", "target_position_env", "target_orientation_env"}:
             self._clear_reference_path(candidate)
         validate_command(candidate)
@@ -484,11 +504,13 @@ class CommandEditor:
             "target_position_env",
             "target_orientation_env",
             "angle_deg",
+            "max_ee_rotation_deg",
             "axis",
             "axial_distance",
+            "use_valve_angle",
         }
         self.changed(
-            refresh_panel=name in {"position_override_b", "axis_position_override_b"},
+            refresh_panel=siblings_changed or name in {"position_override_b", "axis_position_override_b"},
             replan=name in pose_fields,
         )
 
@@ -573,6 +595,7 @@ class CommandEditor:
         data["body_offset"][name] = list(value)
         _, offset = validate_setup(data)
         self.ik.offset = SequentialPoseCommandCfg.OffsetCfg(**offset)
+        invalidate_preview_plans_from(self.commands, 0)
         self.changed(refresh_panel=False)
 
     def set_calibrating(self, value):
