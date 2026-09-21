@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import MISSING
+from dataclasses import MISSING, dataclass
 from typing import Sequence, Type
 
 import isaaclab.sim as sim_utils
@@ -2178,40 +2178,254 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
         return "  limits: " + "  ".join(bits)
 
 
+@dataclass
+class _ScrewMimicEntry:
+    """A registered coupling plus the joint positions its constraint is anchored to.
+
+    ``revolute_pos_at_reset``/``prismatic_pos_at_reset`` must be the same
+    values :class:`~isaaclab.assets.ArticulationCfg`'s ``init_state.joint_pos``
+    will write on every episode reset — *not* whatever the USD authored as
+    each joint's own default coordinate, which can (and for the lamp, does)
+    differ. See :func:`register_screw_joint_mimic`.
+    """
+
+    coupling: "ScrewJointCouplingCfg"
+    revolute_pos_at_reset: float
+    prismatic_pos_at_reset: float
+
+
+def _find_world_joint(builder, world: int, joint_name: str) -> int | None:
+    """Find the single joint named ``joint_name`` that belongs to ``world``.
+
+    ``builder.joint_label`` holds each joint's full USD prim path, and after
+    replication every world's joints carry that world's own path (rewritten
+    by ``_rename_builder_labels``), so matching on the trailing path segment
+    disambiguates joints that share a short name across assets. Returns
+    ``None`` if no joint (or more than one) matches, so the caller can warn
+    and skip instead of guessing.
+    """
+    suffix = "/" + joint_name
+    match: int | None = None
+    for idx, (label, joint_world) in enumerate(zip(builder.joint_label, builder.joint_world)):
+        if joint_world != world:
+            continue
+        if label == joint_name or label.endswith(suffix):
+            if match is not None:
+                return None
+            match = idx
+    return match
+
+
+def _add_registered_screw_mimics_to_builder(_payload=None) -> None:
+    """``PhysicsEvent.MODEL_INIT`` callback: add one native mimic constraint per env.
+
+    Runs after replication, so ``NewtonManager._builder`` already holds every
+    env's joints in one flat builder (see :func:`register_screw_joint_mimic`
+    for why this can't run earlier), and resolves per-env leader/follower
+    joint indices from it. ``current_world`` is a read-only property normally driven by
+    ``begin_world``/``end_world``, and those can only *open a new* world, not
+    re-enter one that replication already closed — so this reaches past the
+    property (``builder._current_world``) to satisfy ``add_constraint_mimic``'s
+    same-world check for each already-built env in turn.
+
+    The outer loop over ``registry`` before the inner loop over ``world``
+    means multiple registered couplings would *not* end up contiguous per
+    world in ``constraint_mimic_world`` (all of coupling A's envs, then all
+    of coupling B's). The MuJoCo/MJWarp solver's mimic-constraint replication
+    assumes exactly that contiguity (``mimic_per_world = constraint_mimic_
+    count // world_count``, templated from ``world == 0``), so two
+    simultaneously-registered couplings would need the loop nesting swapped.
+    Harmless today since the lamp is the only registrant.
+    """
+    from isaaclab_newton.physics import NewtonManager
+
+    registry = getattr(NewtonManager, "_screw_mimic_registry", None)
+    if not registry:
+        return
+    builder = NewtonManager._builder
+    if builder is None:
+        return
+    num_worlds = builder.world_count
+    for entry in registry:
+        coupling = entry.coupling
+        coef1 = coupling.pitch_m_per_revolution / (2.0 * math.pi)
+        coef0 = entry.prismatic_pos_at_reset - coef1 * entry.revolute_pos_at_reset
+        for world in range(num_worlds):
+            revolute_idx = _find_world_joint(builder, world, coupling.revolute_joint_name)
+            prismatic_idx = _find_world_joint(builder, world, coupling.prismatic_joint_name)
+            if revolute_idx is None or prismatic_idx is None:
+                print(
+                    f"[WARN] Screw mimic: could not uniquely resolve "
+                    f"'{coupling.revolute_joint_name}'/'{coupling.prismatic_joint_name}' for "
+                    f"asset '{coupling.asset_name}' in world {world}; skipping native constraint there.",
+                    flush=True,
+                )
+                continue
+            prev_world = builder._current_world
+            builder._current_world = world
+            try:
+                builder.add_constraint_mimic(
+                    joint0=prismatic_idx,
+                    joint1=revolute_idx,
+                    coef0=coef0,
+                    coef1=coef1,
+                    enabled=True,
+                    label=f"{coupling.asset_name}_screw_mimic",
+                )
+            finally:
+                builder._current_world = prev_world
+
+    # add_constraint_mimic only appends, but ModelBuilder.finalize() requires
+    # constraint_mimic_world to be globally non-decreasing — and other mimic
+    # joints can already be sitting in that array in world order before this
+    # callback ever runs. For example Franka's URDF-imported gripper mimic
+    # (fr3_finger_joint2 mimicking fr3_finger_joint1) loads fine through the
+    # normal USD import path — unlike the lamp's screw ActionGraph, it isn't
+    # affected by the apiSchemas-drop bug described on ScrewJointCouplingCfg
+    # — and lands as one constraint per world, already in order. Appending
+    # this coupling's own per-world entries after that leaves the array as
+    # [0,1,2,3, 0,1,2,3]: correct within each block, but not globally
+    # non-decreasing. A stable sort on world fixes that regardless of what
+    # else contributed constraints.
+    order = sorted(range(len(builder.constraint_mimic_world)), key=lambda i: builder.constraint_mimic_world[i])
+    if order != list(range(len(order))):
+        builder.constraint_mimic_joint0 = [builder.constraint_mimic_joint0[i] for i in order]
+        builder.constraint_mimic_joint1 = [builder.constraint_mimic_joint1[i] for i in order]
+        builder.constraint_mimic_coef0 = [builder.constraint_mimic_coef0[i] for i in order]
+        builder.constraint_mimic_coef1 = [builder.constraint_mimic_coef1[i] for i in order]
+        builder.constraint_mimic_enabled = [builder.constraint_mimic_enabled[i] for i in order]
+        builder.constraint_mimic_label = [builder.constraint_mimic_label[i] for i in order]
+        builder.constraint_mimic_world = [builder.constraint_mimic_world[i] for i in order]
+
+
+def _install_screw_mimic_hook() -> None:
+    """Idempotently register :func:`_add_registered_screw_mimics_to_builder`."""
+    from isaaclab.physics import PhysicsEvent
+    from isaaclab_newton.physics import NewtonManager
+
+    if not hasattr(NewtonManager, "_screw_mimic_registry"):
+        NewtonManager._screw_mimic_registry = []
+    if not getattr(NewtonManager, "_screw_mimic_hook_installed", False):
+        NewtonManager._screw_mimic_hook_installed = True
+        NewtonManager.register_callback(
+            _add_registered_screw_mimics_to_builder,
+            PhysicsEvent.MODEL_INIT,
+            name="screw_joint_mimic",
+        )
+
+
+def register_screw_joint_mimic(
+    coupling: "ScrewJointCouplingCfg",
+    *,
+    revolute_pos_at_reset: float,
+    prismatic_pos_at_reset: float,
+) -> None:
+    """Register ``coupling`` for a native Newton mimic constraint at ``MODEL_INIT``.
+
+    ``SequentialPoseCommand.__init__`` runs too late for this: by the time a
+    ``CommandTerm`` is constructed, ``ManagerBasedEnv.__init__`` has already
+    called ``sim.reset()``, which fires ``MODEL_INIT`` and finalizes the
+    model. Call this instead from an env cfg's ``__post_init__`` (the last
+    point that both sees fully-resolved cfg values — after subclasses like
+    Franka's have applied their overrides — and still runs before the scene
+    and sim are built). See :class:`ScrewJointCouplingCfg` for the full
+    story of why this needs a builder-level hook instead of the USD-authored
+    ``<mimic>`` schema.
+
+    Args:
+        coupling: The screw coupling to add a native constraint for.
+        revolute_pos_at_reset: The revolute joint position [rad] that
+            ``ArticulationCfg.init_state.joint_pos`` writes on every episode
+            reset. Pass ``self.scene.<asset_name>.init_state.joint_pos`` from
+            the calling ``__post_init__`` — *not* a value read back from the
+            builder or the live sim, since the USD's own build-time default
+            coordinate can differ from what IsaacLab resets to (it does, for
+            the lamp: 0.0 either way, but only by coincidence — see
+            ``prismatic_pos_at_reset``). The constraint is a fixed affine
+            relationship anchored at this pair, so it must match reset state
+            exactly or every reset starts the episode with the constraint
+            already violated.
+        prismatic_pos_at_reset: As above, for the prismatic joint. For the
+            lamp this is ``0.024`` (``LAMP_UNSCREWED_POSITION`` in
+            ``spot/lamp/configs/scene.py``) — *not* ``0.0``, which is what
+            the USD itself authors as the joint's build-time default.
+    """
+    _install_screw_mimic_hook()
+    from isaaclab_newton.physics import NewtonManager
+
+    for existing in NewtonManager._screw_mimic_registry:
+        if (
+            existing.coupling.revolute_joint_name == coupling.revolute_joint_name
+            and existing.coupling.prismatic_joint_name == coupling.prismatic_joint_name
+            and existing.coupling.asset_name == coupling.asset_name
+        ):
+            return
+    NewtonManager._screw_mimic_registry.append(
+        _ScrewMimicEntry(
+            coupling=coupling,
+            revolute_pos_at_reset=revolute_pos_at_reset,
+            prismatic_pos_at_reset=prismatic_pos_at_reset,
+        )
+    )
+
+
 @configclass
 class ScrewJointCouplingCfg:
     """Environment-side equivalent of the lamp USD's screw ActionGraph.
 
     A solver-native alternative exists (Newton's ``add_constraint_mimic`` /
     URDF ``<mimic>``, enforcing ``prismatic = coef0 + coef1 * revolute`` as a
-    real constraint instead of this per-step position target) but does not
-    currently work through this project's USD spawn path: Isaac Lab flattens
-    the composed stage before Newton's importer parses it, and that flatten
-    drops the ``apiSchemas`` list metadata (``NewtonJointAPI``/``NewtonMimicAPI``)
-    even though the underlying ``newton:mimic*`` attributes survive. Newton's
-    importer gates its whole mimic pass on ``prim.HasAPI("NewtonMimicAPI")``,
-    so the constraint silently never loads (``model.constraint_mimic_count``
-    stays 0) — confirmed by instrumenting
-    ``newton/_src/utils/import_usd.py`` directly. Installing the
-    ``newton-usd-schemas`` PyPI package does not fix it: it registers against
-    the venv's own ``pxr``, not whatever USD library Isaac Lab's stage
-    composition actually runs through here.
+    real constraint instead of this per-step position target). Authoring it
+    as USD ``<mimic>`` metadata does not currently work through this
+    project's USD spawn path: Isaac Lab flattens the composed stage before
+    Newton's importer parses it, and that flatten drops the ``apiSchemas``
+    list metadata (``NewtonJointAPI``/``NewtonMimicAPI``) even though the
+    underlying ``newton:mimic*`` attributes survive. Newton's importer gates
+    its whole mimic pass on ``prim.HasAPI("NewtonMimicAPI")``, so the
+    constraint silently never loads (``model.constraint_mimic_count`` stays
+    0) — confirmed by instrumenting ``newton/_src/utils/import_usd.py``
+    directly. Installing the ``newton-usd-schemas`` PyPI package does not
+    fix it: it registers against the venv's own ``pxr``, not whatever USD
+    library Isaac Lab's stage composition actually runs through here.
 
-    The viable path to a native constraint is bypassing USD entirely: add it
-    straight to the Newton ``ModelBuilder`` in Python via a
+    :attr:`use_native_mimic_constraint` takes the other viable path instead:
+    bypassing USD entirely and adding the constraint straight to the Newton
+    ``ModelBuilder`` in Python, via a
     ``NewtonManager.register_callback(..., PhysicsEvent.MODEL_INIT)`` hook
     (the same mechanism ``isaaclab_contrib``'s deformable objects use to
-    register cloth/soft-body meshes into the builder). The complication is
-    that by the time ``MODEL_INIT`` fires, ``NewtonManager.instantiate_
-    builder_from_stage`` has already replicated the single-env prototype
-    into the full multi-env builder (``add_builder`` per env), so the hook
-    would need to add one ``add_constraint_mimic`` call per environment —
-    resolving ``RevoluteJoint``/``PrismaticJoint`` indices and
-    ``builder.current_world`` per env — rather than the single call the
-    standalone lead-screw example (``newton/examples/basic/
-    example_basic_mimic_joint.py``) uses. Untested beyond confirming the
-    replication arithmetic in ``ModelBuilder.add_builder`` correctly offsets
-    ``constraint_mimic_*`` arrays; needs validation at ``num_envs > 1``.
+    register cloth/soft-body meshes into the builder — see
+    :func:`register_screw_joint_mimic`). This project's env cloning goes
+    through ``newton_physics_replicate`` (``isaaclab_newton.cloner``), which
+    runs well before ``MODEL_INIT`` and leaves ``NewtonManager._builder``
+    already fully replicated and label-renamed by the time the callback
+    fires — unlike the single-call standalone lead-screw example
+    (``newton/examples/basic/example_basic_mimic_joint.py``), the hook
+    therefore resolves ``RevoluteJoint``/``PrismaticJoint`` indices and
+    reopens each env's ``current_world`` (see
+    :func:`_add_registered_screw_mimics_to_builder`) to add one
+    ``add_constraint_mimic`` call per environment.
+
+    This constraint is a fixed affine relationship, computed once from the
+    ``revolute_pos_at_reset``/``prismatic_pos_at_reset`` the caller passes to
+    :func:`register_screw_joint_mimic` — it does not re-anchor itself the way
+    :meth:`SequentialPoseCommand._reset_screw_coupling` re-anchors the
+    per-step position target from whatever is measured at reset. Those two
+    values must be exactly what ``ArticulationCfg.init_state.joint_pos``
+    writes on every episode reset, *not* the joint's own USD-authored
+    build-time default: for the lamp these differ (build-time prismatic
+    coordinate is ``0.0``; the reset value used throughout this task is
+    ``LAMP_UNSCREWED_POSITION`` = ``0.024``), and anchoring to the wrong one
+    means every reset starts the episode with the constraint already
+    violated by that gap. Fixed-anchor re-anchoring like this is fine only
+    because this task's resets are deterministic (``reset_scene_to_default``,
+    no joint randomization on this pair); a task that randomizes the
+    revolute/prismatic start pose independently would need a different
+    anchoring scheme entirely. The per-step position target and
+    friction/end-stop resistance model below keep running unchanged
+    alongside the native constraint — it is an additive, solver-level
+    backstop, not a replacement, so existing behavior is preserved even if
+    the constraint fails to resolve for some env (see the warning printed
+    by :func:`_add_registered_screw_mimics_to_builder`).
     """
 
     asset_name: str = MISSING  # type: ignore
@@ -2229,6 +2443,13 @@ class ScrewJointCouplingCfg:
     end_stop_scale: float = 0.02
     end_stop_power: float = 2.5
     end_stop_activation_distance: float = 0.005
+    use_native_mimic_constraint: bool = False
+    """Also add a native Newton mimic constraint via :func:`register_screw_joint_mimic`.
+
+    Not read by :class:`SequentialPoseCommand` itself — callers must invoke
+    :func:`register_screw_joint_mimic` for it to take effect, since it needs
+    to run before ``sim.reset()`` from an env cfg's ``__post_init__``.
+    """
 
 
 @configclass

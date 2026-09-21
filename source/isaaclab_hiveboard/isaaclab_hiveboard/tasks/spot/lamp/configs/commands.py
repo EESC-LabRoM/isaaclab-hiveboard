@@ -95,5 +95,9 @@ class FramePoseCommandsCfg:
             command_joint_angle_scale=-1.0,
             lower_limit=0.0,
             upper_limit=0.024,
+            # Solver-level backstop for the per-step position target above —
+            # see ScrewJointCouplingCfg's docstring for why this needs a
+            # MODEL_INIT builder hook instead of a USD-authored <mimic>.
+            use_native_mimic_constraint=True,
         ),
     )
