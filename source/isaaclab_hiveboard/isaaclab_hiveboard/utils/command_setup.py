@@ -84,10 +84,9 @@ def validate_command(cmd) -> None:
             setattr(cmd, name, _vector(getattr(cmd, name), 4, name, quaternion=True))
     if isinstance(cmd, RotateFrameCfg) and sum(v * v for v in cmd.axis) < 1e-12:
         raise ValueError("Rotation axis must be non-zero")
-    for name in ("position_override_b", "axis_position_override_b"):
-        value = getattr(cmd, name, None)
-        if value is not None:
-            _vector([0 if v is None else v for v in value], 3, name)
+    override = getattr(cmd, "axis_position_override_b", None)
+    if override is not None:
+        _vector([0 if v is None else v for v in override], 3, "axis_position_override_b")
     if isinstance(cmd, (GoToFrameCfg, RotateFrameCfg)) and getattr(cmd, "target_position_env", None) is None:
         if not isinstance(cmd.frame_name, str) or not cmd.frame_name:
             raise ValueError("A frame-relative command needs a frame sensor")

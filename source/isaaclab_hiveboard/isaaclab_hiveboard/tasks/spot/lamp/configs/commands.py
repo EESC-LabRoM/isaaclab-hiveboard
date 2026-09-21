@@ -35,12 +35,9 @@ def _turn_cycle(*, unwind_first: bool) -> list:
                 frame_name="target_frame",
                 target_frame_name="lamp_grasp",
                 gripper_open=True,
-                # The reset pose is already at the bulb's accessible grasp
-                # surface; avoid driving the palm through the bulb center.
                 distance_threshold=0.015,
                 orientation_threshold_deg=10.0,
                 hold_current_orientation=True,
-                position_override_b=(None, 0.0, -0.030),
             ),
             GripperCommand(open_gripper=False, duration_s=0.75),
             ScrewFrameCfg(
@@ -62,7 +59,6 @@ def _turn_cycle(*, unwind_first: bool) -> list:
                 distance_threshold=0.015,
                 orientation_threshold_deg=10.0,
                 hold_current_orientation=True,
-                position_override_b=(None, 0.0, -0.030),
             ),
             GripperCommand(open_gripper=True, duration_s=0.5),
         ]
@@ -89,7 +85,6 @@ class FramePoseCommandsCfg:
                 canonicalize_upward=False,
             ),
             *_turn_cycle(unwind_first=False),
-            *[command for _ in range(15) for command in _turn_cycle(unwind_first=True)],
         ],
         body_offset=as_command_offset(SPOT_EE),
         screw_coupling=ScrewJointCouplingCfg(

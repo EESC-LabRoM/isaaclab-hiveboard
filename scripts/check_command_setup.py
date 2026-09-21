@@ -16,9 +16,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
 
 import torch
+from isaaclab_hiveboard.mdp.actions.curobo_planned_ik import CuroboPlannedDifferentialInverseKinematicsAction
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
     CuroboPlannedRotateFrameCfg,
@@ -31,10 +32,13 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     _GoToFrameHandler,
     _GripperHandler,
 )
+from isaaclab_hiveboard.mdp.pose_actions import OffsetDifferentialIKAction
 from isaaclab_hiveboard.utils.command_path import active_command_path
 from isaaclab_hiveboard.utils.command_preview import (
     PreviewIK,
     Segment,
+    _plan_rotate_like_play,
+    _retarget_from_current_state,
     apply_authored_command_field,
     build_segments,
     concat_segment_tcp,
@@ -42,7 +46,7 @@ from isaaclab_hiveboard.utils.command_preview import (
     format_editor_plan_failure,
     format_infeasible_rotation_message,
     invalidate_preview_plans_from,
-    _plan_curobo_per_segment,
+    plan_curobo_segments,
     pose_to_viser,
     viser_to_pose,
 )
@@ -63,9 +67,26 @@ import isaaclab.utils.math as math_utils
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
 from isaaclab.sensors import FrameTransformerCfg
 
+from command_edit import CommandEditor, GuiEvents, _curobo_commands, main as command_edit_main
+
 
 def proxy(value):
     return NS(torch=torch.tensor(value, dtype=torch.float32))
+
+
+def ik_debug_stub() -> dict:
+    """The pose fields PreviewIK.measure() reports and the editor status prints."""
+    keys = (
+        "tcp_goal_rpy_deg",
+        "tcp_goal_+X",
+        "tcp_goal_+Z",
+        "tcp_actual_rpy_deg",
+        "tcp_actual_+X",
+        "tcp_actual_+Z",
+        "flange_actual_rpy_deg",
+        "flange_actual_+X",
+    )
+    return {key: "[0.0, 0.0, 0.0]" for key in keys}
 
 
 def geometry_term():
@@ -197,6 +218,305 @@ class SetupTests(unittest.TestCase):
         bad["commands"][0]["parameters"]["class_type"] = "arbitrary.module:callable"
         with self.assertRaises(ValueError):
             validate_setup(bad)
+
+
+class EditorCommandConfigTests(unittest.TestCase):
+    def test_lamp_sequences_use_bundled_robot_models_without_existing_plans(self):
+        from isaaclab_hiveboard.tasks.franka.lamp.env import FrankaLampEnvCfg
+        from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg
+
+        for env_cls, model in ((FrankaLampEnvCfg, "fr3.yaml"), (SpotLampEnvCfg, "spot_arm.yaml")):
+            with self.subTest(task=env_cls.__name__):
+                cfg = env_cls()
+                term = cfg.commands.pose_command
+                self.assertFalse(any(is_curobo_command(cmd) for cmd in term.commands))
+                converted = _curobo_commands(term.commands, body_name=term.body_name)
+                self.assertEqual(len(converted), len(term.commands))
+                for before, after in zip(term.commands, converted):
+                    if isinstance(before, (GripperCommand, ScrewFrameCfg)):
+                        self.assertEqual(after, before)
+                        continue
+                    self.assertTrue(is_curobo_command(after))
+                    self.assertEqual(as_direct_command(after), before)
+                    self.assertEqual(after.robot_joint_names, cfg.actions.arm_action.joint_names)
+                    self.assertEqual(Path(after.robot_curobo_yaml).name, model)
+                    self.assertTrue(Path(after.robot_curobo_yaml).is_file())
+                    self.assertTrue(Path(after.robot_urdf).is_file())
+                self.assertFalse(any(is_curobo_command(cmd) for cmd in term.commands))
+
+    def test_reload_plain_franka_setup_replans_with_robot_settings(self):
+        from isaaclab_hiveboard.tasks.franka.lamp.env import FrankaLampEnvCfg
+
+        cfg = FrankaLampEnvCfg()
+        editor = CommandEditor.__new__(CommandEditor)
+        editor.env, editor.task = NS(cfg=cfg), "franka-lamp-test"
+        editor.term = NS(cfg=cfg.commands.pose_command)
+        editor.ik = NS()
+        editor.offset_pos, editor.offset_rot = NS(), NS()
+        editor._euler_degrees = Mock(return_value=(0.0, 0.0, 0.0))
+        editor.rebuild, editor.plan_with_curobo = Mock(), Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "setup.json"
+            save_setup(path, make_setup(editor.task, editor.term.cfg))
+            editor.path = NS(value=str(path))
+            editor.reload()
+        self.assertIsInstance(editor.commands[0], CuroboPlannedGoToFrameCfg)
+        self.assertEqual(editor.commands[0].robot_joint_names, cfg.actions.arm_action.joint_names)
+        editor.plan_with_curobo.assert_called_once_with()
+
+    def test_unknown_robot_without_planner_settings_is_rejected(self):
+        plain = GoToFrameCfg(frame_name="target_frame", target_frame_name="goal")
+        with self.assertRaisesRegex(ValueError, "bundled cuRobo robot model for body 'unknown_hand'"):
+            _curobo_commands([plain], body_name="unknown_hand")
+
+
+class PlannedActionTests(unittest.TestCase):
+    def test_replay_preserves_planned_joints_and_unplanned_ik_targets(self):
+        # A redundant arm must execute the planner's joint solution rather
+        # than solving its TCP pose again on a different elbow branch.
+        for active in ([True, False], [True, True], [False, False]):
+            with self.subTest(active=active):
+                action = CuroboPlannedDifferentialInverseKinematicsAction.__new__(
+                    CuroboPlannedDifferentialInverseKinematicsAction
+                )
+                action._joint_ids = [0, 1]
+                target = torch.zeros(2, 3)
+                target[:, 2] = 0.04  # Gripper targets belong to a separate action.
+                planned = torch.tensor([[0.8, -0.9], [-0.6, 0.7]])
+                ik = torch.tensor([[0.1, 0.2], [0.3, 0.4]])
+                mask = torch.tensor(active)
+
+                def write_target(*, target: torch.Tensor, joint_ids):
+                    action._asset.data.joint_pos_target.torch[:, joint_ids] = target
+
+                action._asset = NS(
+                    data=NS(joint_pos_target=NS(torch=target)),
+                    set_joint_position_target_index=write_target,
+                )
+                action._command_term = NS(get_curobo_joint_targets=lambda: (mask, planned))
+                with patch.object(
+                    OffsetDifferentialIKAction,
+                    "apply_actions",
+                    lambda self: write_target(target=ik, joint_ids=self._joint_ids),
+                ):
+                    action.apply_actions()
+                torch.testing.assert_close(target[:, :2], torch.where(mask[:, None], planned, ik))
+                torch.testing.assert_close(target[:, 2], torch.full((2,), 0.04))
+
+
+class EditorStartupTests(unittest.TestCase):
+    def test_reset_frame_and_camera_are_sent_before_startup_planning(self):
+        for planning_error in (None, RuntimeError("startup planning failed")):
+            with self.subTest(planning_error=planning_error):
+                command_cfg = SequentialPoseCommandCfg(
+                    asset_name="robot",
+                    body_name="fr3_hand",
+                    commands=[
+                        CuroboPlannedGoToFrameCfg(
+                            frame_name="target_frame", target_frame_name="goal", robot_joint_names=["arm_joint"]
+                        )
+                    ],
+                )
+                cfg = NS(commands=NS(pose_command=command_cfg), scene=NS(), sim=NS())
+                base = NS(
+                    command_manager=Mock(get_term=Mock(return_value=NS(cfg=command_cfg))),
+                    scene=NS(sensors={}),
+                )
+                env = Mock(unwrapped=base)
+                camera = NS()
+                viewer = Mock(_server=Mock(initial_camera=camera), is_running=Mock(return_value=True))
+                reset_state, events, editors = object(), [], []
+                viewer.begin_frame.side_effect = lambda _: events.append("begin")
+                viewer.log_state.side_effect = lambda state: events.append(state)
+                viewer.end_frame.side_effect = lambda: events.append("end")
+                viewer._server.flush.side_effect = lambda: events.append("flush")
+                pose = (torch.tensor([[1.0, 0.0, 0.0]]), torch.tensor([[0.0, 0.0, 0.0, 1.0]]))
+                ik = Mock(initial_flange=pose, offset=SequentialPoseCommandCfg.OffsetCfg())
+                args = NS(
+                    task="test-task", setup=None, out=None, device="cuda", port=8080, ik_iters=1, smoke_test=True
+                )
+
+                def create_ui(editor):
+                    editor.status = NS(content="")
+                    editor.actual_tcp, editor.desired_tcp = NS(), NS()
+
+                def rebuild(editor):
+                    editor.segments = [NS(end=pose)]
+
+                def plan(editor):
+                    self.assertEqual(events, ["begin", reset_state, "end", "flush"])
+                    self.assertEqual(tuple(camera.look_at), (1.0, 0.0, 0.0))
+                    self.assertEqual(tuple(camera.position), (2.1, -1.1, 0.7))
+                    self.assertIn("reset pose", editor.status.content)
+                    ik.solve.assert_not_called()
+                    env.close.assert_not_called()
+                    editors.append(editor)
+                    events.append("plan")
+                    if planning_error is not None:
+                        raise planning_error
+
+                with (
+                    patch("sys.argv", ["command_edit.py"]),
+                    patch("command_edit._parse_args", return_value=(args, [])),
+                    patch("command_edit.resolve_task_config", return_value=(cfg, None)),
+                    patch("command_edit.launch_simulation", return_value=MagicMock()),
+                    patch("command_edit.gym.make", return_value=env),
+                    patch("command_edit.refresh_frame_sensors"),
+                    patch("command_edit.PreviewIK", return_value=ik),
+                    patch("isaaclab_newton.physics.NewtonManager.get_model"),
+                    patch("isaaclab_newton.physics.NewtonManager.get_state", return_value=reset_state),
+                    patch("newton.viewer.ViewerViser", return_value=viewer),
+                    patch.multiple(
+                        CommandEditor,
+                        _create_ui=create_ui,
+                        rebuild=rebuild,
+                        refresh_selected_panel=Mock(),
+                        _update_pose=Mock(),
+                        plan_with_curobo=plan,
+                        dump_ik_debug=Mock(),
+                    ),
+                ):
+                    self.assertEqual(command_edit_main(), 0)
+                self.assertEqual(len(editors), 1)
+                self.assertEqual(events, ["begin", reset_state, "end", "flush", "plan", "begin", reset_state, "end"])
+                if planning_error is not None:
+                    self.assertIn(str(planning_error), editors[0].status.content)
+                env.close.assert_called_once()
+                viewer.close.assert_called_once()
+
+
+class EditorPreviewTests(unittest.TestCase):
+    def setUp(self):
+        editor = CommandEditor.__new__(CommandEditor)
+        editor.commands = [
+            CuroboPlannedGoToFrameCfg(
+                frame_name="target_frame", target_frame_name="goal", robot_joint_names=["arm_joint"]
+            ),
+            ScrewFrameCfg(
+                frame_name="target_frame", target_frame_name="goal", axis=(0, 0, 1), use_valve_angle=False
+            ),
+        ]
+        editor.term = geometry_term()
+        editor.term.cfg.commands = editor.commands
+        initial = (torch.tensor([[1.0, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        editor.ik = Mock(
+            initial_pose_b=Mock(return_value=initial),
+            measure=Mock(return_value=(0.0, 0.0)),
+            solve=Mock(return_value=(0.0, 0.0)),
+            last_debug=ik_debug_stub(),
+        )
+        editor.ik_iters = 1
+        editor.selected, editor.fraction = 1, 1.0
+        editor.playing, editor.dirty = False, False
+        editor.events, editor.panel = GuiEvents(), None
+        editor.calibrate, editor.scrub = NS(value=False), NS(value=1.0)
+        editor.status = NS(content="")
+        editor.actual_tcp, editor.desired_tcp = NS(), NS()
+        editor.server = NS(gui=MagicMock())
+        editor.rebuild = Mock()
+        editor.sync_gizmos = Mock()
+        editor._update_pose = Mock()
+        editor._field = Mock()
+        editor._reference_ui = Mock()
+        editor.segments = build_segments(editor.term, editor.commands, initial)
+        editor.refresh_selected_panel()
+        self.editor = editor
+
+    @staticmethod
+    def cache_plans(term, segments, ik):
+        for segment in segments:
+            segment.cfg._preview_plan = {
+                "joints": torch.zeros(2, 1),
+                "joint_names": ["arm_joint"],
+                "tcp_pos_b": torch.cat([segment.start[0], segment.end[0]]),
+                "tcp_quat_b": torch.cat([segment.start[1], segment.end[1]]),
+            }
+        return len(segments)
+
+    def test_play_refreshes_screw_panel_before_previewing_first_goto(self):
+        editor = self.editor
+        self.assertIsNotNone(editor.angle_note)
+        with patch("command_edit.plan_curobo_segments", side_effect=self.cache_plans):
+            editor.play()
+        self.assertEqual(editor.selected, 0)
+        self.assertIsNone(editor.angle_note)
+        self.assertTrue(editor.playing)
+        editor.ik.apply_named_joints.assert_called_once()
+        editor.ik.solve.assert_not_called()
+
+    def test_replanning_after_command_change_refreshes_panel(self):
+        editor = self.editor
+        editor.commands[1] = copy.deepcopy(editor.commands[0])
+        with patch("command_edit.plan_curobo_segments", side_effect=self.cache_plans):
+            editor.changed(replan=True)
+        self.assertIsNone(editor.angle_note)
+        editor.ik.apply_named_joints.assert_called_once()
+
+    def test_replanning_typed_value_preserves_panel_and_input_epoch(self):
+        editor = self.editor
+        panel, generation = editor.panel, editor.events.generation
+        with patch("command_edit.plan_curobo_segments", side_effect=self.cache_plans):
+            editor.changed(refresh_panel=False, replan=True)
+        self.assertIs(editor.panel, panel)
+        self.assertEqual(editor.events.generation, generation)
+
+    def test_planning_failure_clears_partial_plans_and_stops_playback(self):
+        editor = self.editor
+
+        def fail_after_first_plan(term, segments, ik):
+            self.cache_plans(term, segments[:1], ik)
+            raise RuntimeError("retarget failed")
+
+        with patch("command_edit.plan_curobo_segments", side_effect=fail_after_first_plan):
+            with self.assertRaisesRegex(RuntimeError, "retarget failed"):
+                editor.play()
+        self.assertFalse(editor.playing)
+        self.assertIsNone(editor.angle_note)
+        self.assertIsNone(editor.commands[0]._preview_plan)
+        self.assertIn("retarget failed", editor.status.content)
+        editor.ik.solve.assert_not_called()
+        editor.ik.apply_named_joints.assert_not_called()
+
+    def test_missing_curobo_plan_triggers_full_replan_instead_of_using_dls(self):
+        editor = self.editor
+        editor.selected = 0
+        with patch("command_edit.plan_curobo_segments", side_effect=self.cache_plans):
+            editor.show_selected()
+        editor.ik.apply_named_joints.assert_called_once()
+        editor.ik.solve.assert_not_called()
+
+    def test_missing_planner_settings_raise(self):
+        editor = self.editor
+        editor.term.cfg.commands = [editor.commands[1]]
+        with self.assertRaisesRegex(ValueError, "No cuRobo planner settings"):
+            plan_curobo_segments(editor.term, editor.segments[1:], editor.ik)
+        editor.ik.solve.assert_not_called()
+
+    def test_retarget_failure_propagates(self):
+        editor = self.editor
+        with patch(
+            "isaaclab_hiveboard.utils.command_preview._retarget_tcp_sequence",
+            side_effect=RuntimeError("retarget failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "retarget failed"):
+                plan_curobo_segments(editor.term, editor.segments, editor.ik)
+        editor.ik.solve.assert_not_called()
+
+    def test_retarget_frames_use_current_joint_seed(self):
+        current = NS(position=torch.tensor([[0.2]]), velocity=torch.zeros(1, 1), joint_names=["arm_joint"])
+        targets = NS(num_frames=2, get_frame=lambda index: index)
+        retargeter = Mock()
+
+        def solve_frame(index):
+            torch.testing.assert_close(retargeter._prev_solution, current.position)
+            torch.testing.assert_close(retargeter._prev_velocity, current.velocity)
+            state = Mock(reorder=Mock(return_value=NS(position=current.position + index)))
+            return NS(joint_state=state)
+
+        retargeter.solve_frame.side_effect = solve_frame
+        joints = _retarget_from_current_state(retargeter, targets, current)
+        torch.testing.assert_close(joints, torch.tensor([[[0.2], [1.2]]]))
+        retargeter.reset.assert_called_once()
 
 
 class GeometryTests(unittest.TestCase):
@@ -741,8 +1061,6 @@ class RotateGraspPlaneTests(unittest.TestCase):
             angle_deg=-180.0,
             max_joint_step=0.15,
         )
-        identity = torch.tensor([[0.0, 0, 0, 1]])
-        segment = Segment(cfg, (torch.zeros(1, 3), identity), (torch.zeros(1, 3), identity), 1.0)
         solved = {"dls": False}
 
         class StubIK:
@@ -784,7 +1102,7 @@ class RotateGraspPlaneTests(unittest.TestCase):
             FakeHandler,
         ):
             with self.assertRaisesRegex(RuntimeError, r"Rotation is infeasible"):
-                _plan_curobo_per_segment(term, [segment], StubIK())
+                _plan_rotate_like_play(term, cfg, StubIK())
         self.assertFalse(solved["dls"])
         self.assertIsNone(cfg._preview_plan)
 

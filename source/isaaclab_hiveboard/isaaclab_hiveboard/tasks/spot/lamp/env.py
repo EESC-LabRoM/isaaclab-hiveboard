@@ -50,7 +50,7 @@ class SpotLampEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 15
-        self.episode_length_s = 85.0
+        self.episode_length_s = 10.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "lamp"
         self.viewer.body_name = "lamp_pivot"

@@ -111,12 +111,8 @@ class SequentialPoseCommand(CommandTerm):
         self._command[:, 0] = 1  # Close gripper
         self._command[:, 7] = 1.0  # xyzw identity (0,0,0,1)
 
-        # -- convert the fixed offsets to torch tensors of batched shape
-        if self.cfg.body_offset is not None:
-            self._offset_pos = torch.tensor(self.cfg.body_offset.pos, device=self.device).repeat(self.num_envs, 1)
-            self._offset_rot = torch.tensor(self.cfg.body_offset.rot, device=self.device).repeat(self.num_envs, 1)
-        else:
-            self._offset_pos, self._offset_rot = None, None
+        self._offset_pos, self._offset_rot = None, None
+        self.set_body_offset(self.cfg.body_offset)
 
         self._initialize_joint_output()
 
@@ -679,6 +675,21 @@ class SequentialPoseCommand(CommandTerm):
             self.curobo_path_visualizer.set_visibility(False)
             self._path_markers_visible = False
 
+    def set_body_offset(self, offset) -> None:
+        """Replace the flange→TCP offset used by every handler and cuRobo plan.
+
+        The command editor calls this to keep a live-calibrated offset in sync
+        with the term; without it, cuRobo would keep planning against the
+        offset the term was constructed with.
+        """
+        self.cfg.body_offset = offset
+        # A term without an authored offset treats the flange itself as the TCP.
+        if offset is None:
+            self._offset_pos, self._offset_rot = None, None
+            return
+        self._offset_pos = torch.tensor(offset.pos, device=self.device).repeat(self.num_envs, 1)
+        self._offset_rot = torch.tensor(offset.rot, device=self.device).repeat(self.num_envs, 1)
+
     def _body_pose_in_base(self, env_ids: torch.Tensor | slice):
         """Commanded body (``arm_link_wr1``) pose in the robot base frame."""
         return math_utils.subtract_frame_transforms(
@@ -905,10 +916,6 @@ class _GoToFrameHandler(_BaseCmdHandler):
             )
         if self.cfg.hold_current_orientation:
             target_quat_b = self._held_quat_b[env_ids]
-        if self.cfg.position_override_b is not None:
-            for axis, value in enumerate(self.cfg.position_override_b):
-                if value is not None:
-                    target_pos_b[:, axis] = float(value)
 
         return target_pos_b, target_quat_b
 
@@ -2338,8 +2345,6 @@ class GoToFrameCfg(BaseCmd):
     """
     hold_current_orientation: bool = False
     """Translate to the target while retaining the orientation captured at reset."""
-    position_override_b: tuple[float | None, float | None, float | None] | None = None
-    """Optional per-axis target-position overrides in the robot base frame."""
 
 
 @configclass

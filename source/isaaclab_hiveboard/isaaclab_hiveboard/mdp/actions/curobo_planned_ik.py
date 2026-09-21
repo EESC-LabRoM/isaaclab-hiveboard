@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import MISSING
-
 import torch
 
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
-from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 from isaaclab.utils.configclass import configclass
 
+from isaaclab_hiveboard.mdp.pose_actions import OffsetDifferentialIKAction
 
-class CuroboPlannedDifferentialInverseKinematicsAction(DifferentialInverseKinematicsAction):
+
+class CuroboPlannedDifferentialInverseKinematicsAction(OffsetDifferentialIKAction):
     """Use direct joint waypoints only while a cuRobo command is active.
 
-    All unplanned portions of the scripted task retain Isaac Lab's regular
-    absolute-pose differential IK behavior.
+    Unplanned portions of the scripted task use offset-aware absolute-pose
+    differential IK, including the lamp's coupled screw motion.
     """
 
     cfg: "CuroboPlannedDifferentialInverseKinematicsActionCfg"
@@ -25,16 +24,18 @@ class CuroboPlannedDifferentialInverseKinematicsAction(DifferentialInverseKinema
         self._command_term = env.command_manager.get_term(cfg.command_name)
 
     def apply_actions(self):
-        super().apply_actions()
         active, joint_targets = self._command_term.get_curobo_joint_targets()
+        all_planned = bool(torch.all(active))
+        if not all_planned:
+            super().apply_actions()
         if not torch.any(active):
             return
-        # Match Isaac Lab's own DifferentialInverseKinematicsAction call
-        # shape.  The legacy articulation backend used by this workspace has
-        # a faulty CUDA path for the partial-environment overload.
-        self._asset.set_joint_position_target(
-            joint_targets, joint_ids=self._joint_ids
-        )
+        # Preserve the offset-aware IK targets for unplanned environments.
+        targets = joint_targets
+        if not all_planned:
+            ik_targets = self._asset.data.joint_pos_target.torch[:, self._joint_ids]
+            targets = torch.where(active[:, None], joint_targets, ik_targets)
+        self._asset.set_joint_position_target_index(target=targets, joint_ids=self._joint_ids)
 
 
 @configclass

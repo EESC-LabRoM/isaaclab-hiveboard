@@ -24,5 +24,5 @@ class SpotLampActionCfg:
         asset_name="robot",
         joint_names=["arm_f1x"],
         open_command_expr={"arm_f1x": -1.3},
-        close_command_expr={"arm_f1x": -0.6},
+        close_command_expr={"arm_f1x": -0.3},
     )

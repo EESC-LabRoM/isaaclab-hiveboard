@@ -257,6 +257,20 @@ def concat_segment_tcp(segments: list[Segment], dt: float) -> tuple[torch.Tensor
     return torch.cat(chunks_pos, dim=0), torch.cat(chunks_quat, dim=0), ranges
 
 
+def _retarget_from_current_state(retargeter, targets, current) -> torch.Tensor:
+    """Seed the installed cuRobo frame solver with the robot's current joints."""
+    retargeter.reset()
+    retargeter._prev_solution = current.position.clone()
+    retargeter._prev_velocity = current.velocity.clone()
+    return torch.stack(
+        [
+            retargeter.solve_frame(targets.get_frame(index)).joint_state.reorder(current.joint_names).position
+            for index in range(targets.num_frames)
+        ],
+        dim=1,
+    )
+
+
 def _retarget_tcp_sequence(term, tcp_pos_b: torch.Tensor, tcp_quat_b: torch.Tensor, planner: dict) -> torch.Tensor:
     """One MotionRetargeter pass over a flange path. Returns (T, dof) arm joints."""
     from isaaclab_hiveboard.assets import ASSET_DIR
@@ -341,20 +355,7 @@ def _retarget_tcp_sequence(term, tcp_pos_b: torch.Tensor, tcp_quat_b: torch.Tens
                 position=flange_pos_c[:, None, None, None, :].clone(),
                 quaternion=_xyzw_to_wxyz(flange_quat_c[:, None, None, None, :].clone()),
             )
-            if hasattr(retargeter, "_set_initial_joint_state"):
-                result = retargeter.solve_sequence(targets, initial_joint_state=current)
-                joints = result.joint_state.reorder(joint_names).position
-            else:
-                retargeter.reset()
-                retargeter._prev_solution = current.position.clone()
-                retargeter._prev_velocity = current.velocity.clone()
-                joints = torch.stack(
-                    [
-                        retargeter.solve_frame(targets.get_frame(index)).joint_state.reorder(joint_names).position
-                        for index in range(targets.num_frames)
-                    ],
-                    dim=1,
-                )
+            joints = _retarget_from_current_state(retargeter, targets, current)
         if joints.ndim == 3:
             joints = joints[0]
         print(
@@ -383,7 +384,7 @@ def format_infeasible_rotation_message(err: BaseException, handler=None) -> str:
 
 
 def format_editor_plan_failure(err: BaseException) -> str:
-    """Markdown status for a failed Plan-with-cuRobo click."""
+    """Markdown status for a failed automatic cuRobo plan."""
     text = str(err).strip()
     first = text.splitlines()[0] if text else "unknown error"
     if "infeasible" in text.lower():
@@ -401,18 +402,10 @@ def plan_curobo_segments(term, segments: list[Segment], ik: "PreviewIK") -> int:
     from isaaclab_hiveboard.utils.command_setup import planner_settings
 
     ik.reset()
-    try:
-        planner = planner_settings([segment.cfg for segment in segments] + list(term.cfg.commands))
-    except ValueError:
-        print("[EDITOR] no cuRobo planner settings; keeping DLS preview", flush=True)
-        return 0
+    planner = planner_settings([segment.cfg for segment in segments] + list(term.cfg.commands))
     dt = float(term._env.step_dt)
-    try:
-        tcp_pos, tcp_quat, ranges = concat_segment_tcp(segments, dt)
-        joints = _retarget_tcp_sequence(term, tcp_pos, tcp_quat, planner)
-    except Exception as err:
-        print(f"[EDITOR] whole-sequence retarget failed ({err}); falling back per command", flush=True)
-        return _plan_curobo_per_segment(term, segments, ik)
+    tcp_pos, tcp_quat, ranges = concat_segment_tcp(segments, dt)
+    joints = _retarget_tcp_sequence(term, tcp_pos, tcp_quat, planner)
     names = list(planner["robot_joint_names"])
     planned = 0
     for segment, (start, end) in zip(segments, ranges):
@@ -423,12 +416,14 @@ def plan_curobo_segments(term, segments: list[Segment], ik: "PreviewIK") -> int:
             "tcp_quat_b": tcp_quat[start:end].detach(),
         }
         planned += 1
-    _plan_curobo_rotates_like_play(term, segments, ik)
+    _plan_curobo_segments_like_play(term, segments, ik)
     ik.reset()
     return planned
 
 
 def _write_segment_end(ik: "PreviewIK", segment: Segment) -> None:
+    from isaaclab_hiveboard.utils.command_setup import is_curobo_command
+
     if isinstance(segment.cfg, GripperCommand):
         ik.write(ik._gripper_q(tensor(ik.robot.data.joint_pos).clone(), segment.gripper_open))
         return
@@ -437,6 +432,8 @@ def _write_segment_end(ik: "PreviewIK", segment: Segment) -> None:
         q_arm, names = joints
         ik.apply_named_joints(names, q_arm, segment.gripper_open)
         return
+    if is_curobo_command(segment.cfg):
+        raise RuntimeError("cuRobo command has no planned joints for its endpoint")
     ik.solve(segment.end, segment.gripper_open)
 
 
@@ -470,65 +467,41 @@ def _plan_rotate_like_play(term, cfg, ik: "PreviewIK") -> None:
     ik.apply_named_joints(list(cfg.robot_joint_names), wp[-1], cfg.gripper_open)
 
 
-def _plan_curobo_rotates_like_play(term, segments: list[Segment], ik: "PreviewIK") -> None:
-    """Replace coarse rotate previews with play-density plans; raise if infeasible."""
+def _plan_goto_like_play(term, cfg, ik: "PreviewIK") -> None:
+    """Plan one cuRobo GoTo with the play.py handler. Raises if trajopt falls back."""
+    ids = torch.tensor([0], device=term.device, dtype=torch.long)
+    handler = _CuroboPlannedGoToFrameHandler(cfg, term)
+    handler.reset(ids)
+    handler._plan(ids)
+    if handler._fallback or handler._joint_waypoints is None:
+        cfg._preview_plan = None
+        raise RuntimeError(
+            f"cuRobo planning failed for GoTo -> {cfg.target_frame_name or cfg.target_position_env}; "
+            "play.py would fall back to direct servo for this segment."
+        )
+    wp = handler._joint_waypoints
+    if wp.ndim == 3:
+        wp = wp[0]
+    cfg._preview_plan = {
+        "joints": wp.detach(),
+        "joint_names": list(cfg.robot_joint_names),
+        "tcp_pos_b": handler._waypoint_pos_b[0].detach(),
+        "tcp_quat_b": handler._waypoint_quat_b[0].detach(),
+    }
+    ik.apply_named_joints(list(cfg.robot_joint_names), wp[-1], cfg.gripper_open)
+
+
+def _plan_curobo_segments_like_play(term, segments: list[Segment], ik: "PreviewIK") -> None:
+    """Replace coarse cuRobo previews with play-density plans; raise if infeasible."""
     ik.reset()
     for segment in segments:
         if isinstance(segment.cfg, CuroboPlannedRotateFrameCfg):
             _plan_rotate_like_play(term, segment.cfg, ik)
             continue
+        if isinstance(segment.cfg, CuroboPlannedGoToFrameCfg):
+            _plan_goto_like_play(term, segment.cfg, ik)
+            continue
         _write_segment_end(ik, segment)
-
-
-def _plan_curobo_per_segment(term, segments: list[Segment], ik: "PreviewIK") -> int:
-    """Fallback: plan each CuroboPlanned command with its production handler."""
-    from isaaclab_hiveboard.utils.command_setup import is_curobo_command
-
-    planned = 0
-    ik.reset()
-    ids = torch.tensor([0], device=term.device, dtype=torch.long)
-    for segment in segments:
-        cfg = segment.cfg
-        if isinstance(cfg, GripperCommand):
-            ik.write(ik._gripper_q(tensor(ik.robot.data.joint_pos).clone(), segment.gripper_open))
-            continue
-        if isinstance(cfg, CuroboPlannedRotateFrameCfg):
-            _plan_rotate_like_play(term, cfg, ik)
-            planned += 1
-            continue
-        if not is_curobo_command(cfg):
-            ik.solve(segment.end, segment.gripper_open)
-            continue
-        handler = _CuroboPlannedGoToFrameHandler(cfg, term)
-        try:
-            handler.reset(ids)
-            handler._plan(ids)
-        except Exception as err:
-            print(f"[EDITOR] cuRobo plan failed for {type(cfg).__name__}: {err}", flush=True)
-            cfg._preview_plan = None
-            ik.solve(segment.end, segment.gripper_open)
-            continue
-        if handler._fallback or handler._joint_waypoints is None:
-            print(f"[EDITOR] cuRobo fell back to servo for {type(cfg).__name__}", flush=True)
-            cfg._preview_plan = None
-            ik.solve(segment.end, segment.gripper_open)
-            continue
-        wp = handler._joint_waypoints
-        if wp.ndim == 3:
-            wp = wp[0]
-        cfg._preview_plan = {
-            "joints": wp.detach(),
-            "joint_names": list(cfg.robot_joint_names),
-            "tcp_pos_b": handler._waypoint_pos_b[0].detach(),
-            "tcp_quat_b": handler._waypoint_quat_b[0].detach(),
-        }
-        q = tensor(ik.robot.data.joint_pos).clone()
-        joint_ids, _ = ik.robot.find_joints(list(cfg.robot_joint_names), preserve_order=True)
-        q[:, joint_ids] = wp[-1].to(device=q.device, dtype=q.dtype)
-        ik.write(ik._gripper_q(q, segment.gripper_open))
-        planned += 1
-    ik.reset()
-    return planned
 
 
 def build_segments(term, commands, initial_pose) -> list[Segment]:

@@ -1,4 +1,4 @@
-from isaaclab.actuators import IdealPDActuatorCfg
+from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.utils.configclass import configclass
@@ -14,7 +14,7 @@ class FrankaLampSceneCfg(LampSceneCfg):
     robot: ArticulationCfg = FRANKA_FR3_HIGH_PD_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.0),
+            pos=(-0.30, 0.0, 0.0),
             rot=(0.0, 0.0, 0.0, 1.0),
             joint_pos={
                 "fr3_joint1": 0.0,
@@ -36,26 +36,27 @@ class FrankaLampSceneCfg(LampSceneCfg):
 
     def __post_init__(self):
         self.lamp.init_state.pos = FRANKA_WORKSPACE.object_pos
-        # Newton applies these drives as explicit torques. Armature keeps
-        # the stiff TCP controller stable at the shared 1 kHz physics rate.
+        # Integrate the stiff drives in MJWarp's implicit solver. Explicit
+        # PD at this task's 5 ms timestep saturates the arm torques and makes
+        # the fingers oscillate even under a constant open command.
         self.robot.actuators = {
-            "fr3_shoulder": IdealPDActuatorCfg(
+            "fr3_shoulder": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_joint[1-4]"],
-                effort_limit=87.0,
+                effort_limit_sim=87.0,
                 stiffness=400.0,
                 damping=80.0,
                 armature=0.1,
             ),
-            "fr3_forearm": IdealPDActuatorCfg(
+            "fr3_forearm": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_joint[5-7]"],
-                effort_limit=12.0,
+                effort_limit_sim=12.0,
                 stiffness=400.0,
                 damping=80.0,
                 armature=0.05,
             ),
-            "fr3_hand": IdealPDActuatorCfg(
+            "fr3_hand": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_finger_joint.*"],
-                effort_limit=20.0,
+                effort_limit_sim=20.0,
                 stiffness=200.0,
                 damping=20.0,
                 armature=0.01,

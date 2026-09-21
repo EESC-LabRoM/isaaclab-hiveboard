@@ -124,6 +124,14 @@ an environment-side 6 mm/revolution screw coupling. The default sequence uses
 sixteen quarter turns. Franka's public FR3 USD is downloaded on first use.
 Pass `--device cpu --visualizer none --max-steps 5` for a short headless check.
 
+Saved Franka setups can use `CuroboPlannedGoToFrameCfg` and
+`CuroboPlannedRotateFrameCfg` with `robot_joint_names` set to `fr3_joint1`
+through `fr3_joint7` (requires CUDA). The arm executes their planned joint
+waypoints to preserve cuRobo's elbow configuration. Plain `GoToFrameCfg` and
+`RotateFrameCfg` use differential IK; `ScrewFrameCfg` also uses differential
+IK to retain the lamp's rotation/translation coupling. Franka uses implicit
+joint drives to keep the arm and gripper stable at the lamp task's timestep.
+
 ### Website Spot valve playback
 
 `Isaac-HiveBoard-Spot-BenchValve-Play-v0` replays the HiveBoard website Spot
