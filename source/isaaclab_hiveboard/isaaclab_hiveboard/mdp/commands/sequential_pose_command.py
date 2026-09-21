@@ -2180,7 +2180,39 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
 
 @configclass
 class ScrewJointCouplingCfg:
-    """Environment-side equivalent of the lamp USD's screw ActionGraph."""
+    """Environment-side equivalent of the lamp USD's screw ActionGraph.
+
+    A solver-native alternative exists (Newton's ``add_constraint_mimic`` /
+    URDF ``<mimic>``, enforcing ``prismatic = coef0 + coef1 * revolute`` as a
+    real constraint instead of this per-step position target) but does not
+    currently work through this project's USD spawn path: Isaac Lab flattens
+    the composed stage before Newton's importer parses it, and that flatten
+    drops the ``apiSchemas`` list metadata (``NewtonJointAPI``/``NewtonMimicAPI``)
+    even though the underlying ``newton:mimic*`` attributes survive. Newton's
+    importer gates its whole mimic pass on ``prim.HasAPI("NewtonMimicAPI")``,
+    so the constraint silently never loads (``model.constraint_mimic_count``
+    stays 0) — confirmed by instrumenting
+    ``newton/_src/utils/import_usd.py`` directly. Installing the
+    ``newton-usd-schemas`` PyPI package does not fix it: it registers against
+    the venv's own ``pxr``, not whatever USD library Isaac Lab's stage
+    composition actually runs through here.
+
+    The viable path to a native constraint is bypassing USD entirely: add it
+    straight to the Newton ``ModelBuilder`` in Python via a
+    ``NewtonManager.register_callback(..., PhysicsEvent.MODEL_INIT)`` hook
+    (the same mechanism ``isaaclab_contrib``'s deformable objects use to
+    register cloth/soft-body meshes into the builder). The complication is
+    that by the time ``MODEL_INIT`` fires, ``NewtonManager.instantiate_
+    builder_from_stage`` has already replicated the single-env prototype
+    into the full multi-env builder (``add_builder`` per env), so the hook
+    would need to add one ``add_constraint_mimic`` call per environment —
+    resolving ``RevoluteJoint``/``PrismaticJoint`` indices and
+    ``builder.current_world`` per env — rather than the single call the
+    standalone lead-screw example (``newton/examples/basic/
+    example_basic_mimic_joint.py``) uses. Untested beyond confirming the
+    replication arithmetic in ``ModelBuilder.add_builder`` correctly offsets
+    ``constraint_mimic_*`` arrays; needs validation at ``num_envs > 1``.
+    """
 
     asset_name: str = MISSING  # type: ignore
     revolute_joint_name: str = "RevoluteJoint"
