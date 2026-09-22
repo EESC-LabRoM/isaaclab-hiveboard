@@ -10,7 +10,16 @@ expert, the rollout loop and the dataset utilities stay importable without
 parsing command-line arguments or launching a simulation.
 """
 
-from .dataset import DatasetStats, dataset_stats, merge_datasets, rotate_recorder_dataset
+from .dataset import (
+    DatasetStats,
+    action_stats,
+    dataset_stats,
+    load_action_norm,
+    merge_datasets,
+    rotate_recorder_dataset,
+    save_action_norm,
+    write_normalized_actions,
+)
 from .expert import ScriptedExpert
 from .policy import RobomimicPolicy
 from .rollout import RolloutResult, run_rollout
@@ -20,8 +29,12 @@ __all__ = [
     "RobomimicPolicy",
     "RolloutResult",
     "ScriptedExpert",
+    "action_stats",
     "dataset_stats",
+    "load_action_norm",
     "merge_datasets",
     "rotate_recorder_dataset",
     "run_rollout",
+    "save_action_norm",
+    "write_normalized_actions",
 ]

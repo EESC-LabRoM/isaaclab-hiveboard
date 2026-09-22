@@ -80,6 +80,8 @@ def train_bc(
     seed: int | None = None,
     output_dir: str = DEFAULT_RUN_DIR,
     device: str | None = None,
+    normalize_actions: bool = True,
+    action_norm: tuple[list[float], list[float]] | None = None,
 ) -> str:
     """Train a policy and return the path of its final checkpoint.
 
@@ -92,6 +94,11 @@ def train_bc(
         seed: Override the configured seed.
         output_dir: Root directory for run artifacts.
         device: Torch device. Defaults to robomimic's CUDA-if-available choice.
+        normalize_actions: Rescale actions per dimension into ``[-1, 1]`` before
+            training. robomimic's actor ends in a ``tanh`` and cannot represent
+            anything outside that range, so joint-position tasks need this.
+        action_norm: Reuse these ``(minimum, maximum)`` stats instead of deriving
+            them from ``dataset``, so successive DAgger rounds share one scale.
 
     Returns:
         Path to ``model_epoch_<last>.pth`` for the finished run.
@@ -136,6 +143,20 @@ def train_bc(
         config.experiment.name = _unique_experiment_name(output_root, config.experiment.name)
 
     experiment_dir = os.path.join(output_root, config.experiment.name)
+
+    stats = None
+    if normalize_actions:
+        from isaaclab_hiveboard.imitation.dataset import action_stats, write_normalized_actions
+
+        stats = action_norm or action_stats(dataset)
+        # Deliberately not inside experiment_dir: robomimic creates that itself
+        # and prompts on stdin if it already exists.
+        normalized = os.path.join(output_root, "_action_normalized", f"{config.experiment.name}.hdf5")
+        write_normalized_actions(dataset, normalized, stats)
+        with config.values_unlocked():
+            config.train.data = normalized
+        print(f"[INFO] Actions normalized per dimension into [-1, 1] -> {normalized}")
+
     config.lock()
 
     torch_device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda) if device is None else device
@@ -144,7 +165,14 @@ def train_bc(
 
     robomimic_train(config, device=torch_device)
 
-    return _latest_checkpoint(experiment_dir)
+    checkpoint = _latest_checkpoint(experiment_dir)
+    if stats is not None:
+        from isaaclab_hiveboard.imitation.dataset import save_action_norm
+
+        # Beside the checkpoint, where RobomimicPolicy looks for it. Written
+        # after training so the run directory exists.
+        save_action_norm(os.path.dirname(checkpoint), stats)
+    return checkpoint
 
 
 def _unique_experiment_name(output_root: str, name: str) -> str:

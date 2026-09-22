@@ -169,6 +169,123 @@ def merge_datasets(inputs: list[str], output: str, env_name: str | None = None) 
     return dataset_stats(output)
 
 
+#: Filename holding per-dimension action normalization stats for a training run.
+ACTION_NORM_FILENAME = "action_norm.json"
+
+
+def action_stats(path: str) -> tuple[list[float], list[float]]:
+    """Return per-dimension action minima and maxima across every demo.
+
+    Args:
+        path: Robomimic-layout dataset.
+
+    Returns:
+        ``(minimum, maximum)``, each with one entry per action dimension.
+
+    Raises:
+        ValueError: If the dataset holds no actions.
+    """
+    import numpy as np
+
+    minimum = None
+    maximum = None
+    with h5py.File(path, "r") as handle:
+        for name in handle["data"]:
+            if not name.startswith("demo_") or "actions" not in handle["data"][name]:
+                continue
+            actions = np.asarray(handle["data"][name]["actions"], dtype=np.float64)
+            demo_min, demo_max = actions.min(axis=0), actions.max(axis=0)
+            minimum = demo_min if minimum is None else np.minimum(minimum, demo_min)
+            maximum = demo_max if maximum is None else np.maximum(maximum, demo_max)
+
+    if minimum is None:
+        raise ValueError(f"{path} contains no actions to compute normalization stats from.")
+    return minimum.tolist(), maximum.tolist()
+
+
+def write_normalized_actions(src: str, dst: str, stats: tuple[list[float], list[float]] | None = None) -> str:
+    """Copy a dataset with its actions rescaled per dimension into ``[-1, 1]``.
+
+    robomimic's ``ActorNetwork`` ends in a ``tanh``, so it can only ever emit
+    actions inside ``[-1, 1]``. Joint-position tasks command raw radians well
+    outside that range, which shows up as a training loss that falls a little
+    and then sits on a plateau the network cannot cross. Rescaling makes the
+    targets representable; :class:`RobomimicPolicy` inverts it at inference
+    using the stats this writes alongside.
+
+    A dimension that never varies maps to 0.0 rather than dividing by zero.
+
+    Args:
+        src: Dataset to read.
+        dst: Path for the normalized copy. Overwritten if present.
+        stats: Optional ``(minimum, maximum)`` to reuse, so later DAgger rounds
+            stay on the scale the first round established. Computed from ``src``
+            when omitted.
+
+    Returns:
+        ``dst``.
+    """
+    import numpy as np
+
+    minimum, maximum = stats if stats is not None else action_stats(src)
+    lo = np.asarray(minimum, dtype=np.float64)
+    hi = np.asarray(maximum, dtype=np.float64)
+    span = hi - lo
+    degenerate = span < 1.0e-9
+
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    with h5py.File(src, "r") as source, h5py.File(dst, "w") as target:
+        for key, value in source.attrs.items():
+            target.attrs[key] = value
+        source.copy(source["data"], target, name="data")
+
+        for name in target["data"]:
+            if not name.startswith("demo_") or "actions" not in target["data"][name]:
+                continue
+            group = target["data"][name]
+            actions = np.asarray(group["actions"], dtype=np.float64)
+            scaled = np.where(degenerate, 0.0, 2.0 * (actions - lo) / np.where(degenerate, 1.0, span) - 1.0)
+            del group["actions"]
+            group.create_dataset("actions", data=scaled.astype(np.float32))
+
+        target["data"].attrs["action_min"] = lo
+        target["data"].attrs["action_max"] = hi
+
+    return dst
+
+
+def save_action_norm(directory: str, stats: tuple[list[float], list[float]]) -> str:
+    """Write action normalization stats next to a training run's checkpoints."""
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, ACTION_NORM_FILENAME)
+    with open(path, "w") as handle:
+        json.dump({"action_min": list(stats[0]), "action_max": list(stats[1])}, handle, indent=2)
+    return path
+
+
+def load_action_norm(checkpoint: str) -> tuple[list[float], list[float]] | None:
+    """Find the action normalization stats belonging to a checkpoint.
+
+    Looks beside the checkpoint and then one directory up, which is where
+    :func:`save_action_norm` puts them relative to robomimic's ``models/``
+    subdirectory.
+
+    Args:
+        checkpoint: Path to a robomimic ``.pth`` checkpoint.
+
+    Returns:
+        ``(minimum, maximum)``, or None when the run trained on raw actions.
+    """
+    ckpt_dir = os.path.dirname(os.path.abspath(checkpoint))
+    for candidate in (ckpt_dir, os.path.dirname(ckpt_dir)):
+        path = os.path.join(candidate, ACTION_NORM_FILENAME)
+        if os.path.exists(path):
+            with open(path) as handle:
+                payload = json.load(handle)
+            return payload["action_min"], payload["action_max"]
+    return None
+
+
 def rotate_recorder_dataset(env, dataset_dir: str, dataset_name: str) -> str:
     """Point a live recorder at a new dataset file and drop in-flight episodes.
 

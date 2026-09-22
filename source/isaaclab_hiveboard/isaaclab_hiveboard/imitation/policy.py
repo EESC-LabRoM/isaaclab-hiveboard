@@ -44,7 +44,27 @@ class RobomimicPolicy:
             stats = TensorUtils.to_float(TensorUtils.to_device(TensorUtils.to_tensor(stats), self._device))
         self._obs_normalization_stats = stats
 
+        # Training may have rescaled actions into [-1, 1] so the actor's tanh
+        # could represent them. Undo that here, so callers always receive
+        # actions in the environment's own units.
+        from .dataset import load_action_norm
+
+        action_norm = load_action_norm(checkpoint)
+        if action_norm is None:
+            self._action_lo = None
+            self._action_span = None
+        else:
+            lo = torch.tensor(action_norm[0], dtype=torch.float32, device=self._device)
+            hi = torch.tensor(action_norm[1], dtype=torch.float32, device=self._device)
+            self._action_lo = lo
+            self._action_span = hi - lo
+
         self.checkpoint = checkpoint
+
+    @property
+    def normalizes_actions(self) -> bool:
+        """Whether this checkpoint's actions are rescaled back to task units."""
+        return self._action_lo is not None
 
     @property
     def observation_keys(self) -> list[str]:
@@ -89,4 +109,8 @@ class RobomimicPolicy:
             batch = self._obs_utils.normalize_obs(batch, obs_normalization_stats=self._obs_normalization_stats)
 
         with torch.no_grad():
-            return self._policy.get_action(obs_dict=batch)
+            action = self._policy.get_action(obs_dict=batch)
+
+        if self._action_lo is not None:
+            action = self._action_lo + 0.5 * (action + 1.0) * self._action_span
+        return action

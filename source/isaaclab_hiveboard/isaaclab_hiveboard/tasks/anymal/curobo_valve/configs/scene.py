@@ -13,7 +13,7 @@ from isaaclab.actuators.actuator_pd_cfg import ImplicitActuatorCfg
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import CameraCfg, ContactSensorCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg, FrameTransformerCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
@@ -35,6 +35,7 @@ from isaaclab_hiveboard.assets.anymal.bench import (
     VALVE_POS,
     VALVE_QUAT_XYZW,
 )
+from isaaclab_hiveboard.tasks.scenes.lever_valve import LeverValveSceneCfg
 
 _VALVE_CONTACT_FILTER = ["{ENV_REGEX_NS}/Valve/.*"]
 
@@ -44,6 +45,9 @@ class AnymalBenchValveSceneCfg(InteractiveSceneCfg):
     """Fixed-base ANYmal, upright honeycomb, and ball valve at bench poses."""
 
     robot: ArticulationCfg = ANYMAL_ARM_NEWTON_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # Expose the same moving valve references as the other ball-valve tasks.
+    # The command editor discovers its Reference choices from frame sensors.
+    target_frame: FrameTransformerCfg = LeverValveSceneCfg().target_frame
     #
     # ground = AssetBaseCfg(
     #     prim_path="/World/Ground",

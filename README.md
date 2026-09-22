@@ -315,8 +315,17 @@ joint waypoints `[q_arm, gripper]` directly, while pose-IK tasks (the lamp) get
 
 ```bash
 uv run python scripts/imitation/train_bc.py \
+  --task Isaac-HiveBoard-Spot-BallValve-v0 \
   --dataset logs/imitation/datasets/expert_<stamp>.hdf5
 ```
+
+Actions are rescaled per dimension into `[-1, 1]` before training, and the
+stats are written to `action_norm.json` beside the checkpoint so
+`RobomimicPolicy` can invert them. This is not optional book-keeping:
+robomimic's actor ends in a `tanh` and physically cannot emit anything outside
+`[-1, 1]`, so a joint-position task commanding radians trains to a plateau
+instead of converging. On the ball valve the difference is a final L2 of
+2e-05 with normalization against 0.246 without.
 
 **3. DAgger.** Each round rolls the current policy out, asks the expert what it
 would have done at every state the policy actually visited, appends those
@@ -363,12 +372,51 @@ with `concatenate_terms = False` and register a
 `tasks/spot/lamp/configs/observations.py` and
 `tasks/spot/lamp/agents/robomimic/bc.json`.
 
-> **Task status:** the scripted expert must actually solve the task before any
-> of this produces data. `Isaac-HiveBoard-Spot-Lamp-v0` does not currently
-> succeed within its configured `episode_length_s = 10.0`: its sixteen-quarter-turn
-> sequence is still at command index 1 when the episode times out, so collection
-> writes an empty dataset. Validate a task with `scripts/play.py` (and
-> `scripts/imitation/eval_policy.py --expert`) before collecting on it.
+### Task status
+
+The scripted expert must actually solve a task before any of this produces
+data. Always check the ceiling first:
+
+```bash
+uv run python scripts/imitation/eval_policy.py --expert --task <task> --num_envs 1
+```
+
+**`Isaac-HiveBoard-Spot-BallValve-v0`** needed two task settings corrected
+before it could ever report success: `episode_length_s` 5.0 -> 25.0 (the
+-90 degree turn alone takes ~5.2 s at 0.3 rad/s, so episodes timed out
+mid-turn) and the success tolerance, which was `math.radians(0.010)` - 0.01
+degrees - against the ~0.9 degrees the expert actually achieves.
+
+With those fixed the expert scores 100% on the deterministic `-Play-v0`
+variant, but two *independent* reset settings still defeat it on the randomized
+task, each measured by toggling it alone:
+
+| Setting | Expert success |
+| --- | --- |
+| Deterministic reset, no randomization | 4/4 |
+| `valve_joint_parameters` enabled | 0/8 |
+| `valve_joint_parameters` disabled | 3/3 |
+| Full pose randomization, friction term disabled | 0/8 |
+
+`valve_joint_parameters` sets the valve's revolute joint friction to 0.01-0.10
+(`operation="abs"`), which resists the gripper across its whole sampled range.
+The `reset_valve_root` pose ranges (+-0.20 m x, +-0.30 m y and z, +-30 degrees
+roll/pitch, +-36 degrees yaw) put the valve outside what cuRobo plans to
+reliably; plans fail and the expert falls back to direct servoing.
+
+Both need retuning against the gripper's achievable torque and the arm's
+reachable workspace. Until then, collect with the friction term switched off:
+
+```bash
+uv run python scripts/imitation/collect_demos.py \
+  --task Isaac-HiveBoard-Spot-BallValve-v0 --num_envs 1 \
+  --disable_events valve_joint_parameters
+```
+
+**`Isaac-HiveBoard-Spot-Lamp-v0`** does not currently succeed at all. Its
+sixteen-quarter-turn sequence is still at command index 1 when the episode
+times out, and it fails even with a 150 s episode, so collection writes an
+empty dataset.
 
 ---
 

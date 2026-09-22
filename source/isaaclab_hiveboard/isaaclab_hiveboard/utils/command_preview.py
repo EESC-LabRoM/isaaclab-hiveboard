@@ -17,6 +17,7 @@ import torch
 
 import isaaclab.utils.math as math_utils
 
+from isaaclab_hiveboard.assets.anymal.anymal import ROBOTIQ_PARALLEL_JOINT_GEAR
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
     CuroboPlannedRotateFrameCfg,
@@ -690,6 +691,11 @@ class PreviewIK:
         q = q.clone()
         grip = self.gripper._open_command if gripper_open else self.gripper._close_command
         q[:, self.gripper._joint_ids] = grip
+        names = self.robot.joint_names
+        if all(name in names for name in ROBOTIQ_PARALLEL_JOINT_GEAR):
+            opening = q[:, names.index("finger_joint")].clone()
+            for name, ratio in ROBOTIQ_PARALLEL_JOINT_GEAR.items():
+                q[:, names.index(name)] = ratio * opening
         return q
 
     def _arm_seeds(self, gripper_open: bool) -> list[torch.Tensor]:

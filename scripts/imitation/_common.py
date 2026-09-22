@@ -30,6 +30,13 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Override the task's episode length in seconds. Raise it when the scripted sequence "
         "needs longer than the task default to finish.",
     )
+    parser.add_argument(
+        "--disable_events",
+        default=None,
+        help="Comma-separated event terms to switch off, e.g. 'valve_joint_parameters'. Use this "
+        "when a domain-randomization term defeats the scripted expert and would otherwise make "
+        "every episode a rejected demonstration.",
+    )
     add_launcher_args(parser)
 
 
@@ -80,7 +87,20 @@ def build_env_cfg(args: argparse.Namespace):
         env_cfg.sim.device = args.device
     if getattr(args, "episode_length_s", None) is not None:
         env_cfg.episode_length_s = args.episode_length_s
+    for term in _split_csv(getattr(args, "disable_events", None)):
+        if not hasattr(env_cfg.events, term):
+            available = sorted(name for name in vars(env_cfg.events) if not name.startswith("_"))
+            raise SystemExit(f"Task '{args.task}' has no event term '{term}'. Available: {available}")
+        setattr(env_cfg.events, term, None)
+        print(f"[INFO] Disabled event term: {term}")
     return env_cfg
+
+
+def _split_csv(value: str | None) -> list[str]:
+    """Split a comma-separated option into stripped, non-empty entries."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def attach_recorder(env_cfg, recorder_cfg, dataset_dir: str, dataset_name: str):

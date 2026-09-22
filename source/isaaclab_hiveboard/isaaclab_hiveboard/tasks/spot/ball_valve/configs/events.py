@@ -51,6 +51,13 @@ class ValveEventCfg:
             "distribution": "uniform",
         },
     )
+    # WARNING: this term currently makes the task unsolvable by the scripted
+    # cuRobo expert. Holding every other setting fixed and toggling only this
+    # one, the expert seats the valve in 3/3 episodes with it disabled and 0/8
+    # with it enabled - the sampled joint friction resists the gripper for the
+    # whole range, not just its upper end. Until the range is retuned against
+    # the gripper's achievable torque, demonstration collection has to disable
+    # it (see the imitation-learning section of the README).
     valve_joint_parameters = EventTerm(
         func=mdp.randomize_joint_parameters,
         mode="startup",
