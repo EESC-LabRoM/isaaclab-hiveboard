@@ -755,6 +755,24 @@ class GeometryTests(unittest.TestCase):
         for original, restored in zip(pose, result):
             torch.testing.assert_close(original, restored)
 
+    def test_robotiq_preview_moves_passive_fingers_with_motor(self):
+        names = [
+            "arm_joint", "right_inner_finger_pad_joint", "left_outer_finger_joint",
+            "finger_joint", "left_inner_finger_joint", "right_outer_knuckle_joint",
+            "right_outer_finger_joint", "right_inner_finger_joint", "left_inner_finger_pad_joint",
+        ]
+        ik = PreviewIK.__new__(PreviewIK)
+        ik.robot = NS(joint_names=names)
+        ik.gripper = NS(_joint_ids=[3], _open_command=torch.tensor([[0.0]]), _close_command=torch.tensor([[0.7]]))
+        initial = torch.full((2, len(names)), 0.2)
+        closed = ik._gripper_q(initial, False)
+        expected = torch.tensor([[0.2, 0.7, 0.0, 0.7, -0.7, 0.7, 0.0, -0.7, 0.7]]).repeat(2, 1)
+        torch.testing.assert_close(closed, expected)
+        opened = ik._gripper_q(closed, True)
+        torch.testing.assert_close(opened[:, 1:], torch.zeros_like(opened[:, 1:]))
+        torch.testing.assert_close(opened[:, 0], initial[:, 0])
+        torch.testing.assert_close(initial, torch.full_like(initial, 0.2))
+
     def test_ik_tracks_offset_on_rotating_flange_and_reports_final_residual(self):
         class RotatingWrist:
             is_fixed_base, num_base_dofs = True, 0

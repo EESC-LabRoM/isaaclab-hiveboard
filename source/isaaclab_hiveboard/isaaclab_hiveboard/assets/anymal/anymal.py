@@ -66,6 +66,17 @@ ROBOTIQ_JOINT_GEAR = {
     "left_inner_finger_joint": -1.0,
     "right_inner_finger_joint": -1.0,
 }
+# Complete unloaded parallel-jaw pose for previews, which do not run the
+# solver's four-bar constraints. The outer fingers stay aligned with the
+# knuckles; the inner fingers counter-rotate and their pad hinges follow q.
+ROBOTIQ_PARALLEL_JOINT_GEAR = {
+    **ROBOTIQ_JOINT_GEAR,
+    "right_outer_knuckle_joint": 1.0,
+    "left_outer_finger_joint": 0.0,
+    "right_outer_finger_joint": 0.0,
+    "left_inner_finger_pad_joint": 1.0,
+    "right_inner_finger_pad_joint": 1.0,
+}
 ROBOTIQ_OPEN_Q = 0.0
 # UR10e 2F-140 finger_joint upper limit is 0.7 rad (~40 deg).
 ROBOTIQ_CLOSE_Q = 0.7

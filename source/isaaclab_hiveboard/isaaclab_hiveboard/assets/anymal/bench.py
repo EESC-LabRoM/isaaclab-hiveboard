@@ -74,8 +74,8 @@ __all__ = [
     "NEWTON_GRIPPER_JOINT_NAMES",
 ]
 
-NEWTON_GRIPPER_JOINT_NAMES = ["finger_joint", "right_outer_knuckle_joint"]
-"""Mobile jaw joints in the baked Newton gripper (loops frozen)."""
+NEWTON_GRIPPER_JOINT_NAMES = ["finger_joint"]
+"""The motor joint; USD constraints drive the parallel finger linkage."""
 
 # Fixed-base standing height from the ANYmal ball-valve env (legs PD-held).
 ANYMAL_BASE_POS: tuple[float, float, float] = (0.0, 0.0, 0.6)
@@ -106,9 +106,7 @@ ANYMAL_BENCH_JOINT_POS: dict[str, float] = {
     **ROBOTIQ_INIT_JOINT_POS,
 }
 
-# Newton init: the baked gripper keeps only the two outer-knuckle swings
-# mobile (loops frozen), so list them explicitly instead of the full
-# Isaac Sim Robotiq mapping.
+# All eight tree joints start at the linkage's open configuration.
 ANYMAL_NEWTON_JOINT_POS: dict[str, float] = {
     ".*HAA": 0.0,
     ".*F_HFE": 0.4,
@@ -121,13 +119,12 @@ ANYMAL_NEWTON_JOINT_POS: dict[str, float] = {
     "dynaarm_forearm_rotation": ANYMAL_HOME_ARM[3],
     "dynaarm_wrist_flexion": ANYMAL_HOME_ARM[4],
     "dynaarm_wrist_rotation": ANYMAL_HOME_ARM[5],
-    "finger_joint": 0.0,
-    "right_outer_knuckle_joint": 0.0,
+    **ROBOTIQ_INIT_JOINT_POS,
 }
 
-# Newton binary jaw targets [rad] for (finger_joint, right_outer_knuckle).
-ANYMAL_NEWTON_GRIPPER_OPEN = (0.0, 0.0)
-ANYMAL_NEWTON_GRIPPER_CLOSE = (0.7, 0.7)
+# Newton binary motor targets [rad]. Followers are constrained in the USD.
+ANYMAL_NEWTON_GRIPPER_OPEN = (0.0,)
+ANYMAL_NEWTON_GRIPPER_CLOSE = (0.7,)
 
 ANYMAL_ARM_BENCH_CFG = ANYMAL_D_DYNAARM_ROBOTIQ_HIGH_PD_CFG.replace(
     prim_path="{ENV_REGEX_NS}/Robot",
@@ -229,6 +226,19 @@ ANYMAL_ARM_NEWTON_CFG = ArticulationCfg(
             velocity_limit=1.5,
             stiffness=80.0,
             damping=4.0,
+            armature=0.002,
+        ),
+        "gripper_linkage": IdealPDActuatorCfg(
+            joint_names_expr=[
+                "right_outer_knuckle_joint",
+                ".*_outer_finger_joint",
+                ".*_inner_finger_joint",
+                ".*_inner_finger_pad_joint",
+            ],
+            effort_limit=40.0,
+            stiffness=0.0,
+            damping=0.1,
+            armature=0.002,
         ),
     },
 )

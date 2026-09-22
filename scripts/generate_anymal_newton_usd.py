@@ -15,19 +15,21 @@ is the record of how those files are produced. Everything here is kitless
    from the local Nucleus cache when present).
 2. ``dynaarm``: author ``assets/anymal/usd/dynaarm.usd`` from the committed
    arm-only URDF (links, inertials, primitive collisions, revolute/fixed
-   joints, best-effort DAE visuals). Mirrors the urdf-usd-converter mapping
-   (joint limits in degrees, rpy XYZ composition).
+   joints, DAE visuals with the website's dark arm materials). Mirrors the
+   urdf-usd-converter mapping (joint limits in degrees, rpy XYZ composition).
 3. ``assembly``: author ``assets/anymal/usd/anymal_d_dynaarm_robotiq.usda``, an
    overlay that references the three assets, welds arm->base and palm->flange
    with fixed joints (same relative-pose math as the Isaac Sim spawn func in
    ``assets/anymal/anymal.py``), and strips nested articulation roots plus the
-   gripper's world-fixed joint.
+   gripper's world-fixed joint. Normalize the gripper's mesh collision APIs
+   so Newton imports the palm and fingertips as well as the outer fingers.
 4. ``verify``: open the baked stage with pxr and check joints / bodies /
    articulation roots.
 
 Usage::
 
     uv run python scripts/generate_anymal_newton_usd.py --verify-only
+    uv run python scripts/generate_anymal_newton_usd.py --verify-only --check-newton
     uv run python scripts/generate_anymal_newton_usd.py --skip-download
 """
 
@@ -76,12 +78,22 @@ SKIP_JOINTS = {
 DYNAARM_MOUNT_POS = (0.0, 0.0, 0.12)
 DYNAARM_MOUNT_ROT_XYZW = (0.0, 0.0, 1.0, 0.0)
 
-# Gripper revolute joints kept mobile for Newton; everything else in the
-# gripper is frozen at file pose. The 2F-140 is a closed 4-bar loop per side;
-# Newton/MJWarp goes unstable on the loop while PhysX tolerates it. Keeping
-# the two outer-knuckle swings gives a symmetric 2-DOF jaw (the Isaac Sim
-# mapping already drives this pair: finger_joint plus its mimic).
-MOBILE_GRIPPER_JOINTS = frozenset({"finger_joint", "right_outer_knuckle_joint"})
+# Match the website's MJCF: two point connections close the four-bar loops,
+# and these joint equalities keep the fingertips parallel while opening.
+GRIPPER_JOINT_RATIOS = {
+    "right_outer_knuckle_joint": 1.0,
+    "left_inner_finger_joint": -1.0,
+    "right_inner_finger_joint": -1.0,
+}
+GRIPPER_LOOP_JOINTS = ("left_inner_knuckle_joint", "right_inner_knuckle_joint")
+
+# Match dependencies/hiveboard-bench.github.io/tools/anymal_model.py:PALETTE.
+# Keep these local so asset generation does not require the website checkout.
+VISUAL_COLORS = {
+    "dynaarm_carbon_dark": (0.10, 0.09, 0.09),
+    "dynaarm_joint_metal": (0.17, 0.17, 0.18),
+    "robotiq_dark_metal": (0.09, 0.09, 0.10),
+}
 
 
 def _s3_url(key: str) -> str:
@@ -331,6 +343,26 @@ def _set_link_transform(prim, pos: tuple, quat_xyzw: tuple) -> None:
     topo.Set(Gf.Quatf(float(w), Gf.Vec3f(float(x), float(y), float(z))))
 
 
+def _visual_material(stage, root_path: str, name: str):
+    """Author a portable material for Newton and USD renderers."""
+    from pxr import Gf, Sdf, UsdShade
+
+    material = UsdShade.Material.Define(stage, f"{root_path}/Looks/{name}")
+    shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("Shader"))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*VISUAL_COLORS[name]))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.6)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    return material
+
+
+def _bind_visual_material(prim, material, name: str) -> None:
+    from pxr import UsdGeom, UsdShade
+
+    UsdGeom.Gprim(prim).CreateDisplayColorAttr().Set([VISUAL_COLORS[name]])
+    UsdShade.MaterialBindingAPI.Apply(prim).Bind(material, UsdShade.Tokens.strongerThanDescendants)
+
+
 def build_dynaarm_usd() -> Path:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, Vt
 
@@ -352,6 +384,11 @@ def build_dynaarm_usd() -> Path:
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     robot = stage.DefinePrim("/dynaarm", "Xform")
+    stage.SetDefaultPrim(robot)
+    materials = {
+        name: _visual_material(stage, "/dynaarm", name)
+        for name in ("dynaarm_carbon_dark", "dynaarm_joint_metal")
+    }
 
     def _mesh_from_dae(dae_path: Path) -> list[tuple[np.ndarray, np.ndarray]]:
         """Best-effort DAE triangles as (points, faces) in meters.
@@ -474,6 +511,8 @@ def build_dynaarm_usd() -> Path:
                     faces.astype(np.int32).ravel().tolist()
                 )
                 _set_link_transform(mprim, vis["pos"], vquat)
+                material_name = "dynaarm_joint_metal" if name == "dynaarm_wrist_2" else "dynaarm_carbon_dark"
+                _bind_visual_material(mprim, materials[material_name], material_name)
         for joint_name in children.get(name, []):
             joint = joints[joint_name]
             jquat = rpy_to_quat_xyzw(joint["rpy"])
@@ -649,20 +688,8 @@ def bake_assembly() -> Path:
     for prim in list(stage.Traverse()):
         if prim.IsValid() and prim.GetTypeName() == "PhysicsScene":
             stage.RemovePrim(prim.GetPath())
-    # De-instance gripper payload holders (mirrors UUC make_instanceable=False).
-    # Nucleus authors instanceable=true on the finger part holders, which hides
-    # their meshes from traversal and from the Newton viewer.
-    n_deinstanced = 0
-    for prim in stage.Traverse():
-        if (
-            prim.IsValid()
-            and prim.IsInstanceable()
-            and str(prim.GetPath()).startswith(f"{baked_path}/robotiq_2f_140")
-        ):
-            prim.SetInstanceable(False)
-            n_deinstanced += 1
-    print(f"[BAKE] de-instanced {n_deinstanced} gripper prims")
-    _freeze_gripper_loops(stage, grip_root)
+    _prepare_gripper_geometry(stage, grip_root)
+    _configure_gripper_linkage(stage, grip_root)
     # Anchor the trunk like Spot's UUC `root_joint`: weld the root link to the
     # asset top Xform (NOT to world) with identity frames. This moves with the
     # asset through IsaacLab placement/cloning, exactly like the Spot bench.
@@ -684,38 +711,83 @@ def bake_assembly() -> Path:
     return ASSEMBLY_USDA
 
 
-def _freeze_gripper_loops(stage, grip_root) -> None:
-    """Replace gripper loop revolutes with fixed joints at file pose.
+def _prepare_gripper_geometry(stage, grip_root) -> None:
+    """Preserve the source meshes while moving collision APIs onto geometry.
 
-    Copies each joint's bodies + local frames onto a PhysicsFixedJoint, then
-    deletes the revolute. Only :data:`MOBILE_GRIPPER_JOINTS` stay articulated.
+    The Nucleus asset puts CollisionAPI on Xforms. Newton skips those
+    subtrees during visual import, and USD physics cannot load an Xform as
+    a collider, so the palm and inner fingers disappear from the model.
+    De-instancing alone also exposes six stale nested copies of the outer
+    fingers/knuckles; exclude those to keep the source's eleven meshes.
+    """
+    from pxr import Usd, UsdGeom, UsdPhysics
+
+    mesh_collisions = {}
+    for prim in Usd.PrimRange(grip_root, Usd.TraverseInstanceProxies()):
+        if not prim.IsA(UsdGeom.Mesh):
+            continue
+        owner = prim
+        while owner and owner.GetPath().HasPrefix(grip_root.GetPath()):
+            if owner.HasAPI(UsdPhysics.CollisionAPI):
+                break
+            owner = owner.GetParent()
+        if not owner or not owner.GetPath().HasPrefix(grip_root.GetPath()):
+            raise RuntimeError(f"Gripper mesh has no collision owner: {prim.GetPath()}")
+        mesh_collisions[prim.GetPath()] = (
+            UsdPhysics.CollisionAPI(owner).GetCollisionEnabledAttr().Get(),
+            UsdPhysics.MeshCollisionAPI(owner).GetApproximationAttr().Get(),
+        )
+
+    # Repeat traversal after each layer of instances is opened: nested
+    # instance holders are not visible in ordinary traversal beforehand.
+    while instances := [p for p in Usd.PrimRange(grip_root) if p.IsInstanceable()]:
+        for prim in instances:
+            prim.SetInstanceable(False)
+
+    for prim in list(Usd.PrimRange(grip_root)):
+        if not prim.IsValid():
+            continue
+        if prim.IsA(UsdGeom.Mesh) and prim.GetPath() not in mesh_collisions:
+            prim.SetActive(False)
+        elif not prim.IsA(UsdGeom.Gprim):
+            for api in (UsdPhysics.CollisionAPI, UsdPhysics.MeshCollisionAPI):
+                if prim.HasAPI(api):
+                    prim.RemoveAPI(api)
+
+    name = "robotiq_dark_metal"
+    material = _visual_material(stage, str(grip_root.GetPath()), name)
+    for path, (enabled, approximation) in mesh_collisions.items():
+        prim = stage.GetPrimAtPath(path)
+        UsdPhysics.CollisionAPI.Apply(prim).CreateCollisionEnabledAttr().Set(enabled)
+        UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr().Set(approximation)
+        _bind_visual_material(prim, material, name)
+    print(f"[BAKE] prepared {len(mesh_collisions)} gripper meshes for Newton")
+
+
+def _configure_gripper_linkage(stage, grip_root) -> None:
+    """Keep all finger hinges mobile and reproduce the website's constraints.
+
+    A point connection closes each planar four-bar without the redundant
+    rotational constraints of a second hinge. Freezing these hinges makes
+    the fingertips rotate with the outer knuckles instead of staying parallel.
     """
     from pxr import Sdf, UsdPhysics
 
-    targets = [
-        p
-        for p in stage.Traverse()
-        if p.GetTypeName() == "PhysicsRevoluteJoint"
-        and str(p.GetPath()).startswith(grip_root.GetPath().pathString)
-        and p.GetName() not in MOBILE_GRIPPER_JOINTS
-    ]
-    for prim in targets:
-        joint = UsdPhysics.Joint(prim)
-        body0 = [t.pathString for t in joint.CreateBody0Rel().GetTargets()]
-        body1 = [t.pathString for t in joint.CreateBody1Rel().GetTargets()]
-        frames = {}
-        for attr in ("physics:localPos0", "physics:localRot0", "physics:localPos1", "physics:localRot1"):
-            owned = prim.GetAttribute(attr)
-            frames[attr] = owned.Get() if owned.HasValue() else None
-        path, parent = prim.GetPath(), prim.GetParent()
-        stage.RemovePrim(path)
-        frozen = UsdPhysics.FixedJoint.Define(stage, path).GetPrim()
-        frozen.CreateRelationship("physics:body0").SetTargets([Sdf.Path(b) for b in body0])
-        frozen.CreateRelationship("physics:body1").SetTargets([Sdf.Path(b) for b in body1])
-        for attr, value in frames.items():
-            if value is not None:
-                frozen.CreateAttribute(attr, prim.GetAttribute(attr).GetTypeName()).Set(value)
-        print(f"[BAKE] froze gripper joint {path.name}")
+    for name in GRIPPER_LOOP_JOINTS:
+        prim = grip_root.GetChild(name)
+        prim.AddAppliedSchema("MjcEqualityConnectAPI")
+        prim.CreateAttribute("mjc:solref", Sdf.ValueTypeNames.DoubleArray).Set([0.005, 1.0])
+    leader = grip_root.GetPath().AppendChild("finger_joint")
+    for name, ratio in GRIPPER_JOINT_RATIOS.items():
+        prim = grip_root.GetChild(name)
+        prim.AddAppliedSchema("MjcEqualityJointAPI")
+        prim.CreateRelationship("mjc:target").SetTargets([leader])
+        prim.CreateAttribute("mjc:coef1", Sdf.ValueTypeNames.Double).Set(ratio)
+        prim.CreateAttribute("mjc:solref", Sdf.ValueTypeNames.DoubleArray).Set([0.005, 1.0])
+    for prim in grip_root.GetChildren():
+        if prim.IsA(UsdPhysics.RevoluteJoint) and prim.GetName() not in GRIPPER_LOOP_JOINTS:
+            prim.CreateAttribute("newton:armature", Sdf.ValueTypeNames.Float).Set(0.002)
+    print("[BAKE] restored gripper linkage (2 loop connections, 3 joint couplings)")
 
 
 def report_tcp_offset() -> None:
@@ -748,9 +820,9 @@ def report_tcp_offset() -> None:
     print(f"[TCP] FLANGE_TO_TCP_QUAT_XYZW = ({', '.join(f'{v:.6f}' for v in tcp_q)})")
 
 
-def verify() -> list[str]:
+def verify(*, check_newton: bool = False) -> list[str]:
     """Open the baked stage and check the assembly. Empty list = ok."""
-    from pxr import Usd, UsdPhysics
+    from pxr import Usd, UsdGeom, UsdPhysics, UsdShade
 
     problems = []
     for path, label in ((DYNAARM_USD, "dynaarm"), (ASSEMBLY_USDA, "assembly")):
@@ -788,6 +860,83 @@ def verify() -> list[str]:
         problems.append(f"unexpected nested articulation root: {path}")
     if stage.GetPrimAtPath(f"{baked}/robotiq_2f_140/FixedJoint").IsValid():
         problems.append("gripper world FixedJoint not stripped")
+    grip_root = stage.GetPrimAtPath(f"{baked}/robotiq_2f_140")
+    grip_meshes = [p for p in Usd.PrimRange(grip_root, Usd.TraverseInstanceProxies()) if p.IsA(UsdGeom.Mesh)]
+    if len(grip_meshes) != 11:
+        problems.append(f"expected 11 gripper meshes, found {len(grip_meshes)}")
+    for prim in Usd.PrimRange(grip_root, Usd.TraverseInstanceProxies()):
+        if prim.HasAPI(UsdPhysics.CollisionAPI) and not prim.IsA(UsdGeom.Gprim):
+            problems.append(f"collision API on non-geometry hides gripper visuals: {prim.GetPath()}")
+    for prim in grip_meshes:
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            problems.append(f"gripper mesh missing collision API: {prim.GetPath()}")
+    for name in ("finger_joint", *GRIPPER_JOINT_RATIOS, *GRIPPER_LOOP_JOINTS):
+        if not grip_root.GetChild(name).IsA(UsdPhysics.RevoluteJoint):
+            problems.append(f"gripper linkage hinge missing or frozen: {name}")
+    for name in GRIPPER_LOOP_JOINTS:
+        schemas = grip_root.GetChild(name).GetMetadata("apiSchemas")
+        if not schemas or "MjcEqualityConnectAPI" not in schemas.GetAppliedItems():
+            problems.append(f"gripper loop connection missing: {name}")
+    for name, ratio in GRIPPER_JOINT_RATIOS.items():
+        prim = grip_root.GetChild(name)
+        schemas = prim.GetMetadata("apiSchemas")
+        if not schemas or "MjcEqualityJointAPI" not in schemas.GetAppliedItems():
+            problems.append(f"gripper joint coupling missing: {name}")
+        if prim.GetAttribute("mjc:coef1").Get() != ratio:
+            problems.append(f"incorrect gripper joint coupling ratio: {name}")
+    arm_root = stage.GetPrimAtPath(f"{baked}/dynaarm")
+    links, _ = parse_urdf(DYNAARM_URDF)
+    for name, link in links.items():
+        if link["visuals"]:
+            body = _find_named_prim(arm_root, name)
+            visuals = body.GetChild("visuals") if body else None
+            if not visuals or not any(p.IsA(UsdGeom.Mesh) for p in Usd.PrimRange(visuals)):
+                problems.append(f"arm link missing visual meshes: {name}")
+    arm_meshes = [p for p in Usd.PrimRange(arm_root) if p.IsA(UsdGeom.Mesh)]
+    for prim in arm_meshes + grip_meshes:
+        if not UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]:
+            problems.append(f"mesh missing visual material: {prim.GetPath()}")
+    if check_newton and not problems:
+        problems.extend(_verify_newton_visuals(stage, arm_meshes + grip_meshes))
+    return problems
+
+
+def _verify_newton_visuals(stage, meshes: list) -> list[str]:
+    """Check the imported shapes, including meshes beneath collision holders."""
+    import newton
+    from pxr import UsdPhysics
+
+    builder = newton.ModelBuilder()
+    builder.add_usd(stage, load_visual_shapes=True, skip_mesh_approximation=True)
+    shape_ids = {label: i for i, label in enumerate(builder.shape_label)}
+    problems = []
+    gripper_equalities = [label for label in builder.equality_constraint_label if "/robotiq_2f_140/" in label]
+    if len(gripper_equalities) != 5:
+        problems.append(f"expected 5 Newton gripper constraints, found {len(gripper_equalities)}")
+    for prim in meshes:
+        path = str(prim.GetPath())
+        shape_id = shape_ids.get(path)
+        if shape_id is None:
+            problems.append(f"Newton dropped mesh: {path}")
+            continue
+        if not builder.shape_flags[shape_id] & newton.ShapeFlags.VISIBLE:
+            problems.append(f"Newton mesh is invisible: {path}")
+        body = prim.GetParent()
+        while body and not body.HasAPI(UsdPhysics.RigidBodyAPI):
+            body = body.GetParent()
+        body_id = builder.shape_body[shape_id]
+        if body_id < 0 or builder.body_label[body_id] != str(body.GetPath()):
+            problems.append(f"Newton mesh attached to wrong body: {path}")
+        if "/robotiq_2f_140/" in path:
+            color = VISUAL_COLORS["robotiq_dark_metal"]
+            if not builder.shape_flags[shape_id] & newton.ShapeFlags.COLLIDE_SHAPES:
+                problems.append(f"Newton gripper mesh has no collision: {path}")
+        else:
+            name = "dynaarm_joint_metal" if body.GetName() == "dynaarm_wrist_2" else "dynaarm_carbon_dark"
+            color = VISUAL_COLORS[name]
+        if not np.allclose(builder.shape_color[shape_id], color):
+            problems.append(f"Newton mesh color differs from website palette: {path}")
+    print(f"[NEWTON] checked visibility, body ownership and colors for {len(meshes)} arm/gripper meshes")
     return problems
 
 
@@ -795,13 +944,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--verify-only", action="store_true", help="Do not write anything; check baked USD with pxr.")
     parser.add_argument("--skip-download", action="store_true", help="Reuse vendored nucleus files; skip S3 fetch.")
+    parser.add_argument("--check-newton", action="store_true", help="Also import into Newton and check visual shapes.")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.verify_only:
-        problems = verify()
+        problems = verify(check_newton=args.check_newton)
         if problems:
             print("[FAIL]")
             for problem in problems:
@@ -814,7 +964,7 @@ def main(argv: list[str] | None = None) -> int:
     build_dynaarm_usd()
     bake_assembly()
     report_tcp_offset()
-    problems = verify()
+    problems = verify(check_newton=args.check_newton)
     for problem in problems:
         print(f"[WARN] {problem}", file=sys.stderr)
     return 1 if problems else 0
