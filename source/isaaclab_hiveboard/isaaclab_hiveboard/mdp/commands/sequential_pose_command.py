@@ -437,13 +437,13 @@ class SequentialPoseCommand(CommandTerm):
         except Exception as err:  # Gripper holds have no Cartesian target
             print(f"[STALL] (no Cartesian target readout: {err})", flush=True)
         if isinstance(handler, _CuroboPlannedGoToFrameHandler):
-            if handler._fallback:
+            if handler._fallback[env_index]:
                 print("[STALL] curobo: plan failed, running fallback direct servo", flush=True)
-            elif handler._waypoint_pos_b is None:
+            elif not handler._planned[env_index]:
                 print("[STALL] curobo: waypoints not planned yet", flush=True)
             else:
                 wi = int(handler._waypoint_index[env_ids].item())
-                total = int(handler._waypoint_pos_b.shape[1])
+                total = int(handler._waypoint_count[env_ids].item())
                 print(f"[STALL] curobo: waypoint {wi}/{total}", flush=True)
         try:
             q = self._asset.data.joint_pos[env_index].detach().cpu().tolist()
@@ -540,7 +540,8 @@ class SequentialPoseCommand(CommandTerm):
                 )
             elif targets.shape[1] != handler._joint_target.shape[1]:
                 raise RuntimeError("All cuRobo command terms must command the same joint count.")
-            env_mask = self._current_command_idx == command_idx
+            # Unplanned and servo-fallback envs keep their last joints.
+            env_mask = (self._current_command_idx == command_idx) & handler.joint_target_mask()
             targets[env_mask] = handler._joint_target[env_mask]
             active |= env_mask
         return active, targets
@@ -926,28 +927,113 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
     def __init__(self, cfg: "CuroboPlannedGoToFrameCfg", command_term: SequentialPoseCommand):
         super().__init__(cfg, command_term)
         self.cfg: CuroboPlannedGoToFrameCfg
+        self._init_plan_state()
+
+    def _init_plan_state(self) -> None:
+        """Allocate the per-env plan bookkeeping.
+
+        Environments reset and finish segments independently, so every env
+        owns its plan. Waypoint buffers are ``(num_envs, capacity, ...)``,
+        grown to the longest plan so far; a shorter plan is padded with its
+        final waypoint and ``_waypoint_count`` marks where it really ends.
+        """
         self._waypoint_pos_b = None
         self._waypoint_quat_b = None
         self._joint_waypoints = None
         self._joint_target = None
         self._waypoint_index = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
-        # Scalar is sufficient: like the synchronized-env check below, all
-        # envs plan each segment together.
-        self._fallback = False
+        self._waypoint_count = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
+        self._planned = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
+        self._fallback = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
+
+    def _clear_plan_state(self, env_ids: torch.Tensor) -> None:
+        self._waypoint_index[env_ids] = 0
+        self._waypoint_count[env_ids] = 0
+        self._planned[env_ids] = False
+        self._fallback[env_ids] = False
+
+    def _reserve_plan_capacity(self, num_waypoints: int, num_joints: int, dtype: torch.dtype) -> None:
+        """Make the waypoint buffers hold at least ``num_waypoints`` per env."""
+        # Buffers may be written from reset (outside inference mode) and from
+        # compute (inside it); inference tensors would reject the former.
+        with torch.inference_mode(False):
+            if self._waypoint_pos_b is None:
+                self._waypoint_pos_b = torch.zeros(self._num_envs, num_waypoints, 3, device=self._device)
+                self._waypoint_quat_b = torch.zeros(self._num_envs, num_waypoints, 4, device=self._device)
+                self._waypoint_quat_b[..., 3] = 1.0
+                self._joint_waypoints = torch.zeros(
+                    self._num_envs, num_waypoints, num_joints, device=self._device, dtype=dtype
+                )
+                self._joint_target = torch.zeros(self._num_envs, num_joints, device=self._device, dtype=dtype)
+                return
+            pad = num_waypoints - self._waypoint_pos_b.shape[1]
+            if pad <= 0:
+                return
+            # Each row is already padded with its own final waypoint, so the
+            # last column is every env's hold pose.
+            self._waypoint_pos_b = torch.cat(
+                [self._waypoint_pos_b, self._waypoint_pos_b[:, -1:].expand(-1, pad, -1)], dim=1
+            )
+            self._waypoint_quat_b = torch.cat(
+                [self._waypoint_quat_b, self._waypoint_quat_b[:, -1:].expand(-1, pad, -1)], dim=1
+            )
+            self._joint_waypoints = torch.cat(
+                [self._joint_waypoints, self._joint_waypoints[:, -1:].expand(-1, pad, -1)], dim=1
+            )
+
+    def _store_plan(
+        self, env_ids: torch.Tensor, tcp_pos: torch.Tensor, tcp_quat: torch.Tensor, joints: torch.Tensor
+    ) -> None:
+        """Install one env's plan: ``(T, 3)`` TCP positions, ``(T, 4)`` quats, ``(T, J)`` joints."""
+        n = tcp_pos.shape[0]
+        self._reserve_plan_capacity(n, joints.shape[-1], joints.dtype)
+        self._waypoint_pos_b[env_ids, :n] = tcp_pos
+        self._waypoint_pos_b[env_ids, n:] = tcp_pos[-1]
+        self._waypoint_quat_b[env_ids, :n] = tcp_quat
+        self._waypoint_quat_b[env_ids, n:] = tcp_quat[-1]
+        self._joint_waypoints[env_ids, :n] = joints
+        self._joint_waypoints[env_ids, n:] = joints[-1]
+        self._waypoint_count[env_ids] = n
+        self._waypoint_index[env_ids] = 0
+        self._planned[env_ids] = True
+
+    def _follow_plan(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Advance planned envs one waypoint; return their TCP pose and set their joint targets."""
+        # CommandManager advances a completed handler and still invokes its
+        # update once in that same tick.  Use the final waypoint for that
+        # harmless trailing update while retaining the one-past-end completion
+        # sentinel in ``_waypoint_index``.
+        index = torch.minimum(self._waypoint_index[env_ids], self._waypoint_count[env_ids] - 1)
+        pos = self._waypoint_pos_b[env_ids, index]
+        quat = self._waypoint_quat_b[env_ids, index]
+        self._joint_target[env_ids] = self._joint_waypoints[env_ids, index]
+        # Keep one past the final waypoint as a completion sentinel.  Clamping
+        # at ``last`` would mark the handler done before ever commanding the
+        # final planned joint target.
+        self._waypoint_index[env_ids] = index + 1
+        return pos, quat
+
+    def joint_target_mask(self) -> torch.Tensor:
+        """Envs whose ``_joint_target`` holds a live cuRobo plan."""
+        return self._planned & ~self._fallback
 
     def reset(self, env_ids: torch.Tensor):
         super().reset(env_ids)
-        self._waypoint_pos_b = None
-        self._waypoint_quat_b = None
-        self._joint_waypoints = None
-        self._joint_target = None
-        self._waypoint_index[env_ids] = 0
-        self._fallback = False
-        if len(env_ids) != self._num_envs:
-            raise RuntimeError("CuroboPlannedGoToFrameCfg currently requires synchronized environments.")
+        self._clear_plan_state(env_ids)
 
     def _plan(self, env_ids: torch.Tensor) -> None:
-        """Build a bounded cuRobo plan and convert it to TCP pose waypoints."""
+        """Plan every env in ``env_ids``, one at a time.
+
+        The cached cuRobo solvers are built for a single problem (the
+        retargeter cannot take a larger batch at all), and envs enter a
+        segment at different ticks, so each env gets its own solve from its
+        own measured state.
+        """
+        for i in range(len(env_ids)):
+            self._plan_env(env_ids[i : i + 1])
+
+    def _plan_env(self, env_ids: torch.Tensor) -> None:
+        """Build a bounded cuRobo plan for one env and convert it to TCP pose waypoints."""
         from isaaclab_hiveboard.assets import ASSET_DIR
         from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
         from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
@@ -1017,7 +1103,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 ):
                     rep_jids, _ = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
                     rep_q = self._asset.data.joint_pos.torch[rep][:, rep_jids]
-                    self._publish_plan(ee_pos_b, ee_quat_b, rep_q.unsqueeze(0), origin="trivial")
+                    self._publish_plan(env_ids, ee_pos_b, ee_quat_b, rep_q.unsqueeze(0), origin="trivial")
                     return
                 joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
                 current = JointState.from_position(
@@ -1131,7 +1217,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     # seeded from the current EE pose at reset, and
                     # _joint_target stays None so the action term does not
                     # apply stale joint overrides.
-                    self._fallback = True
+                    self._fallback[env_ids] = True
                     return
                 trajectory = result.get_interpolated_plan().position
                 if trajectory.ndim == 4:
@@ -1155,7 +1241,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 )
                 solve_s = time.perf_counter() - solve_start
                 self._publish_plan(
-                    tcp_pos, tcp_quat, trajectory, origin="planned", build_s=build_s, solve_s=solve_s
+                    env_ids, tcp_pos, tcp_quat, trajectory, origin="planned", build_s=build_s, solve_s=solve_s
                 )
             except Exception as err:
                 # A throwing solver must not kill the episode (the original
@@ -1170,11 +1256,12 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     f"({type(err).__name__}: {err}); falling back to direct servo",
                     flush=True,
                 )
-                self._fallback = True
+                self._fallback[env_ids] = True
                 return
 
     def _publish_plan(
         self,
+        env_ids: torch.Tensor,
         tcp_pos: torch.Tensor,
         tcp_quat: torch.Tensor,
         trajectory: torch.Tensor,
@@ -1182,17 +1269,16 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         build_s: float = 0.0,
         solve_s: float = 0.0,
     ) -> None:
-        """Store waypoints/joints and emit plan diagnostics (shared by both planners)."""
+        """Store one env's waypoints/joints and emit plan diagnostics (shared by both planners).
+
+        ``trajectory`` is the solver's single-problem ``(1, T, J)`` joint plan.
+        """
+        env_index = int(env_ids[0].item())
         if getattr(self.cfg, "valve_done_threshold_rad", None) is not None:
-            self._validate_arc_radius(tcp_pos)
-        self._waypoint_pos_b = tcp_pos.unsqueeze(0)
-        self._waypoint_quat_b = tcp_quat.unsqueeze(0)
-        self._joint_waypoints = trajectory
-        self._joint_target = torch.zeros(
-            self._num_envs, trajectory.shape[-1], device=self._device, dtype=trajectory.dtype
-        )
+            self._validate_arc_radius(tcp_pos, env_index)
+        self._store_plan(env_ids, tcp_pos, tcp_quat, trajectory[0])
         print(
-            f"[INFO] cuRobo {origin} {tcp_pos.shape[0]} TCP waypoints for "
+            f"[INFO] cuRobo env={env_index} {origin} {tcp_pos.shape[0]} TCP waypoints for "
             f"{self.cfg.target_frame_name or self.cfg.target_position_env} "
             f"(build={build_s:.2f}s solve={solve_s:.2f}s)."
         )
@@ -1274,8 +1360,8 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         try:
             if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
                 raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
-            # Single shared plan like the trajopt path: the reference is one
-            # trajectory, executed synchronously by all envs.
+            # One env per call (see _plan): the reference is expressed in this
+            # env's origin and retargeted from this env's joints.
             rep = env_ids[0:1]
             ref_pos_w = self._command_term._env.scene.env_origins[rep] + ref_pos
             tcp_pos_b, tcp_quat_b = math_utils.subtract_frame_transforms(
@@ -1347,11 +1433,11 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     f"(max step={float(max_joint_step.item()):.3f} rad); falling back to direct servo",
                     flush=True,
                 )
-                self._fallback = True
+                self._fallback[env_ids] = True
                 return
             solve_s = time.perf_counter() - solve_start
             self._publish_plan(
-                tcp_pos_b, tcp_quat_b, joint_waypoints, origin="retargeted", build_s=build_s, solve_s=solve_s
+                env_ids, tcp_pos_b, tcp_quat_b, joint_waypoints, origin="retargeted", build_s=build_s, solve_s=solve_s
             )
         except Exception as err:
             try:
@@ -1359,9 +1445,9 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
             except ValueError:
                 seg = "?"
             print(f"[WARN] cuRobo reference retarget failed on seg {seg} ({err}); falling back", flush=True)
-            self._fallback = True
+            self._fallback[env_ids] = True
 
-    def _validate_arc_radius(self, tcp_pos_b: torch.Tensor, wander_tol_m: float = 0.01) -> None:
+    def _validate_arc_radius(self, tcp_pos_b: torch.Tensor, env_index: int, wander_tol_m: float = 0.01) -> None:
         """Check the planned TCP path against its own endpoint chord.
 
         A plan between two bead targets should not wander beyond what the
@@ -1390,13 +1476,13 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                     self._valve_pivot_name = candidate
                     break
         if self._valve_pivot_idx is None:
-            pivot_w = valve.data.root_pos_w.torch[0]
+            pivot_w = valve.data.root_pos_w.torch[env_index]
         else:
-            pivot_w = valve.data.body_pos_w.torch[0, self._valve_pivot_idx]
+            pivot_w = valve.data.body_pos_w.torch[env_index, self._valve_pivot_idx]
         pivot_name = self._valve_pivot_name
         n = tcp_pos_b.shape[0]
-        root_pos = self._asset.data.root_pos_w.torch[0:1].expand(n, -1)
-        root_quat = self._asset.data.root_quat_w.torch[0:1].expand(n, -1)
+        root_pos = self._asset.data.root_pos_w.torch[env_index : env_index + 1].expand(n, -1)
+        root_quat = self._asset.data.root_quat_w.torch[env_index : env_index + 1].expand(n, -1)
         identity = torch.zeros(n, 4, device=self._device)
         identity[:, 3] = 1.0
         tcp_w, _ = math_utils.combine_frame_transforms(root_pos, root_quat, tcp_pos_b, identity)
@@ -1428,46 +1514,40 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
             )
 
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
-        if self._fallback:
-            return super().update(env_mask)
         env_ids = torch.where(env_mask)[0]
         # CommandManager resets every sequence handler at episode reset. Plan
         # here instead, once this term actually becomes active after the arm
         # has reached the lower lever pose and closed the gripper.
-        if self._waypoint_pos_b is None:
-            self._plan(env_ids)
-            if self._fallback:
-                return super().update(env_mask)
-        # CommandManager advances a completed handler and still invokes its
-        # update once in that same tick.  Use the final waypoint for that
-        # harmless trailing update while retaining the one-past-end completion
-        # sentinel in ``_waypoint_index``.
-        last = self._waypoint_pos_b.shape[1] - 1
-        index = torch.clamp(self._waypoint_index[env_ids], max=last)
-        pos = self._waypoint_pos_b[env_ids, index]
-        quat = self._waypoint_quat_b[env_ids, index]
-        self._joint_target[env_ids] = self._joint_waypoints[env_ids, index]
-        # Keep one past the final waypoint as a completion sentinel.  Clamping
-        # at ``last`` would mark the handler done before ever commanding the
-        # final planned joint target.
-        self._waypoint_index[env_ids] = index + 1
-        return self._pack_command(self.cfg.gripper_open, pos, quat)
+        unplanned = env_ids[~self._planned[env_ids] & ~self._fallback[env_ids]]
+        if len(unplanned) > 0:
+            self._plan(unplanned)
+        command = torch.zeros(len(env_ids), 8, device=self._device)
+        fallback = self._fallback[env_ids]
+        if torch.any(fallback):
+            fallback_mask = torch.zeros_like(env_mask)
+            fallback_mask[env_ids[fallback]] = True
+            command[fallback] = super().update(fallback_mask)
+        if not torch.all(fallback):
+            pos, quat = self._follow_plan(env_ids[~fallback])
+            command[~fallback] = self._pack_command(self.cfg.gripper_open, pos, quat)
+        return command
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        if self._fallback:
-            return super().is_done(env_ids)
-        if self._waypoint_pos_b is None:
-            return torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
-        exhausted = self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
-        if not torch.any(exhausted):
-            return exhausted
-        # Waypoint exhaustion alone is not convergence: the final waypoint is
-        # first commanded the same tick the index exhausts, so advancing here
-        # would chain the next plan from lagged joints. update() keeps
-        # publishing the final waypoint/joints, so waiting for the parent
-        # distance/orientation check lets the arm settle onto the plan end.
-        # A plan that ends out of tolerance trips the stall watchdog instead.
-        return exhausted & super().is_done(env_ids)
+        done = torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
+        fallback = self._fallback[env_ids]
+        if torch.any(fallback):
+            done[fallback] = super().is_done(env_ids[fallback])
+        planned = self._planned[env_ids] & ~fallback
+        exhausted = planned & (self._waypoint_index[env_ids] >= self._waypoint_count[env_ids])
+        if torch.any(exhausted):
+            # Waypoint exhaustion alone is not convergence: the final waypoint is
+            # first commanded the same tick the index exhausts, so advancing here
+            # would chain the next plan from lagged joints. update() keeps
+            # publishing the final waypoint/joints, so waiting for the parent
+            # distance/orientation check lets the arm settle onto the plan end.
+            # A plan that ends out of tolerance trips the stall watchdog instead.
+            done[exhausted] = super().is_done(env_ids[exhausted])
+        return done
 
 
 class _GripperHandler(_BaseCmdHandler):
@@ -1724,23 +1804,13 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
         # Initialize the mechanical rotation geometry, then the cuRobo state.
         _RotateFrameHandler.__init__(self, cfg, command_term)
         self.cfg: CuroboPlannedRotateFrameCfg
-        self._waypoint_pos_b = None
-        self._waypoint_quat_b = None
-        self._joint_waypoints = None
-        self._joint_target = None
-        self._waypoint_index = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
-        self._fallback = False
+        self._init_plan_state()
+        # Env whose arc the infeasible-arc dump describes.
+        self._diag_env = 0
 
     def reset(self, env_ids: torch.Tensor):
         _RotateFrameHandler.reset(self, env_ids)
-        self._waypoint_pos_b = None
-        self._waypoint_quat_b = None
-        self._joint_waypoints = None
-        self._joint_target = None
-        self._waypoint_index[env_ids] = 0
-        self._fallback = False
-        if len(env_ids) != self._num_envs:
-            raise RuntimeError("CuroboPlannedRotateFrameCfg currently requires synchronized environments.")
+        self._clear_plan_state(env_ids)
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
         return _RotateFrameHandler.get_target_in_base_frame(self, env_ids)
@@ -1748,29 +1818,22 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
     def update(self, env_mask: torch.Tensor) -> torch.Tensor:
         """Follow the retargeted joint arc. Do not fall back to Cartesian servo."""
         env_ids = torch.where(env_mask)[0]
-        if self._waypoint_pos_b is None:
-            self._plan(env_ids)
-        last = self._waypoint_pos_b.shape[1] - 1
-        index = torch.clamp(self._waypoint_index[env_ids], max=last)
-        pos = self._waypoint_pos_b[env_ids, index]
-        quat = self._waypoint_quat_b[env_ids, index]
-        self._joint_target[env_ids] = self._joint_waypoints[env_ids, index]
-        self._waypoint_index[env_ids] = index + 1
+        unplanned = env_ids[~self._planned[env_ids]]
+        if len(unplanned) > 0:
+            self._plan(unplanned)
+        pos, quat = self._follow_plan(env_ids)
         return self._pack_command(self.cfg.gripper_open, pos, quat)
 
     def is_done(self, env_ids: torch.Tensor) -> torch.Tensor:
-        if self._waypoint_pos_b is None:
-            return torch.zeros(len(env_ids), device=self._device, dtype=torch.bool)
-        return self._waypoint_index[env_ids] >= self._waypoint_pos_b.shape[1]
+        return self._planned[env_ids] & (self._waypoint_index[env_ids] >= self._waypoint_count[env_ids])
 
-    def _plan(self, env_ids: torch.Tensor) -> None:
-        """Retarget the complete Cartesian arc from the current grasp state.
+    def _plan_env(self, env_ids: torch.Tensor) -> None:
+        """Retarget one env's complete Cartesian arc from its current grasp state.
 
         An infeasible arc raises. There is no Cartesian-servo fallback: that
         path used ``_GoToFrameHandler`` state this handler never initializes.
         """
-        if len(env_ids) != 1:
-            raise RuntimeError("CuroboPlannedRotateFrameCfg currently supports one environment.")
+        self._diag_env = int(env_ids[0].item())
 
         from isaaclab_hiveboard.assets import ASSET_DIR
         from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
@@ -1918,16 +1981,10 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                 angles=angles,
             )
 
-            self._waypoint_pos_b = tcp_pos_b.unsqueeze(0)
-            self._waypoint_quat_b = tcp_quat_b.unsqueeze(0)
-            self._joint_waypoints = joint_waypoints
-            self._joint_target = torch.zeros(
-                self._num_envs,
-                len(joint_names),
-                device=self._device,
-                dtype=self._joint_waypoints.dtype,
+            self._store_plan(env_ids, tcp_pos_b, tcp_quat_b, joint_waypoints[0])
+            print(
+                f"[INFO] cuRobo env={self._diag_env} retargeted {num_waypoints} ordered waypoints for the valve arc."
             )
-            print(f"[INFO] cuRobo retargeted {num_waypoints} ordered waypoints for the valve arc.")
 
     def _raise_if_joint_discontinuity(
         self,
@@ -2004,7 +2061,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
         if limit_line:
             lines.append(limit_line)
 
-        final_angle = float(self.angle_rad_tensor[0].item()) if hasattr(self, "angle_rad_tensor") else float("nan")
+        final_angle = float(self.angle_rad_tensor[self._diag_env].item()) if hasattr(self, "angle_rad_tensor") else float("nan")
         lines.extend(
             [
                 "--- requested arc ---",
@@ -2016,12 +2073,12 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             ]
         )
         if hasattr(self, "rot_axis_b"):
-            radius = float(torch.linalg.vector_norm(self.radius_vec[0]).item())
-            axial = float(torch.linalg.vector_norm(self.axial_vec[0]).item())
+            radius = float(torch.linalg.vector_norm(self.radius_vec[self._diag_env]).item())
+            axial = float(torch.linalg.vector_norm(self.axial_vec[self._diag_env]).item())
             step_angle = float(self.cfg.angular_velocity) * self._dt
             lines.extend(
                 [
-                    f"  hub_b={_vec_str(self.axis_pos_b[0])}  axis_b={_vec_str(self.rot_axis_b[0])}",
+                    f"  hub_b={_vec_str(self.axis_pos_b[self._diag_env])}  axis_b={_vec_str(self.rot_axis_b[self._diag_env])}",
                     f"  radius={radius:.4f} m  axial_offset={axial:.4f} m",
                     (
                         f"  n_waypoints={joint_waypoints.shape[1]}  dt={self._dt:.4f} s  "
@@ -2158,7 +2215,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             q = self._asset.data.joint_pos
             if hasattr(q, "torch"):
                 q = q.torch
-            return q[0, joint_ids]
+            return q[self._diag_env, joint_ids]
         except (AttributeError, TypeError, IndexError, ValueError):
             return None
 
@@ -2168,7 +2225,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             limits = self._asset.data.joint_pos_limits
             if hasattr(limits, "torch"):
                 limits = limits.torch
-            lo_hi = limits[0, joint_ids]
+            lo_hi = limits[self._diag_env, joint_ids]
         except (AttributeError, TypeError, IndexError, ValueError):
             return None
         bits = []

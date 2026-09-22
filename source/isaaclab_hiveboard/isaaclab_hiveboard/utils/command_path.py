@@ -27,12 +27,15 @@ def active_command_path(handler, command: torch.Tensor, env_index: int = 0, samp
     signed arc captured when that command started. Never reset or advance a
     handler here: drawing must not affect execution or start a planner.
     """
-    if isinstance(handler, _CuroboPlannedGoToFrameHandler) and not handler._fallback:
-        positions = handler._waypoint_pos_b
-        if positions is not None and positions.shape[1] > 0:
-            count = positions.shape[1]
+    if isinstance(handler, _CuroboPlannedGoToFrameHandler) and not handler._fallback[env_index]:
+        count = int(handler._waypoint_count[env_index])
+        if handler._planned[env_index] and count > 0:
             index = min(int(handler._waypoint_index[env_index]), count - 1)
-            return positions[env_index], handler._waypoint_quat_b[env_index], index
+            return (
+                handler._waypoint_pos_b[env_index, :count],
+                handler._waypoint_quat_b[env_index, :count],
+                index,
+            )
 
     fraction = torch.linspace(0.0, 1.0, samples, device=command.device, dtype=command.dtype)
     if isinstance(handler, _RotateFrameHandler):
