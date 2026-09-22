@@ -36,7 +36,7 @@ import gymnasium as gym
 import isaaclab_hiveboard  # noqa: F401
 import numpy as np
 import torch
-from isaaclab_hiveboard.assets import ANYMAL_EE, ASSET_DIR, FRANKA_EE, SPOT_EE
+from isaaclab_hiveboard.assets import ASSET_DIR, DYNAARM_EE_LINK, FRANKA_EE, SPOT_EE
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
     GoToFrameCfg,
@@ -69,6 +69,7 @@ from isaaclab_hiveboard.utils.command_setup import (
     is_curobo_command,
     load_setup,
     make_setup,
+    planner_settings,
     save_setup,
     validate_command,
     validate_setup,
@@ -85,10 +86,13 @@ COMMAND_LABELS = {
     "CuroboPlannedRotateFrame": "cuRobo Rotate",
     "ScrewFrame": "Screw",
 }
+# Keyed by the body each cuRobo model plans for, which is the body a task's pose
+# command drives. On ANYmal that is the DynaArm flange, not the gripper palm
+# ANYMAL_EE names.
 BUNDLED_ROBOT_MODELS = {
     FRANKA_EE.body_name: "franka/cumotion/fr3.yaml",
     SPOT_EE.body_name: "spot/cumotion/spot_arm.yaml",
-    ANYMAL_EE.body_name: "anymal/cumotion/dynaarm.yaml",
+    DYNAARM_EE_LINK: "anymal/cumotion/dynaarm.yaml",
 }
 ENVIRONMENT_REFERENCE = "Environment (fixed)"
 INSERT_KINDS = ("Curobo GoTo", "Curobo Rotate", "Open gripper", "Close gripper")
@@ -125,6 +129,18 @@ def _bundled_planner_settings(body_name: str | None) -> dict:
     }
 
 
+def _planner_settings(commands, body_name=None) -> dict:
+    """Planner settings of the sequence's own cuRobo commands, else the bundled model.
+
+    A task may plan for a body the bundled table does not name, and its authored
+    commands already carry the model that planned them, so they come first.
+    """
+    try:
+        return planner_settings(commands)
+    except ValueError:
+        return _bundled_planner_settings(body_name)
+
+
 def _needs_curobo(cfg) -> bool:
     """True for a plain GoTo / Rotate the editor has to upgrade before previewing."""
     return (
@@ -140,7 +156,7 @@ def _curobo_commands(commands, *, body_name=None):
     # Resolving the settings loads a robot model, so skip it for ready sequences.
     if not any(_needs_curobo(cfg) for cfg in commands):
         return commands
-    planner = _bundled_planner_settings(body_name)
+    planner = _planner_settings(commands, body_name)
     return [as_curobo_command(cfg, planner) if _needs_curobo(cfg) else cfg for cfg in commands]
 
 
@@ -528,17 +544,20 @@ class CommandEditor:
         target = self.selected + delta
         # The ends of the sequence have no neighbour to swap with.
         if 0 <= target < len(self.commands):
+            swapped = (self.commands[self.selected], self.commands[target])
             self.commands[self.selected], self.commands[target] = self.commands[target], self.commands[self.selected]
             self.selected = target
-            self.changed()
+            # Reordering motions re-chains every plan from the swap onward.
+            self.changed(replan=not all(isinstance(cmd, GripperCommand) for cmd in swapped))
 
     def delete(self) -> None:
         # An empty sequence has no geometry to preview.
         if len(self.commands) == 1:
             raise ValueError("Keep at least one command")
-        self.commands.pop(self.selected)
+        removed = self.commands.pop(self.selected)
         self.selected = min(self.selected, len(self.commands) - 1)
-        self.changed()
+        # A gripper hold keeps the TCP still, so the plans around it still chain.
+        self.changed(replan=not isinstance(removed, GripperCommand))
 
     def insert(self) -> None:
         """Add the command chosen in the ``New command`` dropdown after the selected one."""
@@ -552,7 +571,7 @@ class CommandEditor:
         if "gripper" in kind:
             return GripperCommand(open_gripper=kind.startswith("Open"), duration_s=0.3)
         cfg = self._new_rotate() if "Rotate" in kind else self._new_goto()
-        return as_curobo_command(cfg, _bundled_planner_settings(self.term.cfg.body_name))
+        return as_curobo_command(cfg, _planner_settings(self.commands, self.term.cfg.body_name))
 
     def _new_rotate(self) -> RotateFrameCfg:
         """Rotation around the first reference frame the scene offers."""
