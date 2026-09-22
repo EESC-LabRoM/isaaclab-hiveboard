@@ -66,6 +66,44 @@ class PreStepRgbCameraRecorder(RecorderTerm):
         return f"images/{self.cfg.key}", camera.data.output["rgb"]
 
 
+class PreStepObservationGroupRecorder(RecorderTerm):
+    """Record every term of an unconcatenated observation group separately.
+
+    Returning the group's dict makes :class:`EpisodeData` recurse into
+    ``<key>/<term_name>``, which is the layout robomimic reads back as
+    ``data/demo_*/obs/<term_name>``.
+    """
+
+    def record_pre_step(self):
+        group = self._env.obs_buf[self.cfg.group_name]
+        if not isinstance(group, dict):
+            raise RuntimeError(
+                f"Observation group '{self.cfg.group_name}' is concatenated into a single tensor. "
+                "robomimic needs one dataset per observation key: set concatenate_terms=False on the group."
+            )
+        return self.cfg.key, group
+
+
+class PreStepExpertActionsRecorder(RecorderTerm):
+    """Record the expert's label for the current state instead of the applied action.
+
+    This is what makes DAgger rounds possible. The learner drives the
+    environment, but the dataset must store what the expert *would* have done
+    at each visited state, so the collection loop stashes that label on the
+    environment as ``expert_actions`` before calling ``step``.
+    """
+
+    def record_pre_step(self):
+        expert_actions = getattr(self._env, "expert_actions", None)
+        if expert_actions is None:
+            raise RuntimeError(
+                "No expert label found on the environment. The rollout loop must set "
+                "`env.unwrapped.expert_actions` to the expert's action for the current "
+                "observation before every `env.step()` call."
+            )
+        return "actions", expert_actions
+
+
 @configclass
 class PreStepActionsRecorderCfg(RecorderTermCfg):
     class_type: type[RecorderTerm] = PreStepActionsRecorder
@@ -101,6 +139,54 @@ class PreStepRgbCameraRecorderCfg(RecorderTermCfg):
     class_type: type[RecorderTerm] = PreStepRgbCameraRecorder
     sensor_name: str = "wrist_cam"
     key: str = "wrist"
+
+
+@configclass
+class PreStepObservationGroupRecorderCfg(RecorderTermCfg):
+    class_type: type[RecorderTerm] = PreStepObservationGroupRecorder
+    group_name: str = "bc"
+    key: str = "obs"
+
+
+@configclass
+class PreStepExpertActionsRecorderCfg(RecorderTermCfg):
+    class_type: type[RecorderTerm] = PreStepExpertActionsRecorder
+
+
+@configclass
+class RobomimicRecorderCfg(RecorderManagerBaseCfg):
+    """Export demonstrations in the layout robomimic's SequenceDataset expects.
+
+    Writes ``data/demo_<i>/obs/<key>`` and ``data/demo_<i>/actions``. Only the
+    applied action is recorded, so this config suits scripted-expert collection
+    where the expert is also the actor. Use
+    :class:`RobomimicDaggerRecorderCfg` for on-policy rounds.
+    """
+
+    record_obs = PreStepObservationGroupRecorderCfg(group_name="bc", key="obs")
+    record_actions = PreStepActionsRecorderCfg()
+
+    dataset_file_handler_class_type: type = HDF5DatasetFileHandler
+    dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
+    dataset_export_dir_path: str = "logs/imitation/datasets"
+    dataset_filename: str = "demos"
+    export_in_close: bool = True
+
+
+@configclass
+class RobomimicDaggerRecorderCfg(RobomimicRecorderCfg):
+    """Robomimic layout with expert relabelling for on-policy DAgger rounds.
+
+    ``record_actions`` is overridden so the stored action is the expert's label
+    for the visited state rather than the learner action that was applied.
+
+    Every episode is exported, successful or not. Filtering to successes would
+    discard exactly the data DAgger exists to gather: the off-distribution
+    states the learner drifts into and the expert's correction for them.
+    """
+
+    record_actions = PreStepExpertActionsRecorderCfg()
+    dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_ALL
 
 
 @configclass

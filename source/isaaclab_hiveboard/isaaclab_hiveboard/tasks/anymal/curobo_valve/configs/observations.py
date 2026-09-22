@@ -15,12 +15,20 @@ from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
 
 @configclass
 class AnymalCuroboObservationsCfg:
-    """Command + arm/valve state. No contact sensors on the ANYmal bench scene."""
+    """Command + arm/valve state, plus the 2F-140 pad contact sensors."""
 
     @configclass
     class PolicyCfg(ObsGroup):
         command = ObsTerm(
             func=mdp.generated_commands, params={"command_name": "pose_command"}
+        )
+        finger_contact = ObsTerm(
+            func=hive_mdp.contact_net_forces_w,
+            params={"sensor_cfg": SceneEntityCfg("finger_contact")},
+        )
+        jaw_contact = ObsTerm(
+            func=hive_mdp.contact_net_forces_w,
+            params={"sensor_cfg": SceneEntityCfg("jaw_contact")},
         )
 
         def __post_init__(self):
@@ -122,6 +130,14 @@ class AnymalCuroboObservationsCfg:
         valve_goal_angle = ObsTerm(
             func=hive_mdp.valve_goal_angle,
             params={"command_name": "pose_command"},
+        )
+        finger_contact = ObsTerm(
+            func=hive_mdp.contact_net_forces_w,
+            params={"sensor_cfg": SceneEntityCfg("finger_contact")},
+        )
+        jaw_contact = ObsTerm(
+            func=hive_mdp.contact_net_forces_w,
+            params={"sensor_cfg": SceneEntityCfg("jaw_contact")},
         )
 
         def __post_init__(self):

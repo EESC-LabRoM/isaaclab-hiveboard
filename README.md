@@ -278,6 +278,100 @@ uv run python scripts/collect_demos.py \
 
 ---
 
+## 🧠 Imitation Learning (BC + DAgger)
+
+`scripts/imitation/` trains an MLP policy on scripted-expert demonstrations and
+then improves it with DAgger. Datasets are written in robomimic's layout
+(`data/demo_<i>/obs/<key>` plus `actions`), so they load both in this repo's
+scripts and in Isaac Lab's
+`scripts/imitation_learning/robomimic/train.py`.
+
+Install the trainer once:
+
+```bash
+uv sync --extra imitation     # adds robomimic v0.4.0
+```
+
+**1. Collect expert demonstrations.** The expert is the task's own
+`pose_command` sequence, so nothing is learned here - a known-good solution is
+transcribed into a trainable dataset.
+
+```bash
+uv run python scripts/imitation/collect_demos.py \
+  --task Isaac-HiveBoard-Spot-BallValve-v0 \
+  --num_demos 50 --num_envs 1
+```
+
+The expert adapts to whichever action space a task uses: tasks whose
+`pose_command` sets `output_joint_positions` (the ball valve) get the cuRobo
+joint waypoints `[q_arm, gripper]` directly, while pose-IK tasks (the lamp) get
+`[pos, quat, gripper]`.
+
+> Keep `--num_envs 1` on cuRobo-planned tasks. Their motion planner is built
+> with `max_batch_size=1`, so extra environments make every plan throw and fall
+> back to direct servoing, which silently degrades the demonstrations.
+
+**2. Behaviour cloning.**
+
+```bash
+uv run python scripts/imitation/train_bc.py \
+  --dataset logs/imitation/datasets/expert_<stamp>.hdf5
+```
+
+**3. DAgger.** Each round rolls the current policy out, asks the expert what it
+would have done at every state the policy actually visited, appends those
+corrections and retrains. `--beta` is the chance of deferring to the expert on
+any step and decays by `--beta_decay` each round.
+
+```bash
+uv run python scripts/imitation/dagger.py \
+  --initial_dataset logs/imitation/datasets/expert_<stamp>.hdf5 \
+  --rounds 5 --episodes_per_round 40 --num_envs 8
+```
+
+**4. Evaluate** against the task's own `success` termination term, with
+`--expert` giving the ceiling the policy is chasing:
+
+```bash
+uv run python scripts/imitation/eval_policy.py --checkpoint <run>/models/model_epoch_600.pth
+uv run python scripts/imitation/eval_policy.py --expert     # baseline
+```
+
+### Observations and privileged information
+
+The policy reads the task's `bc` observation group. Every term is reproducible
+on hardware, in three tiers:
+
+| Tier | Ball valve | Source on hardware |
+| --- | --- | --- |
+| Proprioception | `eef_pos`, `eef_quat`, `arm_joint_pos`, `arm_joint_vel`, `gripper_pos` | joint encoders + FK |
+| Privileged object state | `object_pos`, `object_quat`, `valve_current_angle` | AprilTag on the valve |
+| Task specification | `valve_goal_angle`, `valve_task_direction` | commanded by the operator |
+
+The privileged tier is what the AprilTags supply, so no state estimator is
+needed at deployment. The task-specification tier matters on the ball valve
+because episodes sample both open and close goals - without it a policy cannot
+know which way to turn. Contact forces are excluded even though the task
+records them, since Spot's gripper has no force sensing on hardware.
+
+The Spot lamp group follows the same shape, with `object_pos`, `object_quat`
+and `lamp_joint_pos` as its privileged tier.
+
+To use this pipeline on another task, give that task a `bc` observation group
+with `concatenate_terms = False` and register a
+`robomimic_bc_cfg_entry_point` pointing at a config JSON - see
+`tasks/spot/lamp/configs/observations.py` and
+`tasks/spot/lamp/agents/robomimic/bc.json`.
+
+> **Task status:** the scripted expert must actually solve the task before any
+> of this produces data. `Isaac-HiveBoard-Spot-Lamp-v0` does not currently
+> succeed within its configured `episode_length_s = 10.0`: its sixteen-quarter-turn
+> sequence is still at command index 1 when the episode times out, so collection
+> writes an empty dataset. Validate a task with `scripts/play.py` (and
+> `scripts/imitation/eval_policy.py --expert`) before collecting on it.
+
+---
+
 ## 📁 Repository Structure
 
 ```
@@ -285,6 +379,7 @@ isaaclab-hiveboard/
 ├── dependencies/
 │   └── HiveBoard/               # Git submodule (URDF/USD models & meshes)
 ├── scripts/                     # Standalone CLI tools (play.py, collect_demos.py, etc.)
+│   └── imitation/               # BC + DAgger pipeline (collect, train, dagger, eval)
 └── source/
     └── isaaclab_hiveboard/
         ├── config/
@@ -292,6 +387,7 @@ isaaclab-hiveboard/
         ├── setup.py
         └── isaaclab_hiveboard/
             ├── assets/          # Dynamic HiveBoard & robot asset resolvers
+            ├── imitation/       # Expert, rollout loop, dataset & policy helpers
             ├── mdp/             # Custom actions, commands, events, observations
             ├── tasks/           # Robot tasks (spot/, franka/, anymal/)
             └── utils/           # Diagnostics & metrics

@@ -41,11 +41,21 @@ data = [
     "tensorboard>=2.20.0",
     "zarr<3",
 ]
+# Behaviour cloning / DAgger. Isaac Lab installs robomimic from git (no PyPI
+# release carries v0.4.0); scripts/imitation_learning/robomimic/train.py in the
+# vendored Isaac Lab snapshot expects exactly this revision.
+imitation = [
+    "robomimic",
+    "egl-probe>=1.0.1",
+    "tensorboardX",
+    "termcolor",
+]
 
 [[tool.uv.index]]
 url = "https://pypi.nvidia.com/"
 
 [tool.uv.sources]
+robomimic = { git = "https://github.com/ARISE-Initiative/robomimic.git", tag = "v0.4.0" }
 nvidia-curobo = { path = "dependencies/curobo", editable = true }
 isaaclab = { path = "dependencies/IsaacLab/source/isaaclab", editable = true }
 isaaclab-assets = { path = "dependencies/IsaacLab/source/isaaclab_assets", editable = true }
@@ -78,6 +88,7 @@ include = ["isaaclab_hiveboard*"]
 
 [tool.setuptools.package-data]
 isaaclab_hiveboard = [
+    "tasks/**/*.json",
     "assets/**/*.mtl",
     "assets/**/*.obj",
     "assets/**/*.png",

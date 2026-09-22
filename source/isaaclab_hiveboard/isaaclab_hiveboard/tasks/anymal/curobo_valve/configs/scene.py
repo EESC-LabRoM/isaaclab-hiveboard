@@ -13,13 +13,14 @@ from isaaclab.actuators.actuator_pd_cfg import ImplicitActuatorCfg
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
 import isaaclab.sim as sim_utils
 
 from isaaclab_hiveboard.assets import BALL_VALVE_USD, HONEYCOMB_USD
+from isaaclab_hiveboard.assets.anymal.anymal import ROBOTIQ_LEFT_PAD_PRIM, ROBOTIQ_RIGHT_PAD_PRIM
 from isaaclab_hiveboard.assets.anymal.bench import (
     ANYMAL_ARM_NEWTON_CFG,
     BOARD_POS,
@@ -34,6 +35,8 @@ from isaaclab_hiveboard.assets.anymal.bench import (
     VALVE_POS,
     VALVE_QUAT_XYZW,
 )
+
+_VALVE_CONTACT_FILTER = ["{ENV_REGEX_NS}/Valve/.*"]
 
 
 @configclass
@@ -123,6 +126,19 @@ class AnymalBenchValveSceneCfg(InteractiveSceneCfg):
                 effort_limit_sim=100.0,
             ),
         },
+    )
+
+    finger_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/" + ROBOTIQ_LEFT_PAD_PRIM,
+        update_period=0.0,
+        history_length=1,
+        filter_prim_paths_expr=_VALVE_CONTACT_FILTER,
+    )
+    jaw_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/" + ROBOTIQ_RIGHT_PAD_PRIM,
+        update_period=0.0,
+        history_length=1,
+        filter_prim_paths_expr=_VALVE_CONTACT_FILTER,
     )
 
     scene_cam: CameraCfg = CameraCfg(

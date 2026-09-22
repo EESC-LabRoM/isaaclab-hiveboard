@@ -112,3 +112,19 @@ collect-demos num_demos="10":
 # Record a validation video for every HiveBoard example
 record-all *args:
     ./scripts/record_all_examples.sh {{args}}
+
+# Collect scripted-expert demos for imitation learning (robomimic layout)
+il-collect num_demos="50" num_envs="8" *args:
+    uv run python scripts/imitation/collect_demos.py --num_demos {{num_demos}} --num_envs {{num_envs}} {{args}}
+
+# Behaviour-clone an MLP policy from a collected dataset
+il-train dataset *args:
+    uv run python scripts/imitation/train_bc.py --dataset {{dataset}} {{args}}
+
+# Improve a behaviour-cloned policy with DAgger rounds
+il-dagger dataset rounds="5" *args:
+    uv run python scripts/imitation/dagger.py --initial_dataset {{dataset}} --rounds {{rounds}} {{args}}
+
+# Measure a checkpoint's success rate (pass --expert for the scripted ceiling)
+il-eval *args:
+    uv run python scripts/imitation/eval_policy.py {{args}}

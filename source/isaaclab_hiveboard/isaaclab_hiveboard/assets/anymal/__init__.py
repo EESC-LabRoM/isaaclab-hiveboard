@@ -17,7 +17,9 @@ from .anymal import (
     ROBOTIQ_DRIVE_JOINT,
     ROBOTIQ_INIT_JOINT_POS,
     ROBOTIQ_JOINT_GEAR,
+    ROBOTIQ_LEFT_PAD_PRIM,
     ROBOTIQ_OPEN_Q,
+    ROBOTIQ_RIGHT_PAD_PRIM,
     robotiq_joint_targets,
 )
 
@@ -35,6 +37,8 @@ __all__ = [
     "ROBOTIQ_DRIVE_JOINT",
     "ROBOTIQ_INIT_JOINT_POS",
     "ROBOTIQ_JOINT_GEAR",
+    "ROBOTIQ_LEFT_PAD_PRIM",
     "ROBOTIQ_OPEN_Q",
+    "ROBOTIQ_RIGHT_PAD_PRIM",
     "robotiq_joint_targets",
 ]

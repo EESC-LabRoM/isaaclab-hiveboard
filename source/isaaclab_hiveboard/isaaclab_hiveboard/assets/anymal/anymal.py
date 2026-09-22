@@ -118,6 +118,17 @@ ROBOTIQ_INIT_JOINT_POS = {
     ".*_outer_finger_joint": 0.0,
 }
 
+# Robot-relative prim paths to the 2F-140's two grasp pads, for contact
+# sensing (mirrors ``SPOT_ARM_UUC_FNGR_PRIM`` / ``SPOT_ARM_UUC_JAW_PRIM``).
+# Verified against the baked assembly (``anymal_d_dynaarm_robotiq.usda``):
+# every 2F-140 body is a *flat* sibling directly under ``robotiq_2f_140``
+# (joints carry the kinematic tree via Body0/Body1 rels, not USD nesting), and
+# ``*_inner_finger_pad_joint`` is the 4-bar loop-closure joint back onto
+# ``*_inner_knuckle`` — there is no separate pad body. ``left_inner_finger`` /
+# ``right_inner_finger`` are the actual fingertip-carrying rigid bodies.
+ROBOTIQ_LEFT_PAD_PRIM = f"{GRIPPER_PRIM}/left_inner_finger"
+ROBOTIQ_RIGHT_PAD_PRIM = f"{GRIPPER_PRIM}/right_inner_finger"
+
 
 def _find_named_prim(root, name: str):
     from pxr import Usd

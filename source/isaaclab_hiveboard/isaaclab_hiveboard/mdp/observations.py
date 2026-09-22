@@ -69,6 +69,86 @@ def object_root_pose_b(
     return torch.cat((position, math_utils.quat_unique(orientation)), dim=-1)
 
 
+def ee_pos_b(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    frame_name: str = "ee_frame",
+) -> torch.Tensor:
+    """Return the TCP position in the robot base frame.
+
+    Split out of :func:`ee_pose_b` because robomimic keys every observation
+    modality separately; a fused seven-vector cannot be normalized or dropped
+    per component.
+
+    Args:
+        env: Manager-based environment.
+        asset_cfg: Robot scene entity.
+        frame_name: Frame transformer containing the TCP as its first target.
+
+    Returns:
+        TCP position of shape ``(num_envs, 3)``.
+    """
+    return ee_pose_b(env, asset_cfg, frame_name)[:, :3]
+
+
+def ee_quat_b(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    frame_name: str = "ee_frame",
+) -> torch.Tensor:
+    """Return the TCP orientation in the robot base frame.
+
+    Args:
+        env: Manager-based environment.
+        asset_cfg: Robot scene entity.
+        frame_name: Frame transformer containing the TCP as its first target.
+
+    Returns:
+        Unique ``xyzw`` quaternion of shape ``(num_envs, 4)``.
+    """
+    return ee_pose_b(env, asset_cfg, frame_name)[:, 3:]
+
+
+def object_pos_b(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("lamp"),
+) -> torch.Tensor:
+    """Return an object's root position in the robot base frame.
+
+    This is the privileged term a fiducial marker supplies on hardware: an
+    AprilTag on the object yields its pose relative to the robot base, so a
+    policy trained on this observation transfers without a state estimator.
+
+    Args:
+        env: Manager-based environment.
+        robot_cfg: Robot scene entity defining the base frame.
+        object_cfg: Object scene entity whose root position is observed.
+
+    Returns:
+        Object position of shape ``(num_envs, 3)``.
+    """
+    return object_root_pose_b(env, robot_cfg, object_cfg)[:, :3]
+
+
+def object_quat_b(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("lamp"),
+) -> torch.Tensor:
+    """Return an object's root orientation in the robot base frame.
+
+    Args:
+        env: Manager-based environment.
+        robot_cfg: Robot scene entity defining the base frame.
+        object_cfg: Object scene entity whose root orientation is observed.
+
+    Returns:
+        Unique ``xyzw`` quaternion of shape ``(num_envs, 4)``.
+    """
+    return object_root_pose_b(env, robot_cfg, object_cfg)[:, 3:]
+
+
 def valve_task_direction(
     env: ManagerBasedRLEnv,
     command_name: str = "pose_command",

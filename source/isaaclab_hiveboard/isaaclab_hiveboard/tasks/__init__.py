@@ -15,7 +15,12 @@ gym.register(
     id="Isaac-HiveBoard-Spot-Lamp-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
-    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg"},
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg",
+        # Consumed by Isaac Lab's scripts/imitation_learning/robomimic/train.py
+        # and by scripts/imitation/train_bc.py.
+        "robomimic_bc_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.agents:robomimic/bc.json",
+    },
 )
 
 gym.register(
@@ -47,6 +52,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.env:SpotBallValveEnvCfg",
+        "robomimic_bc_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.agents:robomimic/bc.json",
     },
 )
 
@@ -56,6 +62,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.env:SpotBallValveEnvCfg_PLAY",
+        "robomimic_bc_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.ball_valve.agents:robomimic/bc.json",
     },
 )
 
@@ -186,5 +193,104 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.curobo_valve.env:AnymalCuroboValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Lamp-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.lamp.env:AnymalLampEnvCfg"},
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CircuitBreaker-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.circuit_breaker.env:AnymalCircuitBreakerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CircuitBreaker-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.circuit_breaker.env:AnymalCircuitBreakerEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-HighTorqueValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.high_torque_valve.env:AnymalHighTorqueValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-HighTorqueValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            "isaaclab_hiveboard.tasks.anymal.high_torque_valve.env:AnymalHighTorqueValveEnvCfg_PLAY"
+        ),
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-SmallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve.env:AnymalSmallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-SmallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve.env:AnymalSmallValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BenchValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.bench_valve.env:AnymalBenchValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BenchValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.bench_valve.env:AnymalBenchValveEnvCfg_PLAY",
     },
 )

@@ -198,7 +198,11 @@ FRANKA_WORKSPACE = WorkspaceCfg(
 # on the pads (measured on the 2F-140 palm).
 ANYMAL_EE = EndEffectorCfg(
     body_name="robotiq_base_link",
-    source_prim="base",
+    # The baked Newton assembly nests the ANYmal-D trunk one level deeper
+    # than the runtime Isaac Sim spawn path: Robot/anymal/base, not Robot/base
+    # (the "anymal" Xform is a sibling reference alongside "dynaarm" and
+    # "robotiq_2f_140" — see scripts/generate_anymal_newton_usd.py).
+    source_prim="anymal/base",
     body_prim="robotiq_2f_140/robotiq_base_link",
     tcp_offset=OffsetCfg(
         pos=(0.0, 0.0, 0.20),

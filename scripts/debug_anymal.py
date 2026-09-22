@@ -91,7 +91,14 @@ def main() -> None:
             env_ids = torch.tensor([0], device=base.device, dtype=torch.long)
             ee_p, ee_q = cmd_term._get_ee_in_base_frame(env_ids)
             cmd = cmd_term.command[0]
-            cmd_p, cmd_q = cmd[1:4], cmd[4:8]
+            # With ``output_joint_positions`` the command tensor is
+            # (gripper, *joint positions), not (gripper, pos3, quat4); fall
+            # back to the internal pose buffer for the Cartesian diagnostics.
+            if cmd_term.cfg.output_joint_positions:
+                pose_cmd = cmd_term._command[0]
+                cmd_p, cmd_q = pose_cmd[1:4], pose_cmd[4:8]
+            else:
+                cmd_p, cmd_q = cmd[1:4], cmd[4:8]
             idx = int(cmd_term._current_command_idx[0].item())
             pos_err = float(torch.linalg.vector_norm(ee_p[0] - cmd_p).item())
             ori_err = float(torch.rad2deg(math_utils.quat_error_magnitude(ee_q, cmd_q.unsqueeze(0))[0]).item())
