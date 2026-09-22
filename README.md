@@ -307,9 +307,10 @@ The expert adapts to whichever action space a task uses: tasks whose
 joint waypoints `[q_arm, gripper]` directly, while pose-IK tasks (the lamp) get
 `[pos, quat, gripper]`.
 
-> Keep `--num_envs 1` on cuRobo-planned tasks. Their motion planner is built
-> with `max_batch_size=1`, so extra environments make every plan throw and fall
-> back to direct servoing, which silently degrades the demonstrations.
+> cuRobo-planned tasks run with `--num_envs > 1`. Each environment owns its
+> plan and is solved on its own as it enters a segment, since the cached cuRobo
+> solvers take one problem at a time. Physics is parallel but planning is not:
+> a segment start costs about 0.8 s of solve per environment entering it.
 
 **2. Behaviour cloning.**
 
