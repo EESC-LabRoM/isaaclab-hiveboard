@@ -66,6 +66,7 @@ from isaaclab_hiveboard.utils.command_preview import (
 from isaaclab_hiveboard.utils.command_setup import (
     apply_setup,
     as_curobo_command,
+    default_setup_path,
     is_curobo_command,
     load_setup,
     make_setup,
@@ -1207,7 +1208,7 @@ def main():
     args, hydra_args = _parse_args()
     sys.argv = [sys.argv[0], *hydra_args]
     env_cfg = _editor_env_cfg(args)
-    out = Path(args.out or args.setup or f"configs/{args.task}.json")
+    out = Path(args.out) if args.out else Path(args.setup) if args.setup else default_setup_path(args.task)
     with launch_simulation(env_cfg, args):
         env = gym.make(args.task, cfg=env_cfg)
         viewer = None

@@ -29,6 +29,9 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     SequentialPoseCommandCfg,
 )
 
+# Repository-level home for per-task setups, written by scripts/command_edit.py.
+CONFIG_DIR = Path(__file__).resolve().parents[4] / "configs"
+
 COMMAND_TYPES = {
     cls.__name__: cls
     for cls in (
@@ -220,6 +223,11 @@ def validate_setup(data: dict, *, task: str | None = None) -> tuple[list, dict]:
     if not isinstance(data.get("commands"), list) or not data["commands"]:
         raise ValueError("A setup must contain at least one command")
     return [decode_command(cmd) for cmd in data["commands"]], offset
+
+
+def default_setup_path(task: str) -> Path:
+    """Setup a task uses when none is given: configs/<task>.json."""
+    return CONFIG_DIR / f"{task}.json"
 
 
 def load_setup(path: str | Path) -> dict:

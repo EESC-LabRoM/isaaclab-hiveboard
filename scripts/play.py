@@ -250,7 +250,16 @@ def _print_pose(base, step: int, env_index: int) -> None:
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK, help="Gym task id.")
-    parser.add_argument("--setup", help="Command and TCP settings saved by scripts/command_edit.py.")
+    parser.add_argument(
+        "--setup",
+        help="Command and TCP settings saved by scripts/command_edit.py. "
+        "Default: configs/<task>.json when that file exists.",
+    )
+    parser.add_argument(
+        "--no-setup",
+        action="store_true",
+        help="Ignore the task's configs/<task>.json and play the task as coded.",
+    )
     parser.add_argument(
         "--show-command-path",
         action=argparse.BooleanOptionalAction,
@@ -349,10 +358,18 @@ def main() -> int:
     args, hydra_args = _parse_args()
     sys.argv = [sys.argv[0], *hydra_args]
     env_cfg, _ = resolve_task_config(args.task, "")
-    if args.setup:
-        from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup
+    if args.no_setup and args.setup:
+        raise SystemExit("--setup and --no-setup are mutually exclusive.")
+    if not args.no_setup:
+        from isaaclab_hiveboard.utils.command_setup import apply_setup, default_setup_path, load_setup
 
-        apply_setup(env_cfg, load_setup(args.setup), task=args.task)
+        if not args.setup:
+            default_setup = default_setup_path(args.task)
+            if default_setup.is_file():
+                args.setup = str(default_setup)
+                print(f"[INFO] Using saved setup {args.setup} (pass --no-setup to skip).")
+        if args.setup:
+            apply_setup(env_cfg, load_setup(args.setup), task=args.task)
     env_cfg.scene.num_envs = args.num_envs
     if args.seed is not None:
         env_cfg.seed = args.seed
