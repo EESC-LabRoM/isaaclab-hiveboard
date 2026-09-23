@@ -53,6 +53,13 @@ def _all_finite(value) -> bool:
 def _route_command(env, command: torch.Tensor) -> torch.Tensor:
     terms = list(env.action_manager.active_terms)
     dims = list(env.action_manager.action_term_dim)
+    joint_mode = "pose_command" in env.command_manager.active_terms and getattr(
+        env.command_manager.get_term("pose_command").cfg, "output_joint_positions", False
+    )
+    if joint_mode and terms == ["arm_action", "gripper_action"]:
+        # cuRobo joint waypoints are already laid out as [q_arm, gripper]; the
+        # pose-layout branches below would misread a 7-joint arm (FR3).
+        return command
     if terms == ["gripper_action", "arm_action"] and dims == [1, 7]:
         return command
     if terms == ["gripper_action", "arm_action"] and dims == [1, 3]:
@@ -394,8 +401,8 @@ def main() -> int:
             joint_command.debug_vis = True
 
     if args.contact_debug:
-        missing = [name for name in CONTACT_SENSOR_NAMES if not hasattr(env_cfg.scene, name)]
-        if missing:
+        # Only Spot has wr1_contact; _print_contact skips sensors a task lacks.
+        if not any(getattr(env_cfg.scene, name, None) is not None for name in CONTACT_SENSOR_NAMES):
             raise ValueError("--contact-debug is only supported by tasks with gripper contact sensors")
 
     if args.collision_only:
