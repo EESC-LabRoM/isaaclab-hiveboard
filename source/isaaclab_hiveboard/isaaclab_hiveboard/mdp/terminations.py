@@ -91,3 +91,32 @@ def articulation_joint_position_success(
             f"received shape {tuple(joint_pos.shape)}."
         )
     return command.is_done() & (torch.abs(joint_pos[:, 0] - target) <= tolerance)
+
+
+def articulation_joint_ranges_success(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_name: str,
+    ranges: dict[str, tuple[float, float]],
+) -> torch.Tensor:
+    """Require sequence completion and every named joint inside its ``[low, high]`` range.
+
+    Multi-stage mechanisms (e.g. the hidden button: lid open *and* button
+    pressed) need more than one joint checked at once.
+    """
+    command: CommandTerm = env.command_manager.get_term(command_name)
+    if not hasattr(command, "is_done"):
+        raise AttributeError(
+            f"The command term '{command_name}' does not have the method 'is_done'."
+        )
+
+    asset = env.scene[asset_name]
+    joint_pos = asset.data.joint_pos.torch
+    success = command.is_done()
+    for joint_name, (low, high) in ranges.items():
+        joint_ids, _ = asset.find_joints(joint_name)
+        if len(joint_ids) != 1:
+            raise ValueError(f"Expected exactly one joint named '{joint_name}', found {len(joint_ids)}.")
+        q = joint_pos[:, joint_ids[0]]
+        success = success & (q >= low) & (q <= high)
+    return success

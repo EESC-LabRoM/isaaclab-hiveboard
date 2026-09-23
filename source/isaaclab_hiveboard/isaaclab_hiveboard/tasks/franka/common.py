@@ -36,25 +36,29 @@ FRANKA_CUROBO = {
 # Integrate the stiff drives in MJWarp's implicit solver. Explicit PD at the
 # 5 ms task timestep saturates the arm torques and makes the fingers oscillate
 # even under a constant open command.
+ARM_STIFFNESS = 2000.0
+ARM_DAMPING = 200.0
 FRANKA_NEWTON_ACTUATORS = {
     "fr3_shoulder": ImplicitActuatorCfg(
         joint_names_expr=["fr3_joint[1-4]"],
         effort_limit_sim=87.0,
-        stiffness=400.0,
-        damping=80.0,
+        stiffness=ARM_STIFFNESS,
+        damping=ARM_DAMPING,
         armature=0.1,
     ),
     "fr3_forearm": ImplicitActuatorCfg(
         joint_names_expr=["fr3_joint[5-7]"],
         effort_limit_sim=12.0,
-        stiffness=400.0,
-        damping=80.0,
+        stiffness=ARM_STIFFNESS,
+        damping=ARM_DAMPING,
         armature=0.05,
     ),
     # Stiff enough to squeeze a handle: closing on a 1 cm part leaves a 5 mm
     # position error per finger, which must still reach the FR3 hand's
     # 70 N continuous grasp force. The damping caps the closing speed near
     # the real hand's ~0.07 m/s so the jaws do not slam light handwheels.
+    # Both fingers stay driven: fr3.usd's finger mimic becomes a soft MuJoCo
+    # equality in Newton, and a passive follower on it swings past its limits.
     "fr3_hand": ImplicitActuatorCfg(
         joint_names_expr=["fr3_finger_joint.*"],
         effort_limit_sim=70.0,

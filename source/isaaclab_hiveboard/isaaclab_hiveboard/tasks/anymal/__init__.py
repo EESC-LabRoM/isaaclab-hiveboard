@@ -5,6 +5,9 @@
 
 """ANYmal + DynaArm tasks on the HiveBoard benchmark."""
 
+from .key.env import AnymalKeyEnvCfg, AnymalKeyEnvCfg_PLAY
+from .drawer.env import AnymalDrawerEnvCfg, AnymalDrawerEnvCfg_PLAY
+from .button.env import AnymalButtonEnvCfg, AnymalButtonEnvCfg_PLAY
 from .ball_valve.env import (
     AnymalBallValveEnvCfg,
     AnymalBallValveEnvCfg_PLAY,
@@ -32,6 +35,12 @@ from .small_valve.env import (
 )
 
 __all__ = [
+    "AnymalKeyEnvCfg",
+    "AnymalKeyEnvCfg_PLAY",
+    "AnymalDrawerEnvCfg",
+    "AnymalDrawerEnvCfg_PLAY",
+    "AnymalButtonEnvCfg",
+    "AnymalButtonEnvCfg_PLAY",
     "AnymalBallValveEnvCfg",
     "AnymalBallValveEnvCfg_PLAY",
     "AnymalBenchValveEnvCfg",
