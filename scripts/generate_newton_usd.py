@@ -19,6 +19,11 @@ High-torque / small gate valves: UUC conversion of the HiveBoard URDFs
 plus the same CoACD overlay.
 Lamp: UUC conversion of the HiveBoard lamp URDF, including its primitive
 bulb colliders. The environment implements the revolute/prismatic coupling.
+Button: UUC conversion of the HiveBoard hidden-button URDF (lid hinge and
+button slide are already articulated upstream).
+Drawer / key: UUC conversion of the articulated URDFs in ``hiveboard/drawer``
+and ``hiveboard/key`` (the upstream ones have no joints), plus a CoACD overlay
+for the drawer so its handle tab gets its own collider.
 
 UUC needs a Python that can ``import urdf_usd_converter`` (isolated venv;
 the project venv does not ship it). Overlay rewrite is kitless.
@@ -94,6 +99,35 @@ DEFAULT_UUC_PYTHON = str(REPO_ROOT / "dependencies/urdf-usd-converter/.venv/bin/
 
 LAMP_URDF = REPO_ROOT / "dependencies/HiveBoard/Simulation/Lamp/Lamp_Assembly.urdf"
 LAMP_UUC_DIR = EXT_ASSETS / "hiveboard/lamp/usd/uuc"
+
+# Hidden push button: the upstream URDF is already articulated (lid hinge +
+# button slide) and its per-link convex hulls do not cover the button face,
+# so a plain UUC conversion is enough.
+BUTTON_URDF = REPO_ROOT / "dependencies/HiveBoard/Simulation/Button/Button_Assembly.urdf"
+BUTTON_UUC_DIR = EXT_ASSETS / "hiveboard/button/usd/uuc"
+
+# Drawer and key: the upstream URDFs are a single rigid link, so these convert
+# the articulated URDFs committed next to their USD output instead.
+DRAWER_URDF = EXT_ASSETS / "hiveboard/drawer/Drawer_Assembly.urdf"
+DRAWER_USD_DIR = EXT_ASSETS / "hiveboard/drawer/usd"
+DRAWER_UUC_DIR = DRAWER_USD_DIR / "uuc"
+DRAWER_OVERLAY = DRAWER_USD_DIR / "Drawer_Assembly_uuc_newton.usda"
+# A single hull wraps the thin handle tab and the open box into one solid.
+DRAWER_TARGETS: tuple[tuple[str, str, float], ...] = (("Geometry/base/drawer", "tn__Gaveta1_aE_Corpo1_Mesh_1", 0.05),)
+KEY_URDF = EXT_ASSETS / "hiveboard/key/Key_Assembly.urdf"
+KEY_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc"
+
+# (label, UUC output, default prim, [(joint name, schema)]) checked by verify().
+ARTICULATED_UUC_ASSETS = (
+    (
+        "button",
+        BUTTON_UUC_DIR / "Button_Assembly.usda",
+        "Button_Assembly",
+        (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")),
+    ),
+    ("drawer", DRAWER_OVERLAY, "Drawer_Assembly", (("PrismaticJoint", "PhysicsPrismaticJoint"),)),
+    ("key", KEY_UUC_DIR / "Key_Assembly.usda", "Key_Assembly", (("RevoluteJoint", "PhysicsRevoluteJoint"),)),
+)
 
 SPOT_MESH_DIR = EXT_ASSETS / "spot/meshes"
 
@@ -424,6 +458,16 @@ def render_ht_overlay() -> str:
     )
 
 
+def render_drawer_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=DRAWER_URDF,
+        uuc_dir=DRAWER_UUC_DIR,
+        usda_name="Drawer_Assembly.usda",
+        default_prim="Drawer_Assembly",
+        targets=DRAWER_TARGETS,
+    )
+
+
 def render_sm_overlay() -> str:
     return render_coacd_overlay(
         urdf=SM_URDF,
@@ -522,6 +566,18 @@ def verify() -> list[str]:
                 joint = stage.GetPrimAtPath(f"/Lamp_Assembly/Physics/{name}")
                 if not joint or not joint.IsA(joint_type):
                     problems.append(f"lamp UUC missing {name}")
+    for label, usda, default_prim, joints in ARTICULATED_UUC_ASSETS:
+        if not usda.exists():
+            problems.append(f"missing {label} UUC: {usda}")
+            continue
+        stage = Usd.Stage.Open(str(usda))
+        if not stage:
+            problems.append(f"pxr could not open {usda}")
+            continue
+        for name, type_name in joints:
+            joint = stage.GetPrimAtPath(f"/{default_prim}/Physics/{name}")
+            if not joint or joint.GetTypeName() != type_name:
+                problems.append(f"{label} UUC missing {name}")
     return problems
 
 
@@ -529,7 +585,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--assets",
-        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve", "lamp"],
+        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve", "lamp", "button", "drawer", "key"],
         default="all",
         help="Which asset to process (default: all).",
     )
@@ -565,6 +621,9 @@ def main(argv: list[str] | None = None) -> int:
     want_ht = args.assets in ("all", "high_torque_valve")
     want_sm = args.assets in ("all", "small_valve")
     want_lamp = args.assets in ("all", "lamp")
+    want_button = args.assets in ("all", "button")
+    want_drawer = args.assets in ("all", "drawer")
+    want_key = args.assets in ("all", "key")
 
     if args.verify_only:
         problems = verify()
@@ -585,6 +644,15 @@ def main(argv: list[str] | None = None) -> int:
         if want_lamp:
             run_uuc_conversion(LAMP_URDF, LAMP_UUC_DIR, args.uuc_python)
             print(f"[UUC] lamp: {LAMP_UUC_DIR / 'Lamp_Assembly.usda'}")
+        if want_button:
+            run_uuc_conversion(BUTTON_URDF, BUTTON_UUC_DIR, args.uuc_python)
+            print(f"[UUC] button: {BUTTON_UUC_DIR / 'Button_Assembly.usda'}")
+        if want_drawer:
+            run_uuc_conversion(DRAWER_URDF, DRAWER_UUC_DIR, args.uuc_python)
+            print(f"[UUC] drawer: {DRAWER_UUC_DIR / 'Drawer_Assembly.usda'}")
+        if want_key:
+            run_uuc_conversion(KEY_URDF, KEY_UUC_DIR, args.uuc_python)
+            print(f"[UUC] key: {KEY_UUC_DIR / 'Key_Assembly.usda'}")
         if want_spot:
             strip_spot_obj_topology()
             run_uuc_conversion(SPOT_URDF, SPOT_UUC_DIR, args.uuc_python)
@@ -621,6 +689,11 @@ def main(argv: list[str] | None = None) -> int:
         SM_OVERLAY.parent.mkdir(parents=True, exist_ok=True)
         SM_OVERLAY.write_text(text, encoding="utf-8")
         print(f"[OVERLAY] wrote {SM_OVERLAY} ({len(text) // 1024} KiB)")
+
+    if want_drawer:
+        text = render_drawer_overlay()
+        DRAWER_OVERLAY.write_text(text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {DRAWER_OVERLAY} ({len(text) // 1024} KiB)")
 
     problems = verify()
     for problem in problems:

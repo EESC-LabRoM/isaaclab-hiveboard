@@ -893,6 +893,15 @@ class _GoToFrameHandler(_BaseCmdHandler):
             # hanging on Cartesian thresholds.
             valve_q = term._valve_asset.data.joint_pos.torch[env_ids, term._valve_joint_idx]
             done = done | (torch.abs(valve_q - term.valve_joint_des[env_ids]) <= float(threshold))
+        done_when_joint = getattr(self.cfg, "done_when_joint", None)
+        if done_when_joint is not None:
+            # Contact goals (a press, a push) stop the TCP short of its target
+            # by a robot-specific finger length; advance on the mechanism.
+            asset_name, joint_name, low, high = done_when_joint
+            asset = term._env.scene[asset_name]
+            joint_ids, _ = asset.find_joints(joint_name)
+            joint_q = asset.data.joint_pos.torch[env_ids, joint_ids[0]]
+            done = done | ((joint_q >= float(low)) & (joint_q <= float(high)))
         return done
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
@@ -2717,6 +2726,12 @@ class GoToFrameCfg(BaseCmd):
 
     For contact-rich segments (e.g. the valve arc) the TCP can hold centimeters
     off-target while the task is physically done. None disables.
+    """
+    done_when_joint: tuple[str, str, float, float] | None = None
+    """Also complete once ``(asset_name, joint_name, low, high)`` has the joint in ``[low, high]``.
+
+    For pushes and presses whose stop leaves the TCP short of the target by a
+    robot-specific amount. None disables.
     """
     canonicalize_upward: bool = True
     """If True, choose the upright TCP +X half-turn once at the segment start.

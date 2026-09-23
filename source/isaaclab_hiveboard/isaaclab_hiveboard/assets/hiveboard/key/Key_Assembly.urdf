@@ -1,0 +1,106 @@
+<?xml version="1.0"?>
+<!--
+  Lock and key: lock plate + key on a revolute joint about the key shaft (+X).
+  The key is posed fully inserted; turning it 90 deg unlocks.
+  Generated from the upstream single-link Key_assembly.urdf (dependencies/HiveBoard),
+  which carries no joint between the parts. Meshes are the upstream ones.
+-->
+<robot name="Key_Assembly">
+  <link name="lock">
+    <inertial><origin xyz="0 0 0" rpy="0 0 0" /><mass value="0.08" /><inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05" /></inertial>
+    <visual>
+      <origin xyz="0.005037 0.000000 0.000000" rpy="0. -1.5707964 0. " />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_Mesh.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.002561 -0.025334 -0.000107" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_simple_colliders_Cube.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.002561 0.025258 -0.000107" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_simple_colliders_Cube_01.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.002561 -0.000066 0.020827" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_simple_colliders_Cube_02.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.002561 -0.000066 -0.025852" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_simple_colliders_Cube_03.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.002561 -0.003110 -0.015502" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_Base_pivot_Corpo1_simple_colliders_Cube_04.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="key">
+    <inertial><origin xyz="0.035 0 0" rpy="0 0 0" /><mass value="0.01" /><inertia ixx="2e-06" ixy="0" ixz="0" iyy="2e-06" iyz="0" izz="2e-06" /></inertial>
+    <visual>
+      <origin xyz="-0.005997 0.004981 -0.014136" rpy="0. 0. -1.5707964" />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_Mesh.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.024253 0.000000 0.000000" rpy="0. 1.5707964 0. " />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Cylinder.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.003488 0.000000 -0.001649" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_simple_colliders_Cube.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.003485 -0.009519 -0.011120" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_simple_colliders_Cube_01.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.051511 0.000000 -0.001081" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_simple_colliders_Cube_02.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.070482 0.000000 -0.001081" rpy="0. 0. 0." />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_simple_colliders_Cube_03.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.061007 0.000000 0.008393" rpy="0. -1.5707964 0. " />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Key_pivot_Corpo1_simple_colliders_Cube_04.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.061007 0.000000 -0.010635" rpy="0. -1.5707964 0. " />
+      <geometry>
+        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Key/meshes/Cube_05.obj" scale="0.001000 0.001000 0.001000" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RevoluteJoint" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="lock" />
+    <child link="key" />
+    <axis xyz="1 0 0" />
+    <limit lower="0.0" upper="1.5707963" effort="100.0" velocity="10.0" />
+  </joint>
+</robot>

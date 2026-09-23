@@ -5,6 +5,9 @@
 
 """Spot tasks on the HiveBoard benchmark."""
 
+from .key.env import SpotKeyEnvCfg, SpotKeyEnvCfg_PLAY
+from .drawer.env import SpotDrawerEnvCfg, SpotDrawerEnvCfg_PLAY
+from .button.env import SpotButtonEnvCfg, SpotButtonEnvCfg_PLAY
 from .ball_valve.env import (
     SpotBallValveEnvCfg,
     SpotBallValveEnvCfg_PLAY,
@@ -35,6 +38,12 @@ from .small_valve.env import (
     SpotSmallValveEnvCfg_PLAY,
 )
 __all__ = [
+    "SpotKeyEnvCfg",
+    "SpotKeyEnvCfg_PLAY",
+    "SpotDrawerEnvCfg",
+    "SpotDrawerEnvCfg_PLAY",
+    "SpotButtonEnvCfg",
+    "SpotButtonEnvCfg_PLAY",
     "SpotBallValveEnvCfg",
     "SpotBallValveEnvCfg_PLAY",
     "SpotCircuitBreakerEnvCfg",

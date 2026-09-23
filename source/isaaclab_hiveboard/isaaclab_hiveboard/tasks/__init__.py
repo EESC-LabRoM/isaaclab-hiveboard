@@ -368,3 +368,177 @@ gym.register(
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.bench_valve.env:AnymalBenchValveEnvCfg_PLAY",
     },
 )
+
+##
+# Hidden push button
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Button-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.button.env:AnymalButtonEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Button-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.button.env:AnymalButtonEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Button-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.button.env:FrankaButtonEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Button-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.button.env:FrankaButtonEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Button-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.button.env:SpotButtonEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Button-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.button.env:SpotButtonEnvCfg_PLAY",
+    },
+)
+
+##
+# Sliding drawer
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Drawer-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.drawer.env:SpotDrawerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Drawer-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.drawer.env:SpotDrawerEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Drawer-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.drawer.env:AnymalDrawerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Drawer-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.drawer.env:AnymalDrawerEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Drawer-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.drawer.env:FrankaDrawerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Drawer-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.drawer.env:FrankaDrawerEnvCfg_PLAY",
+    },
+)
+
+##
+# Lock and key
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Key-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.key.env:SpotKeyEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-Key-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.key.env:SpotKeyEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Key-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.key.env:AnymalKeyEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Key-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.key.env:AnymalKeyEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Key-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.key.env:FrankaKeyEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Key-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.key.env:FrankaKeyEnvCfg_PLAY",
+    },
+)
