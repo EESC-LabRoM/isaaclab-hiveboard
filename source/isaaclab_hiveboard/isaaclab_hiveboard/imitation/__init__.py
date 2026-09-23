@@ -11,10 +11,14 @@ parsing command-line arguments or launching a simulation.
 """
 
 from .dataset import (
+    CLEAN_MASK,
+    FALLBACK_MASK,
     DatasetStats,
     action_stats,
     dataset_stats,
+    demo_used_fallback,
     load_action_norm,
+    load_dataset_action_norm,
     merge_datasets,
     rotate_recorder_dataset,
     save_action_norm,
@@ -25,13 +29,17 @@ from .policy import RobomimicPolicy
 from .rollout import RolloutResult, run_rollout
 
 __all__ = [
+    "CLEAN_MASK",
+    "FALLBACK_MASK",
     "DatasetStats",
     "RobomimicPolicy",
     "RolloutResult",
     "ScriptedExpert",
     "action_stats",
     "dataset_stats",
+    "demo_used_fallback",
     "load_action_norm",
+    "load_dataset_action_norm",
     "merge_datasets",
     "rotate_recorder_dataset",
     "run_rollout",

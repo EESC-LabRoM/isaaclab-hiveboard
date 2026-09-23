@@ -439,6 +439,8 @@ class SequentialPoseCommand(CommandTerm):
         if isinstance(handler, _CuroboPlannedGoToFrameHandler):
             if handler._fallback[env_index]:
                 print("[STALL] curobo: plan failed, running fallback direct servo", flush=True)
+            elif handler._densified[env_index]:
+                print("[STALL] curobo: following a densified fallback arc", flush=True)
             elif not handler._planned[env_index]:
                 print("[STALL] curobo: waypoints not planned yet", flush=True)
             else:
@@ -545,6 +547,18 @@ class SequentialPoseCommand(CommandTerm):
             targets[env_mask] = handler._joint_target[env_mask]
             active |= env_mask
         return active, targets
+
+    def expert_fallback(self) -> torch.Tensor:
+        """Per-env flag: the active segment is running a cuRobo fallback.
+
+        Recorded next to every demonstration step, so datasets say which
+        expert labels came from a plan cuRobo could not solve as specified.
+        """
+        flags = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        for command_idx, handler in enumerate(self._command_handlers):
+            if isinstance(handler, _CuroboPlannedGoToFrameHandler):
+                flags |= (self._current_command_idx == command_idx) & handler.fallback_mask()
+        return flags
 
     def _update_metrics(self):
         """This command term does not have any metrics to update."""
@@ -945,12 +959,17 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         self._waypoint_count = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
         self._planned = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._fallback = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
+        # Envs following a plan that was patched to get past an infeasible
+        # solve (see CuroboPlannedRotateFrameCfg.on_infeasible_arc). Unlike
+        # ``_fallback`` the patched plan is still published as joint targets.
+        self._densified = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
 
     def _clear_plan_state(self, env_ids: torch.Tensor) -> None:
         self._waypoint_index[env_ids] = 0
         self._waypoint_count[env_ids] = 0
         self._planned[env_ids] = False
         self._fallback[env_ids] = False
+        self._densified[env_ids] = False
 
     def _reserve_plan_capacity(self, num_waypoints: int, num_joints: int, dtype: torch.dtype) -> None:
         """Make the waypoint buffers hold at least ``num_waypoints`` per env."""
@@ -1017,6 +1036,15 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         """Envs whose ``_joint_target`` holds a live cuRobo plan."""
         return self._planned & ~self._fallback
 
+    def fallback_mask(self) -> torch.Tensor:
+        """Envs whose current segment is not running the plan cuRobo solved.
+
+        Either the solve failed and the handler servos directly (which, with
+        ``output_joint_positions``, holds the last joints), or the plan was
+        densified past a joint discontinuity.
+        """
+        return self._fallback | self._densified
+
     def reset(self, env_ids: torch.Tensor):
         super().reset(env_ids)
         self._clear_plan_state(env_ids)
@@ -1071,7 +1099,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                         MotionPlannerCfg.create(
                             robot=robot_cfg,
                             self_collision_check=False,
-                            use_cuda_graph=False,
+                            use_cuda_graph=True,
                             num_ik_seeds=self.cfg.num_ik_seeds,
                             num_trajopt_seeds=self.cfg.num_trajopt_seeds,
                             interpolation_dt=self._dt,
@@ -1830,8 +1858,10 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
     def _plan_env(self, env_ids: torch.Tensor) -> None:
         """Retarget one env's complete Cartesian arc from its current grasp state.
 
-        An infeasible arc raises. There is no Cartesian-servo fallback: that
-        path used ``_GoToFrameHandler`` state this handler never initializes.
+        An infeasible arc is handled per ``cfg.on_infeasible_arc``. There is no
+        Cartesian-servo fallback: that path used ``_GoToFrameHandler`` state
+        this handler never initializes, and with ``output_joint_positions`` a
+        servo fallback publishes no joints at all, so the arm would freeze.
         """
         self._diag_env = int(env_ids[0].item())
 
@@ -1971,7 +2001,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                     )
                 joint_waypoints = torch.stack(frame_solutions, dim=1)
 
-            self._raise_if_joint_discontinuity(
+            infeasible = self._check_joint_discontinuity(
                 joint_waypoints,
                 joint_names,
                 tcp_pos_b=tcp_pos_b,
@@ -1980,13 +2010,51 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                 flange_quat_b=flange_quat_b,
                 angles=angles,
             )
+            joints = joint_waypoints[0]
+            if infeasible:
+                tcp_pos_b, tcp_quat_b, joints = self._densify_arc(tcp_pos_b, tcp_quat_b, joints)
+                self._densified[env_ids] = True
+                print(
+                    f"[WARN] cuRobo env={self._diag_env} valve arc densified to {joints.shape[0]} waypoints "
+                    f"so no joint moves more than {self.cfg.max_joint_step:.3f} rad per step; "
+                    "segment flagged as expert fallback",
+                    flush=True,
+                )
 
-            self._store_plan(env_ids, tcp_pos_b, tcp_quat_b, joint_waypoints[0])
+            self._store_plan(env_ids, tcp_pos_b, tcp_quat_b, joints)
             print(
                 f"[INFO] cuRobo env={self._diag_env} retargeted {num_waypoints} ordered waypoints for the valve arc."
             )
 
-    def _raise_if_joint_discontinuity(
+    def _densify_arc(
+        self, tcp_pos_b: torch.Tensor, tcp_quat_b: torch.Tensor, joints: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Subdivide an arc so no joint moves more than ``max_joint_step`` per waypoint.
+
+        The joints are interpolated linearly across each oversized step, so the
+        arm crosses an IK branch change gradually instead of in one tick. The
+        TCP leaves the ideal arc while it does; the TCP waypoints (used only for
+        visualization and the pose command) hold the segment's end pose.
+
+        Args:
+            tcp_pos_b: ``(T, 3)`` TCP positions.
+            tcp_quat_b: ``(T, 4)`` TCP orientations (xyzw).
+            joints: ``(T, J)`` joint waypoints.
+
+        Returns:
+            The densified ``(tcp_pos_b, tcp_quat_b, joints)``.
+        """
+        steps = torch.abs(joints[1:] - joints[:-1]).amax(dim=-1)
+        pieces = torch.clamp(torch.ceil(steps / self.cfg.max_joint_step), min=1).long().tolist()
+        out_pos, out_quat, out_joints = [tcp_pos_b[:1]], [tcp_quat_b[:1]], [joints[:1]]
+        for i, n in enumerate(pieces):
+            frac = torch.arange(1, n + 1, device=joints.device, dtype=joints.dtype)[:, None] / n
+            out_joints.append(joints[i] + frac * (joints[i + 1] - joints[i]))
+            out_pos.append(tcp_pos_b[i + 1].expand(n, -1))
+            out_quat.append(tcp_quat_b[i + 1].expand(n, -1))
+        return torch.cat(out_pos), torch.cat(out_quat), torch.cat(out_joints)
+
+    def _check_joint_discontinuity(
         self,
         joint_waypoints: torch.Tensor,
         joint_names: list[str],
@@ -1997,13 +2065,18 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
         flange_quat_b: torch.Tensor | None = None,
         angles: torch.Tensor | None = None,
         context: int = 2,
-    ) -> None:
+    ) -> bool:
+        """Report whether the arc exceeds ``max_joint_step``, dumping why if it does.
+
+        Raises:
+            RuntimeError: If the arc is infeasible and ``on_infeasible_arc`` is ``"raise"``.
+        """
         if joint_waypoints.shape[1] < 2:
-            return
+            return False
         deltas = torch.abs(joint_waypoints[:, 1:] - joint_waypoints[:, :-1])
         max_joint_step = torch.max(deltas)
         if max_joint_step <= self.cfg.max_joint_step:
-            return
+            return False
         abs_d = deltas[0]
         n_joints = abs_d.shape[-1]
         flat = int(torch.argmax(abs_d).item())
@@ -2030,7 +2103,9 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             context=context,
         )
         print(dump, flush=True)
-        raise RuntimeError(dump)
+        if self.cfg.on_infeasible_arc == "raise":
+            raise RuntimeError(dump)
+        return True
 
     def _format_infeasible_arc_dump(
         self,
@@ -2737,3 +2812,12 @@ class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
     interpolation_buffer_size: int = 128
     max_joint_step: float = 0.15
     """Maximum accepted change of any joint between arc waypoints [rad]."""
+    on_infeasible_arc: str = "densify"
+    """What to do when the retargeted arc exceeds :attr:`max_joint_step`.
+
+    ``"densify"`` prints the infeasible-arc dump, subdivides the arc so every
+    step is within the limit, and flags the segment as an expert fallback
+    (see :meth:`SequentialPoseCommand.expert_fallback`), so DAgger can still
+    label the off-nominal grasps a learner drifts into. ``"raise"`` stops with
+    the dump instead, which is the stricter choice while tuning a sequence.
+    """

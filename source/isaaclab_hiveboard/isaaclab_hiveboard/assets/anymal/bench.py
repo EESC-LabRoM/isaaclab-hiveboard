@@ -205,12 +205,25 @@ ANYMAL_ARM_NEWTON_CFG = ArticulationCfg(
             damping=1.5,
             armature=0.01,
         ),
+        # Wrist flexion carries the same light payload as the roll joints
+        # above (wrist_2 + flange + the 0.63 kg gripper assembly) and needs the
+        # same treatment. On the flat 200/20 gains it held a steady 0.29 rad
+        # offset from its commanded angle with the actuator pinned at its
+        # 40 N.m ceiling, while every other arm joint tracked to 0.002 rad -
+        # gravity on that payload is ~1.3 N.m, so the torque was the discrete
+        # PD fighting itself. That 0.29 rad is 16.6 deg of TCP orientation
+        # error and ~9 cm of position error, which kept the ball-valve
+        # approach from ever reaching its 0.02 m threshold: the sequence
+        # stalled at the grasp and no demonstration could succeed. Raising the
+        # effort ceiling instead makes it worse (the ringing gets more
+        # authority); soft gains plus armature fix it.
         "dynaarm_wrist_flex": IdealPDActuatorCfg(
             joint_names_expr=["dynaarm_wrist_flexion"],
             effort_limit=40.0,
             velocity_limit=4.0,
-            stiffness=200.0,
-            damping=20.0,
+            stiffness=40.0,
+            damping=1.5,
+            armature=0.01,
         ),
         "dynaarm_wrist_rot": IdealPDActuatorCfg(
             joint_names_expr=["dynaarm_wrist_rotation"],

@@ -30,6 +30,7 @@ class DatasetStats:
     obs_keys: dict[str, tuple[int, ...]] = field(default_factory=dict)
     action_dim: int | None = None
     env_name: str | None = None
+    fallback_demos: list[str] = field(default_factory=list)
 
     @property
     def success_rate(self) -> float:
@@ -50,6 +51,8 @@ class DatasetStats:
             "  observations   :",
         ]
         lines.extend(f"    {key:<18} {shape}" for key, shape in sorted(self.obs_keys.items()))
+        lines.append(f"  expert fallback: {len(self.fallback_demos)} demos")
+        lines.extend(f"    {name}" for name in self.fallback_demos)
         return "\n".join(lines)
 
 
@@ -83,8 +86,9 @@ def dataset_stats(path: str) -> DatasetStats:
         num_successes = 0
         obs_keys: dict[str, tuple[int, ...]] = {}
         action_dim = None
+        fallback_demos: list[str] = []
 
-        for name in demo_names:
+        for name in sorted(demo_names, key=_demo_sort_key):
             demo = data[name]
             num_samples += int(demo.attrs.get("num_samples", 0))
             num_successes += int(bool(demo.attrs.get("success", False)))
@@ -92,6 +96,8 @@ def dataset_stats(path: str) -> DatasetStats:
                 obs_keys = {key: tuple(demo["obs"][key].shape[1:]) for key in demo["obs"]}
             if action_dim is None and "actions" in demo:
                 action_dim = int(demo["actions"].shape[-1])
+            if demo_used_fallback(demo):
+                fallback_demos.append(name)
 
     return DatasetStats(
         path=path,
@@ -101,7 +107,22 @@ def dataset_stats(path: str) -> DatasetStats:
         obs_keys=obs_keys,
         action_dim=action_dim,
         env_name=env_name,
+        fallback_demos=fallback_demos,
     )
+
+
+#: robomimic filter keys written by :func:`merge_datasets`. Pass one as
+#: ``train.hdf5_filter_key`` to train on, or exclude, fallback-labelled demos.
+FALLBACK_MASK = "expert_fallback"
+CLEAN_MASK = "expert_clean"
+
+
+def demo_used_fallback(demo: h5py.Group) -> bool:
+    """Whether any step of ``demo`` was labelled by a cuRobo fallback plan.
+
+    Demos recorded before the ``expert_fallback`` key existed count as clean.
+    """
+    return "expert_fallback" in demo and bool(demo["expert_fallback"][()].any())
 
 
 def merge_datasets(inputs: list[str], output: str, env_name: str | None = None) -> DatasetStats:
@@ -133,6 +154,7 @@ def merge_datasets(inputs: list[str], output: str, env_name: str | None = None) 
     reference_keys: set[str] | None = None
     demo_index = 0
     total_samples = 0
+    masks: dict[str, list[str]] = {FALLBACK_MASK: [], CLEAN_MASK: []}
 
     with h5py.File(output, "w") as dst:
         dst.attrs["format_version"] = 1
@@ -159,12 +181,17 @@ def merge_datasets(inputs: list[str], output: str, env_name: str | None = None) 
                             "cannot train on. Re-collect the rounds with the same observation group."
                         )
 
-                    src_data.copy(demo, data_group, name=f"demo_{demo_index}")
+                    new_name = f"demo_{demo_index}"
+                    src_data.copy(demo, data_group, name=new_name)
+                    masks[FALLBACK_MASK if demo_used_fallback(demo) else CLEAN_MASK].append(new_name)
                     total_samples += int(demo.attrs.get("num_samples", 0))
                     demo_index += 1
 
         data_group.attrs["total"] = total_samples
         data_group.attrs["env_args"] = json.dumps({"env_name": env_name or "", "type": 2})
+        mask_group = dst.create_group("mask")
+        for key, names in masks.items():
+            mask_group.create_dataset(key, data=[name.encode() for name in names], dtype=h5py.string_dtype())
 
     return dataset_stats(output)
 
@@ -238,6 +265,9 @@ def write_normalized_actions(src: str, dst: str, stats: tuple[list[float], list[
         for key, value in source.attrs.items():
             target.attrs[key] = value
         source.copy(source["data"], target, name="data")
+        # Filter keys, so hdf5_filter_key still resolves on the copy robomimic reads.
+        if "mask" in source:
+            source.copy(source["mask"], target, name="mask")
 
         for name in target["data"]:
             if not name.startswith("demo_") or "actions" not in target["data"][name]:
@@ -284,6 +314,30 @@ def load_action_norm(checkpoint: str) -> tuple[list[float], list[float]] | None:
                 payload = json.load(handle)
             return payload["action_min"], payload["action_max"]
     return None
+
+
+def load_dataset_action_norm(data) -> tuple[list[float], list[float]] | None:
+    """Read the stats :func:`write_normalized_actions` stamped on a dataset.
+
+    Args:
+        data: A checkpoint config's ``train.data``: a path, or robomimic's
+            list of ``{"path": ...}`` entries.
+
+    Returns:
+        ``(minimum, maximum)``, or None when the dataset is missing or holds
+        raw actions.
+    """
+    if isinstance(data, (list, tuple)):
+        data = data[0] if data else None
+    if isinstance(data, dict):
+        data = data.get("path")
+    if not isinstance(data, str) or not os.path.exists(data):
+        return None
+    with h5py.File(data, "r") as handle:
+        attrs = handle["data"].attrs if "data" in handle else {}
+        if "action_min" not in attrs or "action_max" not in attrs:
+            return None
+        return list(map(float, attrs["action_min"])), list(map(float, attrs["action_max"]))
 
 
 def rotate_recorder_dataset(env, dataset_dir: str, dataset_name: str) -> str:

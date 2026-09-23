@@ -16,6 +16,7 @@ import dataclasses
 import json
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -31,6 +32,10 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
 
 # Repository-level home for per-task setups, written by scripts/command_edit.py.
 CONFIG_DIR = Path(__file__).resolve().parents[4] / "configs"
+
+# Task-id marker for a variant that shares its base task's command setup, as in
+# ``Isaac-HiveBoard-Anymal-CuroboValve-Play-v0`` -> ``...-CuroboValve-v0``.
+_VARIANT_SUFFIX = re.compile(r"-Play(-v\d+)?$")
 
 COMMAND_TYPES = {
     cls.__name__: cls
@@ -211,7 +216,7 @@ def validate_setup(data: dict, *, task: str | None = None) -> tuple[list, dict]:
     for name in ("task", "asset_name", "body_name"):
         if not isinstance(data.get(name), str) or not data[name]:
             raise ValueError(f"Setup needs {name}")
-    if task is not None and data["task"] != task:
+    if task is not None and base_task(data["task"]) != base_task(task):
         raise ValueError(f"Setup belongs to {data['task']!r}, not {task!r}")
     offset = data.get("body_offset")
     if not isinstance(offset, dict) or set(offset) != {"pos", "rot"}:
@@ -225,9 +230,42 @@ def validate_setup(data: dict, *, task: str | None = None) -> tuple[list, dict]:
     return [decode_command(cmd) for cmd in data["commands"]], offset
 
 
+def base_task(task: str) -> str:
+    """The task whose command setup ``task`` shares.
+
+    A ``-Play-v0`` variant differs from its base task only in events and
+    command sampling - deterministic resets, a fixed open/close direction. The
+    commands and the TCP offset are the same tuned sequence, so the two share
+    one setup file. Without this the variants silently diverged: the base task
+    picked up ``configs/<task>.json`` while ``-Play-v0`` looked for a file that
+    was never written and fell back to the as-coded sequence, so the variant
+    meant to be the *deterministic* one was the only one not running the tuned
+    commands.
+    """
+    return _VARIANT_SUFFIX.sub(lambda match: match.group(1) or "", task)
+
+
 def default_setup_path(task: str) -> Path:
-    """Setup a task uses when none is given: configs/<task>.json."""
+    """Where a setup for ``task`` is written: ``configs/<task>.json``.
+
+    This is the save destination. Use :func:`resolve_setup_path` to find the
+    file a task should *read*, which falls back to the base task's setup.
+    """
     return CONFIG_DIR / f"{task}.json"
+
+
+def resolve_setup_path(task: str) -> Path | None:
+    """The setup ``task`` runs with when none is given, or ``None`` if there is none.
+
+    A task's own ``configs/<task>.json`` wins, so a variant can still be given
+    a setup of its own by saving one. Otherwise a variant falls back to
+    :func:`base_task`'s file.
+    """
+    own = default_setup_path(task)
+    if own.is_file():
+        return own
+    shared = default_setup_path(base_task(task))
+    return shared if shared.is_file() else None
 
 
 def load_setup(path: str | Path) -> dict:

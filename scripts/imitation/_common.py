@@ -37,6 +37,18 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "when a domain-randomization term defeats the scripted expert and would otherwise make "
         "every episode a rejected demonstration.",
     )
+    parser.add_argument(
+        "--setup",
+        default=None,
+        help="Command and TCP settings saved by scripts/command_edit.py. "
+        "Default: configs/<task>.json, or the base task's file for a -Play-v0 variant - "
+        "the same setup scripts/play.py runs, so the expert here is the sequence you tuned there.",
+    )
+    parser.add_argument(
+        "--no_setup",
+        action="store_true",
+        help="Ignore the task's configs/<task>.json and run the task as coded.",
+    )
     add_launcher_args(parser)
 
 
@@ -70,6 +82,11 @@ def parse_with_presets(parser: argparse.ArgumentParser) -> argparse.Namespace:
 def build_env_cfg(args: argparse.Namespace):
     """Resolve the task config and apply the shared CLI overrides.
 
+    The saved command setup is applied exactly as ``scripts/play.py`` applies
+    it. The scripted expert *is* the task's command sequence, so a dataset
+    collected without the setup would transcribe a different expert from the
+    one the task was tuned and watched with.
+
     Args:
         args: Parsed arguments from :func:`parse_with_presets`.
 
@@ -77,6 +94,7 @@ def build_env_cfg(args: argparse.Namespace):
         The resolved environment configuration.
     """
     env_cfg, _ = resolve_task_config(args.task, "")
+    _apply_command_setup(env_cfg, args)
     # The recorder stamps this into the dataset's env_args, which is how a
     # dataset (and anything merged from it) stays traceable to its task.
     env_cfg.env_name = args.task
@@ -94,6 +112,32 @@ def build_env_cfg(args: argparse.Namespace):
         setattr(env_cfg.events, term, None)
         print(f"[INFO] Disabled event term: {term}")
     return env_cfg
+
+
+def _apply_command_setup(env_cfg, args: argparse.Namespace) -> None:
+    """Apply the task's saved command setup, mirroring ``scripts/play.py``.
+
+    Args:
+        env_cfg: Freshly resolved environment configuration.
+        args: Parsed arguments, supplying ``setup`` and ``no_setup``.
+
+    Raises:
+        SystemExit: If both ``--setup`` and ``--no_setup`` are given.
+    """
+    from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup, resolve_setup_path
+
+    setup = getattr(args, "setup", None)
+    if getattr(args, "no_setup", False):
+        if setup:
+            raise SystemExit("--setup and --no_setup are mutually exclusive.")
+        return
+    if not setup:
+        resolved = resolve_setup_path(args.task)
+        if resolved is None:
+            return
+        setup = str(resolved)
+    print(f"[INFO] Using saved setup {setup} (pass --no_setup to skip).")
+    apply_setup(env_cfg, load_setup(setup), task=args.task)
 
 
 def _split_csv(value: str | None) -> list[str]:

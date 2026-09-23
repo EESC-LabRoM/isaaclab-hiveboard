@@ -974,7 +974,23 @@ class RotateGraspPlaneTests(unittest.TestCase):
         handler = build_segments(term, [cfg], initial)[0].handler
         self.assertAlmostEqual(float(handler.angle_rad_tensor[0]), -math.pi, places=6)
 
-    def test_discontinuous_curobo_arc_raises_instead_of_falling_back(self):
+    def test_discontinuous_curobo_arc_raises_when_configured_to(self):
+        term = geometry_term()
+        cfg = CuroboPlannedRotateFrameCfg(
+            frame_name="target_frame",
+            target_frame_name="goal",
+            robot_joint_names=["arm_sh0", "arm_el0"],
+            use_valve_angle=False,
+            max_joint_step=0.15,
+            on_infeasible_arc="raise",
+        )
+        handler = _CuroboPlannedRotateFrameHandler(cfg, term)
+        waypoints = torch.zeros(1, 3, 2)
+        waypoints[0, 1, 0] = 0.4
+        with self.assertRaisesRegex(RuntimeError, r"infeasible: max joint step=0\.400 rad"):
+            handler._check_joint_discontinuity(waypoints, ["arm_sh0", "arm_el0"])
+
+    def test_discontinuous_curobo_arc_is_densified_by_default(self):
         term = geometry_term()
         cfg = CuroboPlannedRotateFrameCfg(
             frame_name="target_frame",
@@ -986,8 +1002,19 @@ class RotateGraspPlaneTests(unittest.TestCase):
         handler = _CuroboPlannedRotateFrameHandler(cfg, term)
         waypoints = torch.zeros(1, 3, 2)
         waypoints[0, 1, 0] = 0.4
-        with self.assertRaisesRegex(RuntimeError, r"infeasible: max joint step=0\.400 rad"):
-            handler._raise_if_joint_discontinuity(waypoints, ["arm_sh0", "arm_el0"])
+        waypoints[0, 2, 0] = 0.45
+        self.assertTrue(handler._check_joint_discontinuity(waypoints, ["arm_sh0", "arm_el0"]))
+        tcp_pos = torch.arange(9, dtype=torch.float32).reshape(3, 3)
+        tcp_quat = torch.tensor([[0.0, 0.0, 0.0, 1.0]]).repeat(3, 1)
+        pos, quat, joints = handler._densify_arc(tcp_pos, tcp_quat, waypoints[0])
+        # 0 -> 0.4 needs three 0.133 rad steps; 0.4 -> 0.45 stays one step.
+        self.assertEqual(joints.shape, (5, 2))
+        self.assertLessEqual(float(torch.abs(joints[1:] - joints[:-1]).max()), 0.15 + 1e-6)
+        torch.testing.assert_close(joints[0], waypoints[0, 0])
+        torch.testing.assert_close(joints[-1], waypoints[0, -1])
+        self.assertEqual(pos.shape, (5, 3))
+        self.assertEqual(quat.shape, (5, 4))
+        torch.testing.assert_close(pos[-1], tcp_pos[-1])
 
     def test_infeasible_arc_dump_includes_robot_state_and_requested_plan(self):
         term = geometry_term()
@@ -1002,6 +1029,7 @@ class RotateGraspPlaneTests(unittest.TestCase):
             use_valve_angle=False,
             angle_deg=-90.0,
             max_joint_step=0.15,
+            on_infeasible_arc="raise",
         )
         handler = _CuroboPlannedRotateFrameHandler(cfg, term)
         handler.angle_rad_tensor[:] = -math.pi / 2
@@ -1021,7 +1049,7 @@ class RotateGraspPlaneTests(unittest.TestCase):
         tcp_quat[:, 3] = 1.0
         angles = torch.linspace(0.0, -math.pi / 2, n_wp)
         with self.assertRaises(RuntimeError) as caught:
-            handler._raise_if_joint_discontinuity(
+            handler._check_joint_discontinuity(
                 waypoints,
                 ["arm_sh0", "arm_wr1"],
                 tcp_pos_b=tcp_pos,
