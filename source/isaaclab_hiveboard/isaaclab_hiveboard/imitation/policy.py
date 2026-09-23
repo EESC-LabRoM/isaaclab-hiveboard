@@ -47,9 +47,15 @@ class RobomimicPolicy:
         # Training may have rescaled actions into [-1, 1] so the actor's tanh
         # could represent them. Undo that here, so callers always receive
         # actions in the environment's own units.
-        from .dataset import load_action_norm
+        from .dataset import load_action_norm, load_dataset_action_norm
 
+        # action_norm.json only lands beside the checkpoints once training
+        # ends, so an intermediate checkpoint falls back to the stats stamped
+        # on the normalized dataset it trained on. Without them it would
+        # silently emit [-1, 1] actions in place of joint angles.
         action_norm = load_action_norm(checkpoint)
+        if action_norm is None:
+            action_norm = load_dataset_action_norm(self._policy.global_config.train.data)
         if action_norm is None:
             self._action_lo = None
             self._action_span = None

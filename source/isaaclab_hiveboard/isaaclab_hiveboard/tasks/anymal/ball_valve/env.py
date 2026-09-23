@@ -67,7 +67,11 @@ class AnymalBallValveEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 15
-        self.episode_length_s = 5.0
+        # The scripted sequence spends roughly 5.2 s on the -90 degree turn
+        # alone (90 degrees at 0.3 rad/s), before the two approach legs, the
+        # grasp and the settle. At the previous 5.0 s the episode timed out
+        # mid-turn and no demonstration could ever succeed.
+        self.episode_length_s = 25.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"

@@ -3,8 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import math
-
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
@@ -14,6 +12,14 @@ from isaaclab_hiveboard.mdp.terminations import (
     is_done,
     valve_rotation_success,
 )
+
+# Angular tolerance on the valve's final angle, in radians. Same value and same
+# reasoning as the Spot ball valve (see ``tasks/spot/ball_valve/configs/
+# terminations.py``): this was ``math.radians(0.010)``, a 1.7e-4 rad band the
+# scripted expert never enters, so ``success`` never fired and demo collection
+# wrote empty datasets. Two degrees sits above the ~1 degree the cuRobo
+# sequence actually achieves, without accepting a visibly unturned valve.
+VALVE_SUCCESS_TOLERANCE_RAD = 0.035
 
 
 @configclass
@@ -33,6 +39,6 @@ class DeltaCollectionTerminationsCfg(TerminationsCfg):
         params={
             "command_name": "pose_command",
             "asset_cfg": SceneEntityCfg("ball_valve", joint_names=["RevoluteJoint"]),
-            "threshold_rad": math.radians(0.010),
+            "threshold_rad": VALVE_SUCCESS_TOLERANCE_RAD,
         },
     )

@@ -209,6 +209,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg",
+        "robomimic_bc_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.agents:robomimic/bc.json",
     },
 )
 
@@ -218,6 +219,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.env:AnymalBallValveEnvCfg_PLAY",
+        "robomimic_bc_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve.agents:robomimic/bc.json",
     },
 )
 

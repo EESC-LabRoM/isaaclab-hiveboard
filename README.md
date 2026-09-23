@@ -362,7 +362,16 @@ The privileged tier is what the AprilTags supply, so no state estimator is
 needed at deployment. The task-specification tier matters on the ball valve
 because episodes sample both open and close goals - without it a policy cannot
 know which way to turn. Contact forces are excluded even though the task
-records them, since Spot's gripper has no force sensing on hardware.
+records them, since neither Spot's gripper nor the 2F-140 has force sensing on
+hardware.
+
+`Isaac-HiveBoard-Anymal-BallValve-v0` carries the same group, keyed
+identically, so the pipeline runs on either robot with no change beyond
+`--task`. Only the underlying joints differ: six DynaArm joints in
+`arm_joint_pos`/`arm_joint_vel` against Spot's seven, and `gripper_pos` reading
+the 2F-140's `finger_joint` motor (the rest of the parallel linkage is driven
+by USD constraints, so it carries no independent information). Datasets from
+the two robots are *not* interchangeable - the key shapes differ.
 
 The Spot lamp group follows the same shape, with `object_pos`, `object_quat`
 and `lamp_joint_pos` as its privileged tier.
@@ -413,6 +422,71 @@ uv run python scripts/imitation/collect_demos.py \
   --task Isaac-HiveBoard-Spot-BallValve-v0 --num_envs 1 \
   --disable_events valve_joint_parameters
 ```
+
+**`Isaac-HiveBoard-Anymal-BallValve-v0`** needed three corrections before its
+expert could produce anything. Two were the settings the Spot task had already
+needed - `episode_length_s` 5.0 -> 25.0 and the `math.radians(0.010)` success
+tolerance -> 0.035 rad - and they were necessary but not sufficient.
+
+The third was an actuator, and it is worth recording how it presented, because
+it looked exactly like a bad grasp pose. The sequence stalled at command index
+1 (`lever_pivot`) with the TCP 9.4 cm high and 16.6 degrees off, cuRobo
+reporting a good plan tracked to its last waypoint:
+
+```
+[SEQ]   env=0 seg 0 done in 2.40s -> seg 1
+[STALL] env=0 stuck on seg 1/6 for >=4.0s
+[STALL] target_pos_b=[0.970, -0.024, 0.204] ee_pos_b=[0.956, -0.022, 0.297]
+        pos_err_m=0.0940 ori_err_deg=16.63
+[STALL] curobo: waypoint 21/21
+```
+
+Authoring a tuned `configs/Isaac-HiveBoard-Anymal-BallValve-v0.json` moved the
+target but not the error, which ruled out the command sequence. Comparing
+commanded against measured joints found the cause: five of the six arm joints
+tracked to 0.002 rad, while `dynaarm_wrist_flexion` held a steady **0.29 rad**
+offset with its actuator pinned at the 40 N.m ceiling - against a 0.63 kg
+gripper assembly whose gravity load is ~1.3 N.m. That 0.29 rad *is* the
+16.6 degrees of orientation error and most of the 9.4 cm.
+
+It was the discrete PD fighting itself, the same failure the comment above
+`dynaarm_forearm` in `assets/anymal/bench.py` describes for the roll joints:
+wrist flexion was the last light joint still on the flat 200/20 gains with no
+armature. Raising the effort ceiling makes it *worse* (the ringing gets more
+authority - the sequence then fails to finish even segment 0). Soft gains plus
+armature, matching its neighbours, fix it:
+
+| `dynaarm_wrist_flex` | stiffness | damping | armature | Expert on `-Play-v0` |
+| --- | --- | --- | --- | --- |
+| Before | 200.0 | 20.0 | none | 0/3 |
+| Raised effort ceiling to 200 N.m | 200.0 | 20.0 | none | 0/2, worse |
+| After | 40.0 | 1.5 | 0.01 | **2/2** |
+
+The full sequence now runs: approach, grasp, a 5.3 s rotate, release, retreat.
+
+On the randomized task the blocker is the opposite of Spot's. Toggling each
+randomization term alone:
+
+| Setting | Expert success |
+| --- | --- |
+| Full randomization | 0/8 |
+| `valve_joint_parameters` disabled (friction) | 0/6 |
+| `reset_valve_root` disabled (valve pose) | 6/6 |
+
+Valve friction, which defeats Spot's gripper, does not bother the 2F-140; the
+`reset_valve_root` pose ranges (+-0.20 m x, +-0.30 m y and z, +-30 degrees
+roll/pitch, +-36 degrees yaw) do. Until those ranges are narrowed to what the
+DynaArm reaches, collect with the pose term switched off - friction, material
+and valve-actuator randomization all stay on:
+
+```bash
+uv run python scripts/imitation/collect_demos.py \
+  --task Isaac-HiveBoard-Anymal-BallValve-v0 --num_envs 1 \
+  --disable_events reset_valve_root
+```
+
+That dataset has no variety in valve pose, so a policy trained on it will not
+generalize across valve placements - it teaches the task, not the reach.
 
 **`Isaac-HiveBoard-Spot-Lamp-v0`** does not currently succeed at all. Its
 sixteen-quarter-turn sequence is still at command index 1 when the episode
@@ -492,6 +566,19 @@ uv run python scripts/play.py \
   --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
   --setup logs/command_setup.json
 ```
+
+#### Which setup a task runs
+
+With no `--setup`, a task runs `configs/<task>.json` when that file exists.
+**A `-Play-v0` variant falls back to its base task's file**: the two differ only
+in events and command sampling, so they share one tuned command sequence. Save
+a `configs/<task>-Play-v0.json` if a variant ever needs its own - a task's own
+file always wins - and pass `--no-setup` to run the sequence as coded in Python.
+
+This fallback applies everywhere a setup is loaded, `scripts/imitation/`
+included: the scripted expert *is* the command sequence, so collecting without
+the setup would transcribe a different expert from the one you tuned in the
+editor and watched in `play.py`.
 
 Replay with `--setup` automatically shows the active command path: yellow waypoint
 spheres, a green next-waypoint marker, RGB orientation frames along the path, and

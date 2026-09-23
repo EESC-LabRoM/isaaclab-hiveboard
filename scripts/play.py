@@ -253,7 +253,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--setup",
         help="Command and TCP settings saved by scripts/command_edit.py. "
-        "Default: configs/<task>.json when that file exists.",
+        "Default: configs/<task>.json, or the base task's file for a -Play-v0 variant.",
     )
     parser.add_argument(
         "--no-setup",
@@ -361,11 +361,11 @@ def main() -> int:
     if args.no_setup and args.setup:
         raise SystemExit("--setup and --no-setup are mutually exclusive.")
     if not args.no_setup:
-        from isaaclab_hiveboard.utils.command_setup import apply_setup, default_setup_path, load_setup
+        from isaaclab_hiveboard.utils.command_setup import apply_setup, load_setup, resolve_setup_path
 
         if not args.setup:
-            default_setup = default_setup_path(args.task)
-            if default_setup.is_file():
+            default_setup = resolve_setup_path(args.task)
+            if default_setup is not None:
                 args.setup = str(default_setup)
                 print(f"[INFO] Using saved setup {args.setup} (pass --no-setup to skip).")
         if args.setup:

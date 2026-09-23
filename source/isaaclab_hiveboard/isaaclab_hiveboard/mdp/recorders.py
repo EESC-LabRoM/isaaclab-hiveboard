@@ -104,6 +104,25 @@ class PreStepExpertActionsRecorder(RecorderTerm):
         return "actions", expert_actions
 
 
+class PreStepExpertFallbackRecorder(RecorderTerm):
+    """Record whether the expert's label for this step came from a cuRobo fallback.
+
+    Stored per step as ``data/demo_*/expert_fallback`` so demonstrations and
+    DAgger corrections produced by a patched or failed plan can be found and
+    filtered later (see :func:`isaaclab_hiveboard.imitation.merge_datasets`).
+    Tasks without the command term record nothing.
+    """
+
+    def record_pre_step(self):
+        manager = self._env.command_manager
+        if self.cfg.command_name not in manager.active_terms:
+            return None, None
+        term = manager.get_term(self.cfg.command_name)
+        if not hasattr(term, "expert_fallback"):
+            return None, None
+        return "expert_fallback", term.expert_fallback()
+
+
 @configclass
 class PreStepActionsRecorderCfg(RecorderTermCfg):
     class_type: type[RecorderTerm] = PreStepActionsRecorder
@@ -154,6 +173,12 @@ class PreStepExpertActionsRecorderCfg(RecorderTermCfg):
 
 
 @configclass
+class PreStepExpertFallbackRecorderCfg(RecorderTermCfg):
+    class_type: type[RecorderTerm] = PreStepExpertFallbackRecorder
+    command_name: str = "pose_command"
+
+
+@configclass
 class RobomimicRecorderCfg(RecorderManagerBaseCfg):
     """Export demonstrations in the layout robomimic's SequenceDataset expects.
 
@@ -165,6 +190,7 @@ class RobomimicRecorderCfg(RecorderManagerBaseCfg):
 
     record_obs = PreStepObservationGroupRecorderCfg(group_name="bc", key="obs")
     record_actions = PreStepActionsRecorderCfg()
+    record_expert_fallback = PreStepExpertFallbackRecorderCfg()
 
     dataset_file_handler_class_type: type = HDF5DatasetFileHandler
     dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
