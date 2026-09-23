@@ -31,6 +31,78 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Franka-BallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.ball_valve.env:FrankaBallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-BallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.ball_valve.env:FrankaBallValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-CircuitBreaker-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.circuit_breaker.env:FrankaCircuitBreakerEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-CircuitBreaker-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.circuit_breaker.env:FrankaCircuitBreakerEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-HighTorqueValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.high_torque_valve.env:FrankaHighTorqueValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-HighTorqueValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.high_torque_valve.env:FrankaHighTorqueValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-SmallValve-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.small_valve.env:FrankaSmallValveEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-SmallValve-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.small_valve.env:FrankaSmallValveEnvCfg_PLAY",
+    },
+)
+
+gym.register(
     id="Spot-Manipulation-Lamp",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

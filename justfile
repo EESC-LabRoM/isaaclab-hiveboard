@@ -69,13 +69,21 @@ play-spot-high-torque:
 play-spot-small-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Spot-SmallValve-v0"
 
-# Play Franka Lever Valve with pose diagnostics
-play-franka-lever:
-    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-LeverValve-v0" --pose-debug
+# Play Franka Ball Valve with pose diagnostics
+play-franka-ball-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-BallValve-Play-v0" --pose-debug
 
 # Play Franka Circuit Breaker with pose diagnostics
 play-franka-breaker:
-    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-Play-v0" --pose-debug
+
+# Play Franka High-Torque Valve with pose diagnostics
+play-franka-high-torque:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-HighTorqueValve-Play-v0" --pose-debug
+
+# Play Franka Small Valve with pose diagnostics
+play-franka-small-valve:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-SmallValve-Play-v0" --pose-debug
 
 # Inspect ANYmal-D + DynaArm + Robotiq 2F-140 TCP axes
 play-anymal-only:
