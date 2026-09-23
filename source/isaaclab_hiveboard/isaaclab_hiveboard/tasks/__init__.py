@@ -81,6 +81,15 @@ gym.register(
 ##
 
 gym.register(
+    id="Isaac-HiveBoard-Franka-Button-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.button.env:FrankaButtonEnvCfg",
+    },
+)
+
+gym.register(
     id="Isaac-HiveBoard-Franka-GateValveSmall-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

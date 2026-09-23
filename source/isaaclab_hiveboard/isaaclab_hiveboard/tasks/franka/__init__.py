@@ -10,6 +10,7 @@ from .lever_valve.env import FrankaLeverValveEnvCfg
 from .only_robot.env import FrankaOnlyRobotEnvCfg
 from .lamp.env import FrankaLampEnvCfg
 from .gate_valve_small.env import FrankaGateValveSmallEnvCfg
+from .button.env import FrankaButtonEnvCfg
 
 __all__ = [
     "FrankaGateValveSmallEnvCfg",
@@ -17,4 +18,5 @@ __all__ = [
     "FrankaCircuitBreakerEnvCfg",
     "FrankaOnlyRobotEnvCfg",
     "FrankaLampEnvCfg",
+    "FrankaButtonEnvCfg",
 ]

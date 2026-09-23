@@ -250,6 +250,10 @@ def main():
         from isaaclab_hiveboard.tasks.franka.lamp.env import FrankaLampEnvCfg
 
         env_cfg = FrankaLampEnvCfg()
+    elif args_cli.task == "Isaac-HiveBoard-Franka-Button-v0":
+        from isaaclab_hiveboard.tasks.franka.button.env import FrankaButtonEnvCfg
+
+        env_cfg = FrankaButtonEnvCfg()
     else:
         # Fallback to standard Gym registration if task is not in the explicit list
         print(f"[INFO] Using standard Gym registration for task: {args_cli.task}")

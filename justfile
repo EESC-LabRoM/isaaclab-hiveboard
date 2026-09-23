@@ -35,6 +35,10 @@ play-franka-small-valve:
 play-franka-breaker:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
 
+# Play Franka hidden push button with pose diagnostics
+play-franka-button:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-Button-v0" --pose-debug
+
 # Inspect ANYmal-D + DynaArm + Robotiq 2F-140 TCP axes
 play-anymal-only:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-OnlyRobot-v0"

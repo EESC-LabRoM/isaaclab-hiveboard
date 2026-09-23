@@ -54,6 +54,7 @@ uv sync
 | `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
 | `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
 | `Isaac-HiveBoard-Franka-GateValveSmall-v0` | Franka FR3 | Small Gate Valve | Differential IK; four 90° grasp/release cycles |
+| `Isaac-HiveBoard-Franka-Button-v0` | Franka FR3 | Covered Push Button | Differential IK; open cover and press 10 mm |
 
 List all available tasks:
 
@@ -102,6 +103,12 @@ Play Franka circuit breaker:
 
 ```bash
 uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-CircuitBreaker-v0" --pose-debug
+```
+
+Play the Franka hidden push-button task:
+
+```bash
+uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-Button-v0" --pose-debug
 ```
 
 ### Collecting Demonstrations
