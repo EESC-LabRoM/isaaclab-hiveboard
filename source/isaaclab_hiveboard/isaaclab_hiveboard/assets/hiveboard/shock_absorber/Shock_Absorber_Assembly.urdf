@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!--
+  Shock absorber: base plate + spring (fixed) and the pin on a prismatic joint
+  through the spring eye. Upstream Shock_Absorber_Assembly.urdf
+  (dependencies/HiveBoard) is one rigid link; this re-authoring frees the pin,
+  turns the plate normal to +X like the other mechanisms (plate back face at
+  x = 0, spring running up +Z) and gives the plate a primitive collider.
+  The spring's collision mesh is replaced by CoACD parts in the Newton overlay.
+  PrismaticJoint = 0 seats the pin; +X pulls it out.
+-->
+<robot name="Shock_Absorber_Assembly">
+  <link name="board">
+    <inertial><origin xyz="0.0075 0 0" rpy="0 0 0" /><mass value="0.1" /><inertia ixx="1e-04" ixy="0" ixz="0" iyy="1e-04" iyz="0" izz="1e-04" /></inertial>
+    <visual>
+      <origin xyz="0.015 0 0" rpy="3.1415927 1.5707963 0" />
+      <geometry><mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Shock Absorber/meshes/MeshInstance_Corpo1.obj" scale="0.001 0.001 0.001" /></geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.020958 0.000111 0.045" rpy="0 0 0" />
+      <geometry><mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Shock Absorber/meshes/Corpo3.obj" scale="0.001 0.001 0.001" /></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.0075 0 0" rpy="0 0 0" />
+      <geometry><box size="0.015 0.076 0.076" /></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.020958 0.000111 0.045" rpy="0 0 0" />
+      <geometry><mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Shock Absorber/meshes/Corpo3.obj" scale="0.001 0.001 0.001" /></geometry>
+    </collision>
+  </link>
+  <link name="pin">
+    <inertial><origin xyz="0 0 0.018" rpy="0 0 0" /><mass value="0.02" /><inertia ixx="1e-06" ixy="0" ixz="0" iyy="1e-06" iyz="0" izz="1e-06" /></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Shock Absorber/meshes/MeshInstance_1_Corpo1.obj" scale="0.001 0.001 0.001" /></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry><mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Shock Absorber/meshes/MeshInstance_1_Corpo1.obj" scale="0.001 0.001 0.001" /></geometry>
+    </collision>
+  </link>
+  <!-- Child frame has +Z along the pin, which is board +X. -->
+  <joint name="PrismaticJoint" type="prismatic">
+    <origin xyz="0 0.000111 0.035" rpy="0 1.5707963 0" />
+    <parent link="board" />
+    <child link="pin" />
+    <axis xyz="0 0 1" />
+    <limit lower="0.0" upper="0.025" effort="100.0" velocity="1.0" />
+  </joint>
+</robot>

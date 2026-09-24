@@ -24,6 +24,9 @@ button slide are already articulated upstream).
 Drawer / key: UUC conversion of the articulated URDFs in ``hiveboard/drawer``
 and ``hiveboard/key`` (the upstream ones have no joints), plus a CoACD overlay
 for the drawer so its handle tab gets its own collider.
+Threads / peg / shock absorber: UUC conversion of the re-authored URDFs in
+``hiveboard/{m8_thread,m30_thread,peg_insertion,shock_absorber}``, plus a
+CoACD overlay for the shock-absorber spring.
 
 UUC needs a Python that can ``import urdf_usd_converter`` (isolated venv;
 the project venv does not ship it). Overlay rewrite is kitless.
@@ -117,6 +120,22 @@ DRAWER_TARGETS: tuple[tuple[str, str, float], ...] = (("Geometry/base/drawer", "
 KEY_URDF = EXT_ASSETS / "hiveboard/key/Key_Assembly.urdf"
 KEY_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc"
 
+# Threads, peg and shock absorber: re-authored URDFs (upstream welds the peg
+# and pin, and collides with base hulls that cone over the thread). The
+# spring's single hull would swallow the pin head, so it gets CoACD parts.
+M8_URDF = EXT_ASSETS / "hiveboard/m8_thread/M8_Assy.urdf"
+M8_UUC_DIR = EXT_ASSETS / "hiveboard/m8_thread/usd/uuc"
+M30_URDF = EXT_ASSETS / "hiveboard/m30_thread/M30.urdf"
+M30_UUC_DIR = EXT_ASSETS / "hiveboard/m30_thread/usd/uuc"
+PEG_URDF = EXT_ASSETS / "hiveboard/peg_insertion/Peg_Insertion.urdf"
+PEG_UUC_DIR = EXT_ASSETS / "hiveboard/peg_insertion/usd/uuc"
+SHOCK_URDF = EXT_ASSETS / "hiveboard/shock_absorber/Shock_Absorber_Assembly.urdf"
+SHOCK_USD_DIR = EXT_ASSETS / "hiveboard/shock_absorber/usd"
+SHOCK_UUC_DIR = SHOCK_USD_DIR / "uuc"
+SHOCK_OVERLAY = SHOCK_USD_DIR / "Shock_Absorber_Assembly_uuc_newton.usda"
+# 0.1 gives ~40 parts; 0.05 (74 parts) segfaults the ANYmal scene's Newton import.
+SHOCK_TARGETS: tuple[tuple[str, str, float], ...] = (("Geometry/board", "Corpo3", 0.1),)
+
 # (label, UUC output, default prim, [(joint name, schema)]) checked by verify().
 ARTICULATED_UUC_ASSETS = (
     (
@@ -127,6 +146,15 @@ ARTICULATED_UUC_ASSETS = (
     ),
     ("drawer", DRAWER_OVERLAY, "Drawer_Assembly", (("PrismaticJoint", "PhysicsPrismaticJoint"),)),
     ("key", KEY_UUC_DIR / "Key_Assembly.usda", "Key_Assembly", (("RevoluteJoint", "PhysicsRevoluteJoint"),)),
+    *(
+        (label, usda, prim, (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")))
+        for label, usda, prim in (
+            ("m8_thread", M8_UUC_DIR / "M8_Assy.usda", "M8_Assy"),
+            ("m30_thread", M30_UUC_DIR / "M30.usda", "M30"),
+            ("peg_insertion", PEG_UUC_DIR / "Peg_Insertion.usda", "Peg_Insertion"),
+        )
+    ),
+    ("shock_absorber", SHOCK_OVERLAY, "Shock_Absorber_Assembly", (("PrismaticJoint", "PhysicsPrismaticJoint"),)),
 )
 
 SPOT_MESH_DIR = EXT_ASSETS / "spot/meshes"
@@ -478,6 +506,16 @@ def render_sm_overlay() -> str:
     )
 
 
+def render_shock_overlay() -> str:
+    return render_coacd_overlay(
+        urdf=SHOCK_URDF,
+        uuc_dir=SHOCK_UUC_DIR,
+        usda_name="Shock_Absorber_Assembly.usda",
+        default_prim="Shock_Absorber_Assembly",
+        targets=SHOCK_TARGETS,
+    )
+
+
 def verify() -> list[str]:
     """Check generated UUC USD resolves. Empty list = ok."""
     from pxr import Usd, UsdGeom, UsdPhysics  # noqa: PLC0415
@@ -585,7 +623,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--assets",
-        choices=["all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve", "lamp", "button", "drawer", "key"],
+        choices=[
+            "all", "spot", "ball_valve", "circuit_breaker", "high_torque_valve", "small_valve", "lamp",
+            "button", "drawer", "key", "m8_thread", "m30_thread", "peg_insertion", "shock_absorber",
+        ],
         default="all",
         help="Which asset to process (default: all).",
     )
@@ -624,6 +665,17 @@ def main(argv: list[str] | None = None) -> int:
     want_button = args.assets in ("all", "button")
     want_drawer = args.assets in ("all", "drawer")
     want_key = args.assets in ("all", "key")
+    want_shock = args.assets in ("all", "shock_absorber")
+    uuc_only = [
+        (label, urdf, out_dir)
+        for label, urdf, out_dir in (
+            ("m8_thread", M8_URDF, M8_UUC_DIR),
+            ("m30_thread", M30_URDF, M30_UUC_DIR),
+            ("peg_insertion", PEG_URDF, PEG_UUC_DIR),
+            ("shock_absorber", SHOCK_URDF, SHOCK_UUC_DIR),
+        )
+        if args.assets in ("all", label)
+    ]
 
     if args.verify_only:
         problems = verify()
@@ -653,6 +705,9 @@ def main(argv: list[str] | None = None) -> int:
         if want_key:
             run_uuc_conversion(KEY_URDF, KEY_UUC_DIR, args.uuc_python)
             print(f"[UUC] key: {KEY_UUC_DIR / 'Key_Assembly.usda'}")
+        for label, urdf, out_dir in uuc_only:
+            run_uuc_conversion(urdf, out_dir, args.uuc_python)
+            print(f"[UUC] {label}: {out_dir / urdf.with_suffix('.usda').name}")
         if want_spot:
             strip_spot_obj_topology()
             run_uuc_conversion(SPOT_URDF, SPOT_UUC_DIR, args.uuc_python)
@@ -694,6 +749,10 @@ def main(argv: list[str] | None = None) -> int:
         text = render_drawer_overlay()
         DRAWER_OVERLAY.write_text(text, encoding="utf-8")
         print(f"[OVERLAY] wrote {DRAWER_OVERLAY} ({len(text) // 1024} KiB)")
+    if want_shock:
+        text = render_shock_overlay()
+        SHOCK_OVERLAY.write_text(text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {SHOCK_OVERLAY} ({len(text) // 1024} KiB)")
 
     problems = verify()
     for problem in problems:

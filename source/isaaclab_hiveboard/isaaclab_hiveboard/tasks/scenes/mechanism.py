@@ -3,12 +3,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Pieces shared by the small HiveBoard mechanism scenes (button, drawer, key)."""
+"""Pieces shared by the small HiveBoard mechanism scenes (button, drawer, key, ...)."""
+
+import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
+
 from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
     FRAME_MARKER_SMALL_CFG,
 )
@@ -23,6 +26,16 @@ FACE_QUAT = (0.0, 0.0, 1.0, 0.0)
 # FACE_QUAT then a 90 deg roll about TCP +X: jaws that close across TCP +Y
 # close across object Z.
 PINCH_Z_QUAT = (0.0, 0.70710678, 0.70710678, 0.0)
+
+
+def face_roll_quat(roll_deg: float) -> tuple[float, float, float, float]:
+    """FACE_QUAT rolled about the approach axis, so the jaws close ``roll_deg`` from object -Y toward +Z.
+
+    ``face_roll_quat(90)`` is :data:`PINCH_Z_QUAT`.
+    """
+    half = math.radians(roll_deg) / 2.0
+    return (0.0, math.sin(half), math.cos(half), 0.0)
+
 
 GROUND = AssetBaseCfg(
     prim_path="/World/Ground",
