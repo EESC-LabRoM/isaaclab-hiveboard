@@ -14,16 +14,18 @@ import os
 import sys
 from collections.abc import Mapping
 from datetime import datetime
+from fractions import Fraction
 
 import gymnasium as gym
+import isaaclab_hiveboard  # noqa: F401
 import torch
+from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
+from isaaclab_hiveboard.utils.video import VideoWriter, simulation_fps
 
 import isaaclab.utils.math as math_utils
-import isaaclab_hiveboard  # noqa: F401
 from isaaclab.managers.recorder_manager import DatasetExportMode
-from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
+from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
 CONTACT_SENSOR_NAMES = (
@@ -115,38 +117,6 @@ def _force_norm(forces) -> float:
 def _video_slug(task_id: str) -> str:
     name = task_id.split(":")[-1]
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
-
-
-def _open_ffmpeg_writer(path: str, width: int, height: int, fps: int):
-    """Open a streaming ffmpeg writer for raw RGB24 frames (kitless, no pip deps)."""
-    import shutil
-    import subprocess
-
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise SystemExit("--video needs the `ffmpeg` binary on PATH.")
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{width}x{height}",
-        "-framerate",
-        str(fps),
-        "-i",
-        "-",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-crf",
-        "18",
-        str(path),
-    ]
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
 def _read_scene_rgb(base, env_index: int):
@@ -279,8 +249,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         "--max-steps",
         type=int,
         default=None,
-        help="Stop after this many environment steps. Default: run until the visualizer closes, or one episode if headless.",
+        help="Stop after this many environment steps. "
+        "Default: run until the visualizer closes, or one episode if headless.",
     )
+    parser.add_argument(
+        "--duration", type=float, help="Stop after this many simulated seconds, or at the first episode end."
+    )
+    parser.add_argument("--no-dataset", action="store_true", help="Disable HDF5 episode recording.")
     parser.add_argument(
         "--pose-debug",
         action="store_true",
@@ -331,7 +306,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         "--video",
         action="store_true",
         default=False,
-        help="Save scene_cam RGB frames to MP4 (kitless Newton Warp; keeps the live window open).",
+        help="Save RGB frames to MP4; also works alongside the live viewer.",
     )
     parser.add_argument(
         "--video-folder",
@@ -340,25 +315,147 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument(
         "--video-fps",
-        type=int,
-        default=50,
-        help="Output video framerate (default: 50, matching the 50 Hz bench/curobo control rate for real-time playback).",
+        type=float,
+        default=None,
+        help="Override playback FPS. Default: 1 / (sim.dt * decimation), preserving simulated time.",
+    )
+    parser.add_argument(
+        "--video-source",
+        choices=("auto", "scene", "viewer"),
+        default="auto",
+        help="auto uses scene_cam when present, otherwise the environment's perspective recorder.",
     )
     parser.add_argument(
         "--video-name",
         default=None,
         help="Output filename (default: <task-slug>-<timestamp>.mp4).",
     )
-    parser.add_argument(
-        "--video-env", type=int, default=0, help="Environment index to record (default: 0)."
-    )
+    parser.add_argument("--video-env", type=int, default=0, help="Environment index to record (default: 0).")
     add_launcher_args(parser)
     args, hydra_args = setup_preset_cli(parser)
+    for name in ("duration", "video_fps", "max_steps"):
+        value = getattr(args, name)
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            parser.error(f"--{name.replace('_', '-')} must be positive and finite")
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
         hydra_args.append("physics=newton_mjwarp")
     if args.visualizer is None and not getattr(args, "visualizer_explicit", False):
         args.visualizer = ["newton"]
     return args, hydra_args
+
+
+def _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log) -> int:
+    base = env.unwrapped
+    count = 0
+    while True:
+        if base.sim.visualizers and not _visualizers_alive(base.sim):
+            break
+        if step_limit is not None and count >= step_limit:
+            break
+        if not base.sim.visualizers and step_limit is None and count >= episode_steps:
+            break
+
+        if not _all_finite(obs):
+            raise FloatingPointError(f"Non-finite observation at step {count}")
+
+        if isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
+            action = _route_command(base, obs["policy"]["command"])
+        else:
+            action = torch.zeros(env.action_space.shape, device=base.device)
+        if not _all_finite(action):
+            raise FloatingPointError(f"Non-finite action at step {count}")
+
+        with torch.inference_mode():
+            obs, _, terminated, truncated, _ = env.step(action)
+        count += 1
+        if joint_log is not None:
+            joint_log.sample(count, action)
+        if video_writer is not None:
+            frame = _read_scene_rgb(base, args.video_env) if video_source == "scene" else env.render()
+            video_writer.write(frame)
+
+        log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
+        if log_now and args.contact_debug:
+            _print_contact(base, count, args.pose_debug_env)
+        if log_now and args.pose_debug:
+            _print_pose(base, count, args.pose_debug_env)
+
+        term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
+        trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
+        if term or trunc:
+            if _visualizers_alive(base.sim) and step_limit is None:
+                obs, _ = env.reset()
+                continue
+            break
+    return count
+
+
+def _configure_video(env_cfg, args) -> str:
+    video_source = args.video_source
+    if args.video:
+        if video_source == "auto":
+            video_source = "scene" if getattr(env_cfg.scene, "scene_cam", None) is not None else "viewer"
+        if video_source == "scene" and getattr(env_cfg.scene, "scene_cam", None) is None:
+            raise SystemExit(f"Task {args.task} has no scene_cam; use --video-source auto or viewer.")
+        if video_source == "viewer":
+            from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+
+            env_cfg.video_recorder = VideoRecorderCfg()
+    return video_source
+
+
+def _position_headless_video_camera(base, env_index: int) -> None:
+    """Resolve ViewerCfg's relative eye/target after reset, when asset poses exist."""
+    if base.sim.visualizers:
+        return  # The native recorder follows the live Newton camera.
+    cfg = base.cfg.viewer
+    index = min(max(env_index, 0), base.num_envs - 1)
+    origin = torch.zeros(3, device=base.device)
+    if cfg.origin_type == "env":
+        origin = _as_torch(base.scene.env_origins)[index]
+    elif cfg.origin_type in ("asset_root", "asset_body"):
+        asset = base.scene[cfg.asset_name]
+        if cfg.origin_type == "asset_root":
+            origin = _as_torch(asset.data.root_pos_w)[index]
+        else:
+            body_ids, _ = asset.find_bodies(cfg.body_name)
+            if len(body_ids) != 1:
+                raise ValueError(f"Video camera expected one body matching {cfg.body_name!r}.")
+            origin = _as_torch(asset.data.body_pos_w)[index, body_ids[0]]
+    offset = origin.detach().cpu().tolist()
+    recorder_cfg = base.cfg.video_recorder
+    recorder_cfg.eye = tuple(value + shift for value, shift in zip(cfg.eye, offset, strict=True))
+    recorder_cfg.lookat = tuple(value + shift for value, shift in zip(cfg.lookat, offset, strict=True))
+    # The native headless recorder treats eye/lookat as world coordinates.
+    # Its capture is lazy, so recreate it before the first frame with resolved poses.
+    base.video_recorder = recorder_cfg.class_type(recorder_cfg, base.scene)
+
+
+def _open_video(base, args, video_source) -> VideoWriter | None:
+    if not args.video:
+        return None
+    if video_source == "scene":
+        cam_cfg = base.scene["scene_cam"].cfg
+        video_width, video_height = int(cam_cfg.width), int(cam_cfg.height)
+    else:
+        _position_headless_video_camera(base, args.video_env)
+        video_width = base.cfg.video_recorder.window_width
+        video_height = base.cfg.video_recorder.window_height
+    fps = simulation_fps(base.cfg.sim.dt, base.cfg.decimation)
+    if args.video_fps is not None:
+        fps = Fraction(args.video_fps).limit_denominator(1_000_000)
+    video_name = args.video_name or (f"{_video_slug(args.task)}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4")
+    if not video_name.endswith(".mp4"):
+        video_name += ".mp4"
+    video_path = os.path.join(args.video_folder, video_name)
+    video_writer = VideoWriter(video_path, video_width, video_height, fps)
+    print(
+        f"[INFO] Recording {video_source} to {video_path} "
+        f"({video_width}x{video_height} @ {fps} fps; "
+        f"dt={base.cfg.sim.dt}, decimation={base.cfg.decimation})",
+        flush=True,
+    )
+    return video_writer
 
 
 def main() -> int:
@@ -382,6 +479,10 @@ def main() -> int:
         env_cfg.seed = args.seed
     if args.device is not None:
         env_cfg.sim.device = args.device
+    if args.no_dataset:
+        env_cfg.recorders = None
+
+    video_source = _configure_video(env_cfg, args)
 
     show_command_path = bool(args.setup) if args.show_command_path is None else args.show_command_path
     pose_command = getattr(env_cfg.commands, "pose_command", None)
@@ -427,7 +528,9 @@ def main() -> int:
         print(f"[INFO] Recording episodes to {rec.dataset_export_dir_path}/{rec.dataset_filename}.hdf5")
 
     with launch_simulation(env_cfg, args):
-        env = gym.make(args.task, cfg=env_cfg)
+        env = gym.make(
+            args.task, cfg=env_cfg, render_mode="rgb_array" if args.video and video_source == "viewer" else None
+        )
         base = env.unwrapped
         if args.collision_only and not _apply_collision_only(base):
             print(
@@ -436,12 +539,15 @@ def main() -> int:
             )
 
         step_dt = float(base.cfg.sim.dt) * float(base.cfg.decimation)
+        step_limit = args.max_steps
+        if args.duration is not None:
+            duration_steps = max(1, math.ceil(args.duration / step_dt))
+            step_limit = duration_steps if step_limit is None else min(step_limit, duration_steps)
         episode_steps = int(getattr(base, "max_episode_length", 0) or 0)
         if episode_steps <= 0:
             episode_steps = max(1, math.ceil(float(base.cfg.episode_length_s) / step_dt))
 
-        reset_kwargs = {} if args.seed is None else {"seed": args.seed}
-        obs, _ = env.reset(**reset_kwargs)
+        obs, _ = env.reset(seed=args.seed)
 
         if args.ee_debug:
             from isaaclab_hiveboard.assets.end_effector import SPOT_EE, print_ee_offset_report
@@ -464,72 +570,10 @@ def main() -> int:
             print(f"[INFO] Joint tracking log: {out_dir}")
 
         count = 0
-        video_proc = None
-        video_path = None
-        video_frames = 0
-        if args.video:
-            if "scene_cam" not in base.scene.keys():
-                raise SystemExit(
-                    f"--video needs a 'scene_cam' sensor in the scene (task {args.task} has none)."
-                )
-            cam_cfg = base.scene["scene_cam"].cfg
-            video_width, video_height = int(cam_cfg.width), int(cam_cfg.height)
-            os.makedirs(args.video_folder, exist_ok=True)
-            video_name = args.video_name or (
-                f"{_video_slug(args.task)}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
-            )
-            if not video_name.endswith(".mp4"):
-                video_name += ".mp4"
-            video_path = os.path.join(args.video_folder, video_name)
-            video_proc = _open_ffmpeg_writer(video_path, video_width, video_height, args.video_fps)
-            print(f"[INFO] Recording scene_cam to {video_path} ({video_width}x{video_height} @ {args.video_fps}fps)")
+        video_writer = None
         try:
-            while True:
-                if base.sim.visualizers and not _visualizers_alive(base.sim):
-                    break
-                if args.max_steps is not None and count >= args.max_steps:
-                    break
-                if not base.sim.visualizers and args.max_steps is None and count >= episode_steps:
-                    break
-
-                if not _all_finite(obs):
-                    raise FloatingPointError(f"Non-finite observation at step {count}")
-
-                if isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
-                    action = _route_command(base, obs["policy"]["command"])
-                else:
-                    action = torch.zeros(env.action_space.shape, device=base.device)
-                if not _all_finite(action):
-                    raise FloatingPointError(f"Non-finite action at step {count}")
-
-                with torch.inference_mode():
-                    obs, _, terminated, truncated, _ = env.step(action)
-                count += 1
-                if joint_log is not None:
-                    joint_log.sample(count, action)
-                if video_proc is not None:
-                    frame = _read_scene_rgb(base, args.video_env)
-                    if frame is not None:
-                        try:
-                            video_proc.stdin.write(frame.tobytes())
-                            video_frames += 1
-                        except BrokenPipeError:
-                            print("[WARN] ffmpeg closed early; stopping video.", file=sys.stderr)
-                            video_proc = None
-
-                log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
-                if log_now and args.contact_debug:
-                    _print_contact(base, count, args.pose_debug_env)
-                if log_now and args.pose_debug:
-                    _print_pose(base, count, args.pose_debug_env)
-
-                term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
-                trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
-                if term or trunc:
-                    if _visualizers_alive(base.sim) and args.max_steps is None:
-                        obs, _ = env.reset()
-                        continue
-                    break
+            video_writer = _open_video(base, args, video_source)
+            count = _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log)
         finally:
             if "joint_command" in base.command_manager.active_terms:
                 joint_term = base.command_manager.get_term("joint_command")
@@ -537,14 +581,14 @@ def main() -> int:
                     joint_term.print_key_errors(args.pose_debug_env)
             if joint_log is not None and joint_log._rows:
                 joint_log.save()
-            if video_proc is not None:
-                try:
-                    video_proc.stdin.close()
-                    video_proc.wait(timeout=60)
-                except Exception as err:  # noqa: BLE001
-                    print(f"[WARN] Finalizing video failed: {err}", file=sys.stderr)
-                print(f"[INFO] Saved {video_frames} frames to {video_path}")
-            env.close()
+            try:
+                if video_writer is not None:
+                    save = sys.exc_info()[0] is None
+                    video_writer.close(save=save)
+                    if save:
+                        print(f"[INFO] Saved {video_writer.frames} frames to {video_writer.path}")
+            finally:
+                env.close()
 
     print(f"[INFO] Played {count} steps.")
     return 0

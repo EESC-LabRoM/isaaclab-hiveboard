@@ -108,6 +108,49 @@ uv run --python 3.12 python scripts/play.py \
 nonzero unless the physical valve joint reaches the sampled endpoint within
 the 15-degree success tolerance.
 
+### Record every environment at real-time playback speed
+
+```bash
+just record-all
+# Equivalent:
+uv run python scripts/record_all_envs.py
+```
+
+The recorder discovers all environments registered in
+`source/isaaclab_hiveboard/isaaclab_hiveboard/tasks/__init__.py`, including
+Play variants, aliases, and `validate_command_spot`. Each runs in a separate
+process with one environment, recording up to 10 simulated seconds or the first
+episode end. HDF5 and joint-tracking logs are disabled for this video batch.
+
+Each video's FPS is calculated **after resolving the task configuration** as
+`1 / (sim.dt * decimation)`. For example, `dt=1/200` with decimation `15`
+records at `40/3` (approximately 13.33) FPS; the 50 Hz bench tasks record at
+50 FPS. One frame is captured per environment step, preserving simulated time
+even when rendering runs slowly. Fractional rates are preserved; the duration
+limit rounds up to a whole environment step.
+
+The default runs without a window. It captures `scene_cam` when available and
+otherwise uses Isaac Lab's perspective video recorder with the task's configured
+view. `--viewer` also opens the live Newton viewer. Both `ffmpeg` and `ffprobe`
+must be on PATH, and the tasks require their usual GPU/runtime and assets.
+
+```bash
+just record-all --list                           # Preview all registered IDs
+just record-all --duration 30                    # Up to 30 simulated seconds each
+just record-all --match Spot --duration 5         # Only IDs containing Spot
+just record-all --task validate_command_spot      # One exact ID; --task can repeat
+just record-all --viewer --match BenchValve       # Watch while recording
+just record-all --dry-run                        # Print commands without running
+```
+
+Videos and per-environment logs are saved under a new dated folder in
+`videos/environments/` (change the parent with `--output`). `summary.json`
+records each outcome, actual FPS, frame count, video duration, and log path.
+Failures do not stop the batch; the command exits nonzero if any recording
+fails. `--timeout` sets the wall-time limit per task (default 900 seconds,
+including startup). Interrupted or failed encodes may leave `.partial.mp4`
+files; only finalized, probed MP4s count as successful recordings.
+
 ### Newton lamp tasks
 
 Generate the lamp asset once, then run either robot with the kitless player:
