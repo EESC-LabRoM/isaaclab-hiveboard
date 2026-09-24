@@ -537,6 +537,11 @@ The editor defaults to CPU and does not require CUDA. The default task is
 when loading settings authored for another task. `--port` changes the browser port;
 `--out` chooses the save file. Settings are saved only when you click **Save setup**.
 
+Without `--setup`, the editor loads `configs/<task>.json` if it exists, falling back
+to the base task's file for a `-Play-v0` variant. If neither exists, it starts from
+the task's built-in settings. An explicit `--setup` takes precedence. By default,
+saving updates the loaded file, or creates `configs/<task>.json` if none was loaded.
+
 - **GoTo:** select a bead or command, then drag its position and orientation. Choose
   an object frame in **Reference** to keep the goal relative to that object, or use
   a fixed environment pose. Edit speeds, tolerances and the gripper state below it.
