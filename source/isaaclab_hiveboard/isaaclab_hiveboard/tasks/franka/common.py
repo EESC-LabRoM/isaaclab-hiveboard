@@ -19,6 +19,7 @@ import math
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointPositionActionCfg, JointPositionActionCfg
 from isaaclab.managers import ObservationGroupCfg, ObservationTermCfg, SceneEntityCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import ASSET_DIR, FRANKA_EE, FRANKA_FR3_HIGH_PD_CFG, as_command_offset, make_ee_frame
@@ -177,3 +178,15 @@ def use_franka(
                 joint_names=FRANKA_ARM_JOINT_NAMES if is_arm else FRANKA_FINGER_JOINT_NAMES,
                 preserve_order=True,
             )
+
+
+def shift_target_frames(env_cfg, names: tuple[str, ...], dx: float) -> None:
+    """Move the named target frames by ``dx`` along the object's outward +X.
+
+    The FR3 TCP is at the fingertips rather than mid-pad, so its grasp frames
+    sit deeper (negative ``dx``) than the shared ANYmal/Spot ones.
+    """
+    for frame in env_cfg.scene.target_frame.target_frames:
+        if frame.name in names:
+            x, y, z = frame.offset.pos
+            frame.offset = OffsetCfg(pos=(x + dx, y, z), rot=frame.offset.rot)

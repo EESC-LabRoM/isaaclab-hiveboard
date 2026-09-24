@@ -57,6 +57,10 @@ _EXPORT_MODULES = {
     "LAMP_NEWTON_USD": ".hiveboard",
     "SHOCK_ABSORBER_URDF": ".hiveboard",
     "SHOCK_ABSORBER_USD": ".hiveboard",
+    "SHOCK_ABSORBER_NEWTON_USD": ".hiveboard",
+    "M8_THREAD_NEWTON_USD": ".hiveboard",
+    "M30_THREAD_NEWTON_USD": ".hiveboard",
+    "PEG_INSERTION_NEWTON_USD": ".hiveboard",
     "SMALL_VALVE_URDF": ".hiveboard",
     "SMALL_VALVE_USD": ".hiveboard",
     # Legacy robot assets, loaded only when requested.

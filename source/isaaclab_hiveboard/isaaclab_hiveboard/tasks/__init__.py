@@ -542,3 +542,235 @@ gym.register(
         "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.key.env:FrankaKeyEnvCfg_PLAY",
     },
 )
+
+##
+# M8 thread
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-M8Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.m8_thread.env:SpotM8ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-M8Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.m8_thread.env:SpotM8ThreadEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M8Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m8_thread.env:AnymalM8ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M8Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m8_thread.env:AnymalM8ThreadEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-M8Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.m8_thread.env:FrankaM8ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-M8Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.m8_thread.env:FrankaM8ThreadEnvCfg_PLAY",
+    },
+)
+
+##
+# M30 thread
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-M30Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.m30_thread.env:SpotM30ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-M30Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.m30_thread.env:SpotM30ThreadEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M30Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread.env:AnymalM30ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M30Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread.env:AnymalM30ThreadEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-M30Thread-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.m30_thread.env:FrankaM30ThreadEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-M30Thread-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.m30_thread.env:FrankaM30ThreadEnvCfg_PLAY",
+    },
+)
+
+##
+# Peg insertion
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-PegInsertion-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.peg_insertion.env:SpotPegInsertionEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-PegInsertion-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.peg_insertion.env:SpotPegInsertionEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-PegInsertion-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.peg_insertion.env:AnymalPegInsertionEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-PegInsertion-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.peg_insertion.env:AnymalPegInsertionEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-PegInsertion-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.peg_insertion.env:FrankaPegInsertionEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-PegInsertion-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.peg_insertion.env:FrankaPegInsertionEnvCfg_PLAY",
+    },
+)
+
+##
+# Shock absorber
+##
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-ShockAbsorber-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.shock_absorber.env:SpotShockAbsorberEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Spot-ShockAbsorber-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.shock_absorber.env:SpotShockAbsorberEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-ShockAbsorber-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.shock_absorber.env:AnymalShockAbsorberEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-ShockAbsorber-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.shock_absorber.env:AnymalShockAbsorberEnvCfg_PLAY",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-ShockAbsorber-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.shock_absorber.env:FrankaShockAbsorberEnvCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-ShockAbsorber-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.shock_absorber.env:FrankaShockAbsorberEnvCfg_PLAY",
+    },
+)

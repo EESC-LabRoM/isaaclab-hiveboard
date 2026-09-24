@@ -85,6 +85,10 @@ play-franka-high-torque:
 play-franka-small-valve:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Franka-SmallValve-Play-v0" --pose-debug
 
+# Play any robot/tool Play task, e.g. `just play Franka M30Thread` (Spot|Anymal|Franka x tool)
+play robot tool *args:
+    uv run python scripts/play.py --task "Isaac-HiveBoard-{{robot}}-{{tool}}-Play-v0" --pose-debug {{args}}
+
 # Inspect ANYmal-D + DynaArm + Robotiq 2F-140 TCP axes
 play-anymal-only:
     uv run python scripts/play.py --task "Isaac-HiveBoard-Anymal-OnlyRobot-v0"

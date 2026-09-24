@@ -11,6 +11,7 @@ from pathlib import Path
 # Package assets directory
 ASSET_DIR = os.path.abspath(os.path.dirname(__file__))
 
+
 def _find_hiveboard_dir() -> str:
     current = Path(__file__).resolve().parent
     for _ in range(8):
@@ -33,9 +34,7 @@ HONEYCOMB_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Honeycomb", "Honeycomb_Panel.u
 BALL_VALVE_URDF = os.path.join(ASSET_DIR, "hiveboard", "ball_valve", "Ball_Valve.urdf")
 # urdf-usd-converter base (usd/uuc/) + baked CoACD overlay. See
 # scripts/generate_newton_usd.py.
-BALL_VALVE_USD = os.path.join(
-    ASSET_DIR, "hiveboard", "ball_valve", "usd", "Ball_Valve_uuc_newton.usda"
-)
+BALL_VALVE_USD = os.path.join(ASSET_DIR, "hiveboard", "ball_valve", "usd", "Ball_Valve_uuc_newton.usda")
 BALL_VALVE_FRICTION_RING_URDF = os.path.join(
     HIVEBOARD_SIM_DIR, "Valves", "Lever Valve", "Ball Valve", "Ball_Valve_Friction_Ring_Set.urdf"
 )
@@ -47,22 +46,14 @@ HIGH_TORQUE_VALVE_URDF = os.path.join(
 HIGH_TORQUE_VALVE_USD = os.path.join(
     ASSET_DIR, "hiveboard", "high_torque_valve", "usd", "High_Torque_Valve_uuc_newton.usda"
 )
-SMALL_VALVE_URDF = os.path.join(
-    HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "Small Valve", "Small_Valve.urdf"
-)
-SMALL_VALVE_USD = os.path.join(
-    ASSET_DIR, "hiveboard", "small_valve", "usd", "Small_Valve_uuc_newton.usda"
-)
+SMALL_VALVE_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Valves", "Gate Valve", "Small Valve", "Small_Valve.urdf")
+SMALL_VALVE_USD = os.path.join(ASSET_DIR, "hiveboard", "small_valve", "usd", "Small_Valve_uuc_newton.usda")
 
 # HiveBoard Interactive Objects - Electrical & Mechanical
-CIRCUIT_BREAKER_URDF = os.path.join(
-    HIVEBOARD_SIM_DIR, "Circuit Breaker", "Circuit_Breaker_Assembly.urdf"
-)
+CIRCUIT_BREAKER_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Circuit Breaker", "Circuit_Breaker_Assembly.urdf")
 # urdf-usd-converter base (usd/uuc/) + baked CoACD overlay. See
 # scripts/generate_newton_usd.py.
-CIRCUIT_BREAKER_USD = os.path.join(
-    ASSET_DIR, "hiveboard", "circuit_breaker", "usd", "Circuit_Breaker_uuc_newton.usda"
-)
+CIRCUIT_BREAKER_USD = os.path.join(ASSET_DIR, "hiveboard", "circuit_breaker", "usd", "Circuit_Breaker_uuc_newton.usda")
 BUTTON_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Button", "Button_Assembly.urdf")
 BUTTON_USD = os.path.join(HIVEBOARD_SIM_DIR, "Button", "Button_Assembly.usd")
 # urdf-usd-converter output. See scripts/generate_newton_usd.py.
@@ -83,3 +74,12 @@ LAMP_USD = os.path.join(HIVEBOARD_SIM_DIR, "Lamp", "Lamp_Assembly.usd")
 LAMP_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "lamp", "usd", "uuc", "Lamp_Assembly.usda")
 SHOCK_ABSORBER_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Shock Absorber", "Shock_Absorber_Assembly.urdf")
 SHOCK_ABSORBER_USD = os.path.join(HIVEBOARD_SIM_DIR, "Shock Absorber", "Shock_Absorber_Assembly.usd")
+# Articulated re-authorings (free pin, threaded nut/peg on a revolute +
+# prismatic pair): UUC base, plus a baked CoACD spring for the shock absorber.
+# See hiveboard/<name>/*.urdf and scripts/generate_newton_usd.py.
+SHOCK_ABSORBER_NEWTON_USD = os.path.join(
+    ASSET_DIR, "hiveboard", "shock_absorber", "usd", "Shock_Absorber_Assembly_uuc_newton.usda"
+)
+M8_THREAD_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "m8_thread", "usd", "uuc", "M8_Assy.usda")
+M30_THREAD_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "m30_thread", "usd", "uuc", "M30.usda")
+PEG_INSERTION_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "peg_insertion", "usd", "uuc", "Peg_Insertion.usda")
