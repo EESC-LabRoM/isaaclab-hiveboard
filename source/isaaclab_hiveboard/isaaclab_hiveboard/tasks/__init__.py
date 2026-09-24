@@ -3,13 +3,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Task registrations for HiveBoard multi-robot manipulation environments."""
+"""Task registrations for HiveBoard robot manipulation environments."""
 
 import gymnasium as gym
-
-##
-# Spot Environments
-##
 
 gym.register(
     id="Isaac-HiveBoard-Spot-Lamp-v0",

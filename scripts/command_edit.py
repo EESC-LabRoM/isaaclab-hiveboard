@@ -71,6 +71,7 @@ from isaaclab_hiveboard.utils.command_setup import (
     load_setup,
     make_setup,
     planner_settings,
+    resolve_setup_path,
     save_setup,
     validate_command,
     validate_setup,
@@ -1097,7 +1098,11 @@ class CommandEditor:
 def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK)
-    parser.add_argument("--setup", help="Load an existing command setup JSON.")
+    parser.add_argument(
+        "--setup",
+        help="Load an existing command setup JSON. "
+        "Default: configs/<task>.json, or the base task's file for a -Play-v0 variant, if present.",
+    )
     parser.add_argument("--out", help="Save path (default: --setup or configs/<task>.json).")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--ik-iters", type=int, default=24)
@@ -1207,6 +1212,11 @@ def _run_editor(env, viewer, args, out: Path) -> None:
 def main():
     args, hydra_args = _parse_args()
     sys.argv = [sys.argv[0], *hydra_args]
+    if not args.setup:
+        default_setup = resolve_setup_path(args.task)
+        if default_setup is not None:
+            args.setup = str(default_setup)
+            print(f"[INFO] Using saved setup {args.setup}")
     env_cfg = _editor_env_cfg(args)
     out = Path(args.out) if args.out else Path(args.setup) if args.setup else default_setup_path(args.task)
     with launch_simulation(env_cfg, args):
