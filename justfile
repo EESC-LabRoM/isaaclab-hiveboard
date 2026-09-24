@@ -121,9 +121,9 @@ precompute-cache:
 collect-demos num_demos="10":
     uv run python scripts/collect_demos.py --headless --device cuda:0 --num_demos {{num_demos}}
 
-# Record a validation video for every HiveBoard example
+# Record every registered HiveBoard environment at its simulation-time FPS
 record-all *args:
-    ./scripts/record_all_examples.sh {{args}}
+    uv run python scripts/record_all_envs.py {{args}}
 
 # Collect scripted-expert demos for imitation learning (robomimic layout)
 il-collect num_demos="50" num_envs="8" *args:
