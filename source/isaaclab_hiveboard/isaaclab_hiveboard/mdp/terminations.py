@@ -37,6 +37,16 @@ def is_done(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     return command.is_done()
 
 
+def command_done_term(command_name: str = "pose_command"):
+    """Truncation once every segment of a sequential command has finished.
+
+    Not a success. The recorder only treats a term named ``success`` as a demonstration.
+    """
+    from isaaclab.managers import TerminationTermCfg as DoneTerm
+
+    return DoneTerm(func=is_done, time_out=True, params={"command_name": command_name})
+
+
 def valve_rotation_success(
     env: ManagerBasedRLEnv,
     command_name: str,

@@ -4,7 +4,7 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.terminations import articulation_joint_position_success
+from isaaclab_hiveboard.mdp.terminations import articulation_joint_position_success, command_done_term
 from isaaclab_hiveboard.tasks.spot.lamp.configs.scene import LAMP_SEATED_POSITION
 
 
@@ -13,6 +13,7 @@ class TerminationsCfg:
     """The lamp is successful only when it is physically seated."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    command_done = command_done_term()
     success = DoneTerm(
         func=articulation_joint_position_success,
         params={

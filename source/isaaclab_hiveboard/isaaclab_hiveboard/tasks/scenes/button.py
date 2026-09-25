@@ -12,7 +12,8 @@ Button_Assembly layout in its ``World`` link frame (from the UUC asset):
   ``PrismaticJoint`` in ``[-0.01, 0]``;
 * lid: ``RevoluteJoint`` about +Z through the hinge at ``y = 0.0305``, limits
   ``[-90, 40]`` deg. At -90 deg it covers the button face; at 0 it stands
-  straight out of the plate.
+  straight out of the plate. The spawn rolls that hinge to the top, so the
+  lid swings upward instead of toward the robot's right.
 """
 
 import math
@@ -39,6 +40,10 @@ from isaaclab_hiveboard.tasks.scenes.mechanism import (
 
 _ROOT = "{ENV_REGEX_NS}/Button/Geometry/World"
 LID_CLOSED = -math.pi / 2
+# FACE_QUAT, then -90 deg about world +X (xyzw). Object +Y, the hinge, maps
+# to world +Z, so the closed lid lifts from the bottom of the plate upward.
+_HALF = math.sqrt(2.0) / 2.0
+BUTTON_FACE_QUAT = (0.0, _HALF, _HALF, 0.0)
 LID_HINGE_POS = (-0.0034325, 0.0304632, 0.0)
 # The jaws close across the lid's 56 mm width (object Z); its thickness sits
 # flat on the plate and cannot be pinched.
@@ -64,7 +69,7 @@ class ButtonSceneCfg(InteractiveSceneCfg):
         spawn=mechanism_spawn(BUTTON_NEWTON_USD, "button"),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=MECHANISM_SPAWN_POS,
-            rot=FACE_QUAT,
+            rot=BUTTON_FACE_QUAT,
             joint_pos={"RevoluteJoint": LID_CLOSED, "PrismaticJoint": 0.0},
             joint_vel={".*": 0.0},
         ),

@@ -10,7 +10,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.terminations import valve_rotation_success
+from isaaclab_hiveboard.mdp.terminations import command_done_term, valve_rotation_success
 
 
 @configclass
@@ -18,6 +18,7 @@ class BenchValveTerminationsCfg:
     """Episode ends on timeout or when the key sequence finishes with the valve at the stop."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    command_done = command_done_term()
     success = DoneTerm(
         func=valve_rotation_success,
         params={
