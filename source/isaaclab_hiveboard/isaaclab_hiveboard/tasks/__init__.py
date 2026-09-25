@@ -80,6 +80,7 @@ gym.register(
     },
 )
 
+#
 gym.register(
     id="Isaac-HiveBoard-Franka-SmallValve-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

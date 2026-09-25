@@ -89,7 +89,7 @@ class CircuitBreakerEventCfg:
             "pose_range": {
                 "x": (-0.20, 0.20),
                 "y": (-0.30, 0.30),
-                "z": (-0.30, 0.30),
+                "z": (0.30, 0.30),
                 "roll": (-PI / 6, PI / 6),
                 "pitch": (-PI / 6, PI / 6),
                 "yaw": (-PI / 5, PI / 5),
