@@ -9,12 +9,13 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.terminations import articulation_joint_position_success
+from isaaclab_hiveboard.mdp.terminations import articulation_joint_position_success, command_done_term
 
 
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    command_done = command_done_term()
     success = DoneTerm(
         func=articulation_joint_position_success,
         params={

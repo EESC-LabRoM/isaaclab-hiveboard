@@ -23,7 +23,7 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     SequentialPoseCommandCfg,
 )
 from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
-from isaaclab_hiveboard.mdp.terminations import articulation_joint_ranges_success
+from isaaclab_hiveboard.mdp.terminations import articulation_joint_ranges_success, command_done_term
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.actions import AnymalJointPositionActionCfg
 from isaaclab_hiveboard.tasks.anymal.mechanism import (
     ANYMAL_CUROBO,
@@ -104,6 +104,7 @@ class FramePoseCommandsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    command_done = command_done_term()
     success = DoneTerm(
         func=articulation_joint_ranges_success,
         params={

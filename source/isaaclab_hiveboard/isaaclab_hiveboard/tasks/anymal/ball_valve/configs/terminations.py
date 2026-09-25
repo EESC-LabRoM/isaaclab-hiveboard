@@ -9,6 +9,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
 from isaaclab_hiveboard.mdp.terminations import (
+    command_done_term,
     is_done,
     valve_rotation_success,
 )
@@ -27,6 +28,7 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    command_done = command_done_term()
     success = DoneTerm(func=is_done, params=dict({"command_name": "pose_command"}))
 
 
