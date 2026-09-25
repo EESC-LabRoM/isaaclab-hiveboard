@@ -11,9 +11,9 @@
     ],
     "rot": [
       0.0,
-      -0.7071068,
+      -0.7071067811865476,
       0.0,
-      0.7071068
+      0.7071067811865476
     ]
   },
   "commands": [
@@ -68,7 +68,7 @@
         "frame_name": "target_frame",
         "target_frame_name": "drawer_grasp",
         "target_offset_pos": [
-          -0.004163861274719238,
+          -0.00655210018157959,
           0.0,
           0.0
         ],
@@ -165,10 +165,48 @@
       }
     },
     {
-      "type": "GripperCommand",
+      "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
-        "open_gripper": true,
-        "duration_s": 0.4
+        "frame_name": "target_frame",
+        "target_frame_name": "drawer_approaching",
+        "target_offset_pos": [
+          -0.023937642574310303,
+          -1.548323780298233e-08,
+          0.05260157585144043
+        ],
+        "target_offset_rot": [
+          -1.1920928955069046e-07,
+          -1.2270085107947784e-06,
+          -5.960464477534523e-08,
+          -0.9999999999992384
+        ],
+        "target_position_env": null,
+        "target_orientation_env": null,
+        "gripper_open": false,
+        "velocity": 0.2,
+        "angular_velocity": 1.0,
+        "distance_threshold": 0.05,
+        "orientation_threshold_deg": 10.0,
+        "valve_done_threshold_rad": null,
+        "done_when_joint": null,
+        "canonicalize_upward": false,
+        "hold_current_orientation": false,
+        "robot_joint_names": [
+          "dynaarm_shoulder_rotation",
+          "dynaarm_shoulder_flexion",
+          "dynaarm_elbow_flexion",
+          "dynaarm_forearm_rotation",
+          "dynaarm_wrist_flexion",
+          "dynaarm_wrist_rotation"
+        ],
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "num_ik_seeds": 4,
+        "num_trajopt_seeds": 1,
+        "max_plan_attempts": 1,
+        "interpolation_buffer_size": 128,
+        "reference_pos_env": null,
+        "reference_quat_xyzw": null
       }
     },
     {
@@ -214,6 +252,13 @@
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
         "reference_quat_xyzw": null
+      }
+    },
+    {
+      "type": "GripperCommand",
+      "parameters": {
+        "open_gripper": true,
+        "duration_s": 0.4
       }
     }
   ]
