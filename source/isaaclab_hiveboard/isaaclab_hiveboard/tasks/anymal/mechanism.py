@@ -148,15 +148,13 @@ class MechanismEventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            # These mechanisms are only a few centimeters across, so keep
-            # placement noise moderate.
             "pose_range": {
-                "x": (-0.05, 0.05),
-                "y": (-0.15, 0.15),
-                "z": (-0.15, 0.15),
-                "roll": (-PI / 18, PI / 18),
-                "pitch": (-PI / 18, PI / 18),
-                "yaw": (-PI / 12, PI / 12),
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
             },
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("object"),
