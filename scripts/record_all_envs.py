@@ -32,6 +32,26 @@ def discover_tasks() -> list[str]:
     )
 
 
+def is_play_task(task_id: str) -> bool:
+    """Return True if the task ID identifies a play environment."""
+    return "-Play" in task_id
+
+
+def filter_selected_tasks(
+    registered_tasks: list[str],
+    *,
+    task_names: list[str] | None = None,
+    match_pattern: str = "",
+    include_all: bool = False,
+) -> list[str]:
+    """Filter registered tasks by task name, substring match, and play variant mode."""
+    if task_names:
+        return [task for task in registered_tasks if task in task_names and match_pattern.lower() in task.lower()]
+
+    candidates = registered_tasks if include_all else [task for task in registered_tasks if is_play_task(task)]
+    return [task for task in candidates if match_pattern.lower() in task.lower()]
+
+
 def positive_seconds(value: str) -> float:
     seconds = float(value)
     if not math.isfinite(seconds) or seconds <= 0:
@@ -156,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output", type=Path, default=ROOT / "videos/environments", help="Parent of dated run folders."
     )
     parser.add_argument(
-        "--duration", type=positive_seconds, default=10.0, help="Maximum simulated seconds per clip (10)."
+        "--duration", type=positive_seconds, default=20.0, help="Maximum simulated seconds per clip (10)."
     )
     parser.add_argument("--timeout", type=positive_seconds, default=900.0, help="Maximum wall seconds per task (900).")
     parser.add_argument("--device", default="cuda:0")
@@ -167,6 +187,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--video-source", choices=("auto", "scene", "viewer"), default="auto")
     parser.add_argument("--list", action="store_true", help="Print selected task IDs without running simulations.")
     parser.add_argument("--dry-run", action="store_true", help="Print recording commands without running simulations.")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Record all environment variants, including non-Play training tasks (default records only Play envs).",
+    )
     args = parser.parse_args(argv)
 
     registered = discover_tasks()
@@ -174,7 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         unknown = sorted(set(args.task) - set(registered))
         if unknown:
             parser.error(f"Unknown HiveBoard task(s): {', '.join(unknown)}")
-    tasks = [task for task in registered if (not args.task or task in args.task) and args.match.lower() in task.lower()]
+    tasks = filter_selected_tasks(
+        registered,
+        task_names=args.task,
+        match_pattern=args.match,
+        include_all=args.all,
+    )
     if not tasks:
         parser.error("No registered environments match the selection.")
     if args.list:

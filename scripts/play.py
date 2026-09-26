@@ -24,6 +24,7 @@ from isaaclab_hiveboard.utils.video import VideoWriter, simulation_fps
 
 import isaaclab.utils.math as math_utils
 from isaaclab.managers.recorder_manager import DatasetExportMode
+from tqdm import tqdm
 
 from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
 
@@ -224,7 +225,7 @@ def _print_pose(base, step: int, env_index: int) -> None:
         )
 
 
-def _parse_args() -> tuple[argparse.Namespace, list[str]]:
+def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK, help="Gym task id.")
     parser.add_argument(
@@ -254,6 +255,13 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument(
         "--duration", type=float, help="Stop after this many simulated seconds, or at the first episode end."
+    )
+    parser.add_argument(
+        "--num-demos",
+        "--num_demos",
+        type=int,
+        default=None,
+        help="Stop after completing this many demonstrations / episodes.",
     )
     parser.add_argument("--no-dataset", action="store_true", help="Disable HDF5 episode recording.")
     parser.add_argument(
@@ -331,63 +339,138 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Output filename (default: <task-slug>-<timestamp>.mp4).",
     )
     parser.add_argument("--video-env", type=int, default=0, help="Environment index to record (default: 0).")
+    parser.add_argument(
+        "--viser-port",
+        type=int,
+        default=9080,
+        help="HTTP port for the Viser web visualizer (default: 9080).",
+    )
     add_launcher_args(parser)
-    args, hydra_args = setup_preset_cli(parser)
-    for name in ("duration", "video_fps", "max_steps"):
+    args, hydra_args = setup_preset_cli(parser, argv=argv)
+    for name in ("duration", "video_fps", "max_steps", "num_demos"):
         value = getattr(args, name)
         if value is not None and (not math.isfinite(value) or value <= 0):
             parser.error(f"--{name.replace('_', '-')} must be positive and finite")
+    if args.viser_port is not None and args.viser_port <= 0:
+        parser.error("--viser-port must be a positive integer")
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
         hydra_args.append("physics=newton_mjwarp")
-    if args.visualizer is None and not getattr(args, "visualizer_explicit", False):
-        args.visualizer = ["newton"]
+    if (
+        args.visualizer is None
+        and not getattr(args, "visualizer_explicit", False)
+        and not getattr(args, "headless", False)
+    ):
+        args.visualizer = ["viser"]
     return args, hydra_args
+
+
+def _count_step_terminations(terminated, truncated) -> int:
+    """Count the number of environments that reached termination in the current step."""
+    if torch.is_tensor(terminated):
+        return int((terminated | truncated).sum().item())
+    return int(bool(terminated or truncated))
 
 
 def _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log) -> int:
     base = env.unwrapped
     count = 0
-    while True:
-        if base.sim.visualizers and not _visualizers_alive(base.sim):
-            break
-        if step_limit is not None and count >= step_limit:
-            break
-        if not base.sim.visualizers and step_limit is None and count >= episode_steps:
-            break
+    completed_demos = 0
+    total_steps = step_limit
+    if total_steps is None and not base.sim.visualizers and args.num_demos is None:
+        total_steps = episode_steps
 
-        if not _all_finite(obs):
-            raise FloatingPointError(f"Non-finite observation at step {count}")
+    with tqdm(total=total_steps, unit="steps", desc="Playing") as progress_bar:
+        while True:
+            if base.sim.visualizers and not _visualizers_alive(base.sim):
+                break
+            if step_limit is not None and count >= step_limit:
+                break
+            if not base.sim.visualizers and step_limit is None and args.num_demos is None and count >= episode_steps:
+                break
 
-        if isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
-            action = _route_command(base, obs["policy"]["command"])
-        else:
-            action = torch.zeros(env.action_space.shape, device=base.device)
-        if not _all_finite(action):
-            raise FloatingPointError(f"Non-finite action at step {count}")
+            if not _all_finite(obs):
+                raise FloatingPointError(f"Non-finite observation at step {count}")
 
-        with torch.inference_mode():
-            obs, _, terminated, truncated, _ = env.step(action)
-        count += 1
-        if joint_log is not None:
-            joint_log.sample(count, action)
-        if video_writer is not None:
-            frame = _read_scene_rgb(base, args.video_env) if video_source == "scene" else env.render()
-            video_writer.write(frame)
+            if isinstance(obs, dict) and isinstance(obs.get("policy"), dict) and "command" in obs["policy"]:
+                action = _route_command(base, obs["policy"]["command"])
+            else:
+                action = torch.zeros(env.action_space.shape, device=base.device)
+            if not _all_finite(action):
+                raise FloatingPointError(f"Non-finite action at step {count}")
 
-        log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
-        if log_now and args.contact_debug:
-            _print_contact(base, count, args.pose_debug_env)
-        if log_now and args.pose_debug:
-            _print_pose(base, count, args.pose_debug_env)
+            with torch.inference_mode():
+                obs, _, terminated, truncated, _ = env.step(action)
+            count += 1
+            progress_bar.update(1)
+            if joint_log is not None:
+                joint_log.sample(count, action)
+            if video_writer is not None:
+                frame = _read_scene_rgb(base, args.video_env) if video_source == "scene" else env.render()
+                video_writer.write(frame)
 
-        term = terminated.any().item() if torch.is_tensor(terminated) else bool(terminated)
-        trunc = truncated.any().item() if torch.is_tensor(truncated) else bool(truncated)
-        if term or trunc:
-            if _visualizers_alive(base.sim) and step_limit is None:
-                obs, _ = env.reset()
-                continue
-            break
+            log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
+            if log_now and args.contact_debug:
+                _print_contact(base, count, args.pose_debug_env)
+            if log_now and args.pose_debug:
+                _print_pose(base, count, args.pose_debug_env)
+
+            completed_in_step = _count_step_terminations(terminated, truncated)
+            if completed_in_step > 0:
+                completed_demos += completed_in_step
+                if args.num_demos is not None:
+                    progress_bar.set_postfix(demos=f"{completed_demos}/{args.num_demos}")
+                    progress_bar.write(f"[INFO] Completed {completed_demos}/{args.num_demos} demonstrations.")
+                    if completed_demos >= args.num_demos:
+                        break
+                    obs, _ = env.reset()
+                    continue
+                if _visualizers_alive(base.sim) and step_limit is None:
+                    obs, _ = env.reset()
+                    continue
+                break
     return count
+
+
+def _configure_visualizers(env_cfg, args) -> None:
+    """Configure simulation visualizers on *env_cfg* based on CLI arguments."""
+    cfgs = env_cfg.sim.visualizer_cfgs
+    if cfgs is None:
+        cfgs = []
+    elif not isinstance(cfgs, list):
+        cfgs = [cfgs]
+    else:
+        cfgs = list(cfgs)
+
+    if args.collision_only:
+        try:
+            from isaaclab_visualizers.newton import NewtonVisualizerCfg
+        except ImportError as err:
+            raise SystemExit(
+                "--collision-only needs the Newton visualizer backend (pip install isaaclab_visualizers[newton])."
+            ) from err
+        newton_cfg = next((c for c in cfgs if getattr(c, "visualizer_type", None) == "newton"), None)
+        if newton_cfg is None:
+            cfgs.append(NewtonVisualizerCfg(show_collision=True))
+        else:
+            newton_cfg.show_collision = True
+            newton_cfg.show_visual = False
+
+    active_visualizers = args.visualizer or []
+    if "viser" in active_visualizers:
+        try:
+            from isaaclab_visualizers.viser import ViserVisualizerCfg
+
+            viser_cfg = next((c for c in cfgs if getattr(c, "visualizer_type", None) == "viser"), None)
+            if viser_cfg is None:
+                cfgs.append(ViserVisualizerCfg(port=args.viser_port))
+            else:
+                viser_cfg.port = args.viser_port
+        except ImportError as err:
+            raise SystemExit(
+                "Viser visualizer requires isaaclab_visualizers[viser] (run: uv add 'viser>=0.2.11')."
+            ) from err
+
+    env_cfg.sim.visualizer_cfgs = cfgs
 
 
 def _configure_video(env_cfg, args) -> str:
@@ -447,7 +530,7 @@ def _open_video(base, args, video_source) -> VideoWriter | None:
     video_name = args.video_name or (f"{_video_slug(args.task)}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4")
     if not video_name.endswith(".mp4"):
         video_name += ".mp4"
-    video_path = os.path.join(args.video_folder, video_name)
+    video_path = os.path.abspath(os.path.join(args.video_folder, video_name))
     video_writer = VideoWriter(video_path, video_width, video_height, fps)
     print(
         f"[INFO] Recording {video_source} to {video_path} "
@@ -506,14 +589,7 @@ def main() -> int:
         if not any(getattr(env_cfg.scene, name, None) is not None for name in CONTACT_SENSOR_NAMES):
             raise ValueError("--contact-debug is only supported by tasks with gripper contact sensors")
 
-    if args.collision_only:
-        try:
-            from isaaclab_visualizers.newton import NewtonVisualizerCfg
-        except ImportError as err:
-            raise SystemExit(
-                "--collision-only needs the Newton visualizer backend (pip install isaaclab_visualizers[newton])."
-            ) from err
-        env_cfg.sim.visualizer_cfgs = [NewtonVisualizerCfg(show_collision=True)]
+    _configure_visualizers(env_cfg, args)
 
     # Hydra round-trips class types to strings. Rebuild a live recorder cfg so
     # HDF5DatasetFileHandler and term class_type stay callable.
@@ -586,7 +662,7 @@ def main() -> int:
                     save = sys.exc_info()[0] is None
                     video_writer.close(save=save)
                     if save:
-                        print(f"[INFO] Saved {video_writer.frames} frames to {video_writer.path}")
+                        print(f"[INFO] Saved {video_writer.frames} frames to {video_writer.path.resolve()}")
             finally:
                 env.close()
 
