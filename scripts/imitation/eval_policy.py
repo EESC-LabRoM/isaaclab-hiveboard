@@ -28,7 +28,7 @@ import isaaclab_hiveboard  # noqa: F401  (registers the HiveBoard tasks)
 import torch
 from isaaclab_hiveboard.imitation import RobomimicPolicy, ScriptedExpert, run_rollout
 
-from isaaclab_tasks.utils import launch_simulation
+from isaaclab.app import launch_simulation
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

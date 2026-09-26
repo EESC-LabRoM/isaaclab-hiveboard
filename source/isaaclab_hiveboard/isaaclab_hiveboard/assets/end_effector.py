@@ -102,7 +102,7 @@ def print_ee_offset_report(env, ee: EndEffectorCfg, *, env_id: int = 0) -> None:
 
 def make_ee_frame(ee: EndEffectorCfg, *, debug_vis: bool = False) -> FrameTransformerCfg:
     """Build the scene ``ee_frame``. Target 0 is always the TCP."""
-    from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
+    from isaaclab_tasks.core.cabinet.cabinet_env_cfg import (  # isort: skip
         FRAME_MARKER_SMALL_CFG,
     )
 

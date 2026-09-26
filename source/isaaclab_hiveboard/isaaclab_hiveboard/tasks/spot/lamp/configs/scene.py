@@ -15,7 +15,7 @@ from isaaclab_hiveboard.assets.spot.spot import (
     SPOT_ARM_UUC_SOURCE_PRIM,
 )
 
-from isaaclab_tasks.manager_based.manipulation.cabinet.cabinet_env_cfg import (  # isort: skip
+from isaaclab_tasks.core.cabinet.cabinet_env_cfg import (  # isort: skip
     FRAME_MARKER_SMALL_CFG,
 )
 

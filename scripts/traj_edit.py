@@ -47,7 +47,8 @@ from isaaclab_hiveboard.utils.spot_traj import (
     set_key_duration_s,
     valve_q_for_sample,
 )
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BenchValve-Play-v0"

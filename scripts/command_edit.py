@@ -80,7 +80,8 @@ from isaaclab_hiveboard.utils.command_setup import (
 import isaaclab.utils.math as math_utils
 from isaaclab.sensors import BaseFrameTransformer
 
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
 COMMAND_LABELS = {

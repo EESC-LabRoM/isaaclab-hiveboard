@@ -2,7 +2,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
+from isaaclab_tasks.core.cabinet import mdp
 
 from isaaclab_hiveboard.mdp.terminations import articulation_joint_position_success, command_done_term
 from isaaclab_hiveboard.tasks.spot.lamp.configs.scene import LAMP_SEATED_POSITION

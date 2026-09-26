@@ -11,7 +11,8 @@ import argparse
 import os
 import sys
 
-from isaaclab_tasks.utils import add_launcher_args, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-Lamp-v0"
 DEFAULT_DATASET_DIR = os.path.join("logs", "imitation", "datasets")

@@ -26,7 +26,7 @@ import isaaclab_hiveboard  # noqa: F401  (registers the HiveBoard tasks)
 from isaaclab_hiveboard.imitation import ScriptedExpert, dataset_stats, run_rollout
 from isaaclab_hiveboard.mdp.recorders import RobomimicRecorderCfg
 
-from isaaclab_tasks.utils import launch_simulation
+from isaaclab.app import launch_simulation
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

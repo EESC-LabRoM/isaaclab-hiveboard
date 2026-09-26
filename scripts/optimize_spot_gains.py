@@ -42,7 +42,8 @@ from isaaclab_hiveboard.assets.spot.bench import (
     ARM_STIFFNESS,
     apply_spot_arm_gains,
 )
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-Gains-Play-v0"

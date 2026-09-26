@@ -26,7 +26,8 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers.recorder_manager import DatasetExportMode
 from tqdm import tqdm
 
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
 CONTACT_SENSOR_NAMES = (

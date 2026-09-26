@@ -24,7 +24,7 @@ from isaaclab.managers.recorder_manager import DatasetExportMode
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
+from isaaclab_tasks.core.cabinet import mdp
 
 from isaaclab_hiveboard.assets import ANYMAL_EE, as_command_offset
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (

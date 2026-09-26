@@ -453,7 +453,9 @@ ANYMAL_D_DYNAARM_ROBOTIQ_CFG = ANYMAL_D_CFG.replace(
         usd_path=_anymal_spawn.usd_path,
         activate_contact_sensors=_anymal_spawn.activate_contact_sensors,
         rigid_props=_anymal_spawn.rigid_props,
-        articulation_props=_anymal_spawn.articulation_props.replace(
+        # Upstream ANYMAL_D_CFG now uses a Physx/Newton fragment list; keep the
+        # legacy cfg so bench.py can still ``.replace(fix_root_link=True)``.
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=1,

@@ -12,7 +12,8 @@ import gymnasium as gym
 import torch
 
 import isaaclab_hiveboard  # noqa: F401
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
