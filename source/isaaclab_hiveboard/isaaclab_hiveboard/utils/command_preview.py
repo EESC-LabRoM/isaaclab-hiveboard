@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+import warp as wp
 
 import isaaclab.utils.math as math_utils
 
@@ -690,7 +691,11 @@ class PreviewIK:
             return q
         q = q.clone()
         grip = self.gripper._open_command if gripper_open else self.gripper._close_command
-        q[:, self.gripper._joint_ids] = grip
+        joint_ids = self.gripper._joint_ids
+        # Isaac Lab 3 stores action joint ids as a wp.array, which torch cannot index with.
+        if isinstance(joint_ids, wp.array):
+            joint_ids = wp.to_torch(joint_ids).long()
+        q[:, joint_ids] = grip
         names = self.robot.joint_names
         if all(name in names for name in ROBOTIQ_PARALLEL_JOINT_GEAR):
             opening = q[:, names.index("finger_joint")].clone()

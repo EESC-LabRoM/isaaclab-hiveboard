@@ -34,7 +34,7 @@ class AnymalSmallValvePhysicsCfg(PresetCfg):
             njmax=600,
             nconmax=4000,
             iterations=100,
-            ls_iterations=20,
+            ls_iterations=50,
             impratio=10.0,
             ccd_iterations=50,
             use_mujoco_contacts=False,
@@ -67,6 +67,11 @@ class AnymalSmallValveEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         self.decimation = 15
         self.episode_length_s = 8.0
+        # The pads meet the stem at finger_joint ~0.45 rad. Closing to the full
+        # 0.7 rad drives them ~18 mm into it; 0.5 rad squeezes ~5 mm. Ramp the
+        # close so the pads don't hit the stem at full drive effort.
+        self.actions.gripper_action.close_command_expr = {"finger_joint": 0.5}
+        self.actions.gripper_action.close_speed = 0.7
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "small_valve"
         self.viewer.body_name = "eixo_trans"

@@ -10,7 +10,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.core.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp
+from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_contact_stiffness
 
 PI = math.pi
 
@@ -51,6 +51,19 @@ class ValveEventCfg:
             "restitution_range": (0.0, 0.0),
             "num_buckets": 16,
             "make_consistent": True,
+        },
+    )
+    # After the material events, which re-sync shape properties. solref
+    # 0.005 s (2 x the 2.5 ms substep) and solimp 0.95/0.99 cut the pad-stem
+    # overlap from ~4.5 mm to ~0.5 mm.
+    gripper_valve_contacts = EventTerm(
+        func=set_contact_stiffness,
+        mode="startup",
+        params={
+            "shape_regex": "/robotiq_2f_140/|/Valve/",
+            "ke": 4.0e4,
+            "kd": 400.0,
+            "solimp": (0.95, 0.99, 0.001),
         },
     )
     reset_all = EventTerm(
