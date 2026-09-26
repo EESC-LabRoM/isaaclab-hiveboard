@@ -56,7 +56,7 @@ def test_batch_continues_after_failure(tmp_path, monkeypatch):
     writer.close()
 
     def command(task, output, args):
-        if task == "fails":
+        if task == "fails-Play":
             return [sys.executable, "-c", "raise SystemExit(7)"]
         return [
             sys.executable,
@@ -66,7 +66,7 @@ def test_batch_continues_after_failure(tmp_path, monkeypatch):
             str(output / f"{task}.mp4"),
         ]
 
-    monkeypatch.setattr(batch, "discover_tasks", lambda: ["fails", "succeeds"])
+    monkeypatch.setattr(batch, "discover_tasks", lambda: ["fails-Play", "succeeds-Play"])
     monkeypatch.setattr(batch, "player_command", command)
     assert batch.main(["--output", str(tmp_path / "runs")]) == 1
     report = json.loads(next((tmp_path / "runs").glob("*/summary.json")).read_text())
@@ -92,6 +92,61 @@ def test_discovery_includes_alias_and_validation_task():
     assert "validate_command_spot" in tasks
     assert "Spot-Manipulation-Lamp" in tasks
     assert "Isaac-HiveBoard-Spot-BallValve-Play-v0" in tasks
+    assert "Isaac-HiveBoard-Spot-Lamp-Play-v0" in tasks
     assert "Isaac-HiveBoard-Franka-Button-v0" in tasks
     assert "Isaac-HiveBoard-Anymal-BenchValve-Play-v0" in tasks
     assert len(tasks) == len(set(tasks))
+
+
+def test_is_play_task_predicate():
+    assert batch.is_play_task("Isaac-HiveBoard-Spot-BallValve-Play-v0")
+    assert batch.is_play_task("Isaac-HiveBoard-Franka-Lamp-Play-v0")
+    assert not batch.is_play_task("Isaac-HiveBoard-Spot-BallValve-v0")
+    assert not batch.is_play_task("validate_command_spot")
+    assert not batch.is_play_task("Spot-Manipulation-Lamp")
+
+
+def test_filter_selected_tasks_defaults_to_play_only():
+    all_tasks = batch.discover_tasks()
+    play_tasks = batch.filter_selected_tasks(all_tasks)
+
+    assert len(play_tasks) > 0
+    assert all(batch.is_play_task(t) for t in play_tasks)
+    # Ensure none of the base -v0 duplicates are present
+    assert "Isaac-HiveBoard-Spot-BallValve-v0" not in play_tasks
+    assert "Isaac-HiveBoard-Spot-BallValve-Play-v0" in play_tasks
+    assert "Isaac-HiveBoard-Spot-Lamp-Play-v0" in play_tasks
+    assert "Isaac-HiveBoard-Spot-Lamp-v0" not in play_tasks
+    assert "validate_command_spot" not in play_tasks
+
+
+def test_filter_selected_tasks_include_all():
+    all_tasks = batch.discover_tasks()
+    selected = batch.filter_selected_tasks(all_tasks, include_all=True)
+
+    assert len(selected) == len(all_tasks)
+    assert "Isaac-HiveBoard-Spot-BallValve-v0" in selected
+    assert "Isaac-HiveBoard-Spot-BallValve-Play-v0" in selected
+    assert "validate_command_spot" in selected
+
+
+def test_filter_selected_tasks_explicit_task_preserves_non_play():
+    all_tasks = batch.discover_tasks()
+    selected = batch.filter_selected_tasks(
+        all_tasks,
+        task_names=["Isaac-HiveBoard-Franka-Button-v0", "validate_command_spot"],
+    )
+
+    assert selected == ["Isaac-HiveBoard-Franka-Button-v0", "validate_command_spot"]
+
+
+def test_filter_selected_tasks_match_pattern():
+    all_tasks = batch.discover_tasks()
+    spot_play_tasks = batch.filter_selected_tasks(all_tasks, match_pattern="Spot")
+
+    assert len(spot_play_tasks) > 0
+    assert all("spot" in t.lower() and batch.is_play_task(t) for t in spot_play_tasks)
+    assert "Isaac-HiveBoard-Spot-BallValve-Play-v0" in spot_play_tasks
+    assert "Isaac-HiveBoard-Spot-BallValve-v0" not in spot_play_tasks
+    assert "Isaac-HiveBoard-Franka-BallValve-Play-v0" not in spot_play_tasks
+
