@@ -18,7 +18,12 @@ FRANKA_GRASP_SHIFT = 0.040 - DRAWER_GRASP_X
 
 
 def _use_franka_drawer(env_cfg) -> None:
+    before = env_cfg.scene.drawer.init_state.pos
     use_franka(env_cfg, "drawer", "reset_object_root")
+    # The housing has to move with the box or the shafts leave the cuts.
+    shift = tuple(a - b for a, b in zip(env_cfg.scene.drawer.init_state.pos, before))
+    housing = env_cfg.scene.drawer_housing.init_state
+    housing.pos = tuple(p + d for p, d in zip(housing.pos, shift))
     for frame in env_cfg.scene.target_frame.target_frames:
         if frame.name in ("drawer_grasp", "drawer_pulled"):
             x, y, z = frame.offset.pos

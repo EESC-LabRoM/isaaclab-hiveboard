@@ -60,10 +60,13 @@ BUTTON_USD = os.path.join(HIVEBOARD_SIM_DIR, "Button", "Button_Assembly.usd")
 BUTTON_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "button", "usd", "uuc", "Button_Assembly.usda")
 DRAWER_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Drawer", "Drawer_Assembly.urdf")
 DRAWER_USD = os.path.join(HIVEBOARD_SIM_DIR, "Drawer", "Drawer_Assembly.usd")
-# Articulated re-authoring of the rigid upstream asset: UUC base + baked CoACD
-# overlay. See hiveboard/drawer/Drawer_Assembly.urdf and
-# scripts/generate_newton_usd.py.
-DRAWER_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "drawer", "usd", "Drawer_Assembly_uuc_newton.usda")
+# Free box and kinematic housing, each a UUC of one link from
+# hiveboard/drawer/Drawer_Assembly.urdf. Shafts and side cuts are primitives.
+# See scripts/generate_newton_usd.py.
+DRAWER_HOUSING_NEWTON_USD = os.path.join(
+    ASSET_DIR, "hiveboard", "drawer", "usd", "Drawer_Housing_uuc_newton.usda"
+)
+DRAWER_BOX_NEWTON_USD = os.path.join(ASSET_DIR, "hiveboard", "drawer", "usd", "Drawer_Box_uuc_newton.usda")
 KEY_URDF = os.path.join(HIVEBOARD_SIM_DIR, "Key", "Key_assembly.urdf")
 KEY_USD = os.path.join(HIVEBOARD_SIM_DIR, "Key", "Key_assembly.usd")
 # Articulated re-authoring of the rigid upstream asset, converted by UUC.

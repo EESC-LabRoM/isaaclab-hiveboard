@@ -1095,7 +1095,7 @@ class CommandEditor:
             self.show_selected()
 
 
-def _parse_args():
+def _parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=DEFAULT_TASK)
     parser.add_argument(
@@ -1104,17 +1104,34 @@ def _parse_args():
         "Default: configs/<task>.json, or the base task's file for a -Play-v0 variant, if present.",
     )
     parser.add_argument("--out", help="Save path (default: --setup or configs/<task>.json).")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--viser-port",
+        "--port",
+        type=int,
+        default=9080,
+        dest="viser_port",
+        help="HTTP port for the Viser web visualizer (default: 9080).",
+    )
     parser.add_argument("--ik-iters", type=int, default=24)
     parser.add_argument("--smoke-test", action="store_true", help="Construct scene/UI, solve once and exit.")
     add_launcher_args(parser)
-    args, hydra_args = setup_preset_cli(parser)
+    args, hydra_args = setup_preset_cli(parser, argv=argv)
+    args.port = args.viser_port
+    if args.viser_port is not None and args.viser_port <= 0:
+        parser.error("--viser-port must be a positive integer")
     # A preview needs at least one IK iteration to move the robot.
     if args.ik_iters < 1:
         parser.error("--ik-iters must be positive")
     # The editor needs Newton unless the command line already picked a physics preset.
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
         hydra_args.append("physics=newton_mjwarp")
+    if (
+        args.visualizer is not None
+        and "viser" not in args.visualizer
+        and not getattr(args, "visualizer_disable_all", False)
+    ):
+        parser.error("scripts/command_edit.py only supports the Viser visualizer (--visualizer viser)")
+    # The editor runs its own interactive Viser server; disable IsaacLab's background visualizer.
     args.visualizer = None
     args.visualizer_explicit = args.visualizer_disable_all = True
     return args, hydra_args
@@ -1156,7 +1173,8 @@ def _open_viewer(args):
     from isaaclab_newton.physics import NewtonManager
     from newton.viewer import ViewerViser
 
-    viewer = ViewerViser(port=args.port, label="HiveBoard command setup")
+    port = getattr(args, "viser_port", getattr(args, "port", 9080))
+    viewer = ViewerViser(port=port, label="HiveBoard command setup")
     viewer.set_model(NewtonManager.get_model())
     return viewer
 

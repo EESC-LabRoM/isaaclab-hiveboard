@@ -902,6 +902,12 @@ class _GoToFrameHandler(_BaseCmdHandler):
             joint_ids, _ = asset.find_joints(joint_name)
             joint_q = asset.data.joint_pos.torch[env_ids, joint_ids[0]]
             done = done | ((joint_q >= float(low)) & (joint_q <= float(high)))
+        done_when_travel = getattr(self.cfg, "done_when_travel", None)
+        if done_when_travel is not None:
+            # The drawer box has no joint. Advance on its forward travel.
+            from isaaclab_hiveboard.tasks.anymal.drawer.slide import done_when_travel_holds
+
+            done = done | done_when_travel_holds(term._env, env_ids, done_when_travel)
         return done
 
     def get_target_in_base_frame(self, env_ids: torch.Tensor):
@@ -2732,6 +2738,12 @@ class GoToFrameCfg(BaseCmd):
 
     For pushes and presses whose stop leaves the TCP short of the target by a
     robot-specific amount. None disables.
+    """
+    done_when_travel: tuple[str, str, float, float] | None = None
+    """Also complete once ``(box, housing, low, high)`` has the box's forward travel in range.
+
+    Forward travel is the box origin's x in the housing frame, in metres.
+    None disables. The drawer uses this because the box has no joint.
     """
     canonicalize_upward: bool = True
     """If True, choose the upright TCP +X half-turn once at the segment start.

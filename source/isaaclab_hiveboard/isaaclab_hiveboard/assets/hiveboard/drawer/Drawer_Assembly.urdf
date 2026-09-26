@@ -1,115 +1,80 @@
 <?xml version="1.0"?>
 <!--
-  Sliding drawer: base + drawer on a prismatic joint along +X (pull toward the robot).
-  Travel ends where the drawer pins reach the end of the guide slots (x = 33 mm);
-  the joint limit enforces it, so the pins carry no collider. The drawer's one
-  collider is decomposed by scripts/generate_newton_usd.py (a single hull
-  would wrap its thin handle tab into a slanted phantom front).
-  Generated from the upstream single-link Drawer_Assembly.urdf (dependencies/HiveBoard),
-  which carries no joint between the parts. Meshes are the upstream ones.
+  Sliding drawer: housing plus a box that can leave only by going forward, then up.
+
+  The upstream Drawer_Assembly.urdf (dependencies/HiveBoard) is one rigid link.
+  Visual meshes are those parts. Collision is coarsened so Newton can hold the
+  path: two shafts (cylinders, axis Y) ride boxes that stand in for the side
+  cuts. Each cut is a horizontal slot, a lower lip that stops a straight pull,
+  and an open top once the shaft is at that lip, so the box rises out and only
+  then can come forward off the case. A single convex hull of the slotted plate
+  would fill this exit, so the plate mesh is visual only.
+
+  The box is not on a joint. A floating joint leaves it a free rigid body;
+  the housing is fixed. Contact between the shafts and the cut boxes is the
+  only thing that guides it.
+
+  Closed shaft centers are (0.006, ±0.052, -0.020) m, radius 4 mm. The slot
+  leaves 0.5 mm of clearance above and below the shaft, so a forward push
+  cannot rise onto a corner. Side walls keep their inner face at |y| = 0.031 m
+  and are 42 mm thick toward the outside, so a twist cannot walk a shaft out
+  of the cut. The shafts are lengthened outward to match and stay 2 mm proud
+  of both faces. The ceiling runs to x = 0.046 m. The lip face is at
+  x = 0.054 m and continues to x = 0.50 m. Those meet: the shaft rear clears
+  the ceiling at the same travel the shaft front meets the lip, so there is
+  no open stretch where the shaft can cam up. The lip top is 4 mm above the
+  shaft, so a level pull cannot roll over it, and a rise at the lip still
+  clears. The box mass sits on the shaft axis, so a pull there does not pitch
+  the box.
 -->
 <robot name="Drawer_Assembly">
   <link name="base">
-    <inertial><origin xyz="0.019 0 0" rpy="0 0 0" /><mass value="0.1" /><inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05" /></inertial>
+    <inertial><origin xyz="0.019 0 0" rpy="0 0 0" /><mass value="0.1" /><inertia ixx="1e-04" ixy="0" ixz="0" iyy="1e-04" iyz="0" izz="1e-04" /></inertial>
     <visual>
       <origin xyz="0.000000 0.000000 0.000000" rpy="0. 1.5707964 0. " />
       <geometry>
         <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/tn__Base1_gA_Corpo1_Mesh.obj" scale="0.001000 0.001000 0.001000" />
       </geometry>
     </visual>
-    <collision>
-      <origin xyz="0.019000 0.000000 0.022396" rpy="0. 1.5707964 0. " />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/simple_colliders_Cube.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <!-- Left cut. Boxes are centered; sizes are the full edge lengths. -->
+    <collision name="cut_left_rear">
+      <origin xyz="-0.0055 -0.052 -0.010" rpy="0 0 0" />
+      <geometry><box size="0.013 0.042 0.070" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.019000 0.000000 -0.022839" rpy="0. 1.5707964 0. " />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/simple_colliders_Cube_01.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <collision name="cut_left_floor">
+      <origin xyz="0.0275 -0.052 -0.03725" rpy="0 0 0" />
+      <geometry><box size="0.055 0.042 0.0255" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.000639 0.000000 0.000000" rpy="3.1415927 0. 3.1415927" />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/simple_colliders_Cube_02.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <collision name="cut_left_ceiling">
+      <origin xyz="0.023 -0.052 0.00725" rpy="0 0 0" />
+      <geometry><box size="0.046 0.042 0.0455" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.013983 -0.036990 -0.011011" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/left_Guide_Cube.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <!-- Top is 4 mm above the shaft, so a level pull meets the face and a rise clears it. -->
+    <collision name="cut_left_lip">
+      <origin xyz="0.277 -0.052 -0.031" rpy="0 0 0" />
+      <geometry><box size="0.446 0.042 0.038" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.024419 -0.036990 0.007061" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/left_Guide_Cube_01.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <!-- Right cut, mirrored in Y. -->
+    <collision name="cut_right_rear">
+      <origin xyz="-0.0055 0.052 -0.010" rpy="0 0 0" />
+      <geometry><box size="0.013 0.042 0.070" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.019104 -0.036990 -0.023485" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/left_Guide_Cube_02.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <collision name="cut_right_floor">
+      <origin xyz="0.0275 0.052 -0.03725" rpy="0 0 0" />
+      <geometry><box size="0.055 0.042 0.0255" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.035530 -0.036990 -0.016197" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/left_Guide_Cube_03.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <collision name="cut_right_ceiling">
+      <origin xyz="0.023 0.052 0.00725" rpy="0 0 0" />
+      <geometry><box size="0.046 0.042 0.0455" /></geometry>
     </collision>
-    <collision>
-      <origin xyz="0.001747 -0.036990 -0.019452" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/left_Guide_Cube_04.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.025516 -0.037173 -0.014515" rpy="1.5707964 0. 0. " />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/Cylinder.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.013983 0.036913 -0.011011" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cube.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.024419 0.036913 0.007061" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cube_01.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.019104 0.036913 -0.023485" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cube_02.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.035530 0.036913 -0.016197" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cube_03.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.001747 0.036913 -0.019452" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cube_04.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.025516 0.037110 -0.014515" rpy="1.5707964 0. 0. " />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/right_Guide_Cylinder_01.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <collision name="cut_right_lip">
+      <origin xyz="0.277 0.052 -0.031" rpy="0 0 0" />
+      <geometry><box size="0.446 0.042 0.038" /></geometry>
     </collision>
   </link>
+
   <link name="drawer">
-    <inertial><origin xyz="0.025 0 0" rpy="0 0 0" /><mass value="0.03" /><inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05" /></inertial>
+    <inertial><origin xyz="0.006 0 -0.020" rpy="0 0 0" /><mass value="0.03" /><inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05" /></inertial>
     <visual>
       <origin xyz="0.002700 -0.035000 -0.022000" rpy="0. 0. 0." />
       <geometry>
@@ -128,18 +93,26 @@
         <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/Cylinder_02.obj" scale="0.001000 0.001000 0.001000" />
       </geometry>
     </visual>
-    <collision>
-      <origin xyz="0.002700 -0.035000 -0.022000" rpy="0. 0. 0." />
-      <geometry>
-        <mesh filename="../../../../../../dependencies/HiveBoard/Simulation/Drawer/meshes/tn__Gaveta1_aE_Corpo1_Mesh.obj" scale="0.001000 0.001000 0.001000" />
-      </geometry>
+    <!-- Shafts along Y, lengthened outward with the walls. rpy rolls local Z onto Y. -->
+    <collision name="shaft_left">
+      <origin xyz="0.006 -0.052 -0.020" rpy="1.5707963 0 0" />
+      <geometry><cylinder radius="0.004" length="0.046" /></geometry>
+    </collision>
+    <collision name="shaft_right">
+      <origin xyz="0.006 0.052 -0.020" rpy="1.5707963 0 0" />
+      <geometry><cylinder radius="0.004" length="0.046" /></geometry>
+    </collision>
+    <!-- Front/handle, inside the side walls, so a gripper can pinch the tab. -->
+    <collision name="face">
+      <origin xyz="0.044 0.001 0.009" rpy="0 0 0" />
+      <geometry><box size="0.010 0.030 0.010" /></geometry>
     </collision>
   </link>
-  <joint name="PrismaticJoint" type="prismatic">
+
+  <!-- No constraint. The converter authors the child as a free rigid body. -->
+  <joint name="float" type="floating">
     <origin xyz="0 0 0" rpy="0 0 0" />
     <parent link="base" />
     <child link="drawer" />
-    <axis xyz="1 0 0" />
-    <limit lower="0.0" upper="0.025" effort="100.0" velocity="1.0" />
   </joint>
 </robot>
