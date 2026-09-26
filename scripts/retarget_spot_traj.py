@@ -23,7 +23,8 @@ import gymnasium as gym
 import isaaclab_hiveboard  # noqa: F401
 from isaaclab_hiveboard.assets.spot.bench import TRAJECTORY_JSON
 from isaaclab_hiveboard.utils.spot_traj import IK_ITERS, load_payload, print_key_report, retarget, save_payload
-from isaaclab_tasks.utils import add_launcher_args, launch_simulation, resolve_task_config, setup_preset_cli
+from isaaclab.app import add_launcher_args, launch_simulation
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-Gains-Play-v0"

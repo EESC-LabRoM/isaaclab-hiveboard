@@ -10,13 +10,10 @@ description = "Isaac Lab simulation environments for multi-robot HiveBoard manip
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "isaaclab",
-    "isaaclab-assets",
-    "isaaclab-contrib",
-    "isaaclab-newton[all]",
-    "isaaclab-physx[newton]",
-    "isaaclab-tasks",
-    "isaaclab-visualizers[newton]",
+    # Isaac Lab's source-checkout root owns every runtime dependency (torch,
+    # newton, warp, ...) and pulls in all its workspace packages; the
+    # per-package extras (isaaclab-newton[all], ...) no longer exist.
+    "isaaclab-dev",
     "hydra-core>=1.3,<1.4",
     "pytorch-kinematics>=0.10.0",
     "setuptools<82.0.0",
@@ -30,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cameras = ["isaacsim[all,extscache]==6.0.1"]
+cameras = ["isaacsim[all,extscache]==6.1.0.0"]
 curobo = ["nvidia-curobo[cu13]"]
 data = [
     "diffusers>=0.36.0",
@@ -54,21 +51,55 @@ imitation = [
 [[tool.uv.index]]
 url = "https://pypi.nvidia.com/"
 
+# Named indexes referenced by Isaac Lab's own [tool.uv.sources].
+[[tool.uv.index]]
+name = "pypi-public"
+url = "https://pypi.org/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
 robomimic = { git = "https://github.com/ARISE-Initiative/robomimic.git", tag = "v0.4.0" }
 nvidia-curobo = { path = "dependencies/curobo", editable = true }
+isaaclab-dev = { path = "dependencies/IsaacLab" }
 isaaclab = { path = "dependencies/IsaacLab/source/isaaclab", editable = true }
 isaaclab-assets = { path = "dependencies/IsaacLab/source/isaaclab_assets", editable = true }
 isaaclab-contrib = { path = "dependencies/IsaacLab/source/isaaclab_contrib", editable = true }
+isaaclab-experimental = { path = "dependencies/IsaacLab/source/isaaclab_experimental", editable = true }
 isaaclab-newton = { path = "dependencies/IsaacLab/source/isaaclab_newton", editable = true }
+isaaclab-ov = { path = "dependencies/IsaacLab/source/isaaclab_ov", editable = true }
 isaaclab-physx = { path = "dependencies/IsaacLab/source/isaaclab_physx", editable = true }
+isaaclab-ppisp = { path = "dependencies/IsaacLab/source/isaaclab_ppisp", editable = true }
+isaaclab-rl = { path = "dependencies/IsaacLab/source/isaaclab_rl", editable = true }
 isaaclab-tasks = { path = "dependencies/IsaacLab/source/isaaclab_tasks", editable = true }
+isaaclab-tasks-experimental = { path = "dependencies/IsaacLab/source/isaaclab_tasks_experimental", editable = true }
 isaaclab-visualizers = { path = "dependencies/IsaacLab/source/isaaclab_visualizers", editable = true }
+omniverseclient = { index = "pypi-public" }
+ovphysx = { index = "pypi-public" }
+ovrtx = { index = "pypi-public" }
+ovstage = { index = "pypi-public" }
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
 
 [tool.uv]
-# Isaac Sim 6.0.1 pins 7.4.4 while this Isaac Lab snapshot pins 7.6.1 only
-# for its own tests. The runtime APIs used here do not depend on that delta.
-override-dependencies = ["coverage==7.4.4"]
+# Overrides only apply at the top-level project, so mirror Isaac Lab's own
+# (dependencies/IsaacLab/pyproject.toml): it owns the Newton, MuJoCo and torch
+# versions, and the isaacsim wheels pin older ones.
+override-dependencies = [
+    "numpy>=2",
+    "mujoco~=3.12.0",
+    "mujoco-warp~=3.12.0",
+    "newton[sim]==1.6.0",
+    "newton-usd-schemas>=0.4.1",
+    "torch==2.12.0",
+    "torchvision==0.27.0",
+    "packaging>=20,<27",
+]
 index-strategy = "unsafe-best-match"
 prerelease = "allow"
 conflicts = [

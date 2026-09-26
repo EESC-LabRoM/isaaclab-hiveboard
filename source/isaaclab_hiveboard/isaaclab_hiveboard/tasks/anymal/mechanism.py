@@ -22,7 +22,7 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_physx.physics import PhysxCfg
-from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
+from isaaclab_tasks.core.cabinet import mdp
 from isaaclab_tasks.utils import PresetCfg
 
 from isaaclab_hiveboard import mdp as spot_mdp

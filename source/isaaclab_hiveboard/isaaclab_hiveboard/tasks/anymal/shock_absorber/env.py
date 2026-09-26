@@ -13,7 +13,7 @@ from isaaclab.sensors import ContactSensorCfg, FrameTransformerCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
+from isaaclab_tasks.core.cabinet import mdp
 
 from isaaclab_hiveboard.assets import ANYMAL_EE, as_command_offset, make_ee_frame
 from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_NEWTON_CFG

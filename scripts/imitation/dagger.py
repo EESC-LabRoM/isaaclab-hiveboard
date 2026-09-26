@@ -43,7 +43,7 @@ from isaaclab_hiveboard.imitation import (
 )
 from isaaclab_hiveboard.mdp.recorders import RobomimicDaggerRecorderCfg
 
-from isaaclab_tasks.utils import launch_simulation
+from isaaclab.app import launch_simulation
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
