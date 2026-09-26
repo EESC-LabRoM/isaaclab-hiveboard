@@ -7,8 +7,9 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.terminations import articulation_joint_ranges_success, command_done_term
+from isaaclab_hiveboard.mdp.terminations import command_done_term
 from isaaclab_hiveboard.tasks.anymal.drawer.configs.commands import DRAWER_OPEN
+from isaaclab_hiveboard.tasks.anymal.drawer.slide import drawer_slide_success
 
 
 @configclass
@@ -18,10 +19,11 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     command_done = command_done_term()
     success = DoneTerm(
-        func=articulation_joint_ranges_success,
+        func=drawer_slide_success,
         params={
             "command_name": "pose_command",
-            "asset_name": "drawer",
-            "ranges": {"PrismaticJoint": (DRAWER_OPEN, 1.0)},
+            "box_name": "drawer",
+            "housing_name": "drawer_housing",
+            "open_distance": DRAWER_OPEN,
         },
     )

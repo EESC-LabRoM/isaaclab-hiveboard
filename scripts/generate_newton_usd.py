@@ -21,9 +21,10 @@ Lamp: UUC conversion of the HiveBoard lamp URDF, including its primitive
 bulb colliders. The environment implements the revolute/prismatic coupling.
 Button: UUC conversion of the HiveBoard hidden-button URDF (lid hinge and
 button slide are already articulated upstream).
-Drawer / key: UUC conversion of the articulated URDFs in ``hiveboard/drawer``
-and ``hiveboard/key`` (the upstream ones have no joints), plus a CoACD overlay
-for the drawer so its handle tab gets its own collider.
+Drawer / key: UUC conversion of the re-authored URDFs in ``hiveboard/drawer``
+and ``hiveboard/key`` (the upstream ones have no joints). The drawer is split
+into a kinematic housing and a free box; cuts and shafts stay URDF primitives,
+so there is no CoACD overlay: a hull of the slotted plate would fill the exit.
 Threads / peg / shock absorber: UUC conversion of the re-authored URDFs in
 ``hiveboard/{m8_thread,m30_thread,peg_insertion,shock_absorber}``, plus a
 CoACD overlay for the shock-absorber spring.
@@ -110,13 +111,14 @@ BUTTON_URDF = REPO_ROOT / "dependencies/HiveBoard/Simulation/Button/Button_Assem
 BUTTON_UUC_DIR = EXT_ASSETS / "hiveboard/button/usd/uuc"
 
 # Drawer and key: the upstream URDFs are a single rigid link, so these convert
-# the articulated URDFs committed next to their USD output instead.
+# the re-authored URDFs committed next to their USD output instead.
+# The drawer is two rigid bodies (housing, free box). Cut collision is boxes.
 DRAWER_URDF = EXT_ASSETS / "hiveboard/drawer/Drawer_Assembly.urdf"
 DRAWER_USD_DIR = EXT_ASSETS / "hiveboard/drawer/usd"
-DRAWER_UUC_DIR = DRAWER_USD_DIR / "uuc"
-DRAWER_OVERLAY = DRAWER_USD_DIR / "Drawer_Assembly_uuc_newton.usda"
-# A single hull wraps the thin handle tab and the open box into one solid.
-DRAWER_TARGETS: tuple[tuple[str, str, float], ...] = (("Geometry/base/drawer", "tn__Gaveta1_aE_Corpo1_Mesh_1", 0.05),)
+DRAWER_HOUSING_UUC_DIR = DRAWER_USD_DIR / "uuc_housing"
+DRAWER_BOX_UUC_DIR = DRAWER_USD_DIR / "uuc_box"
+DRAWER_HOUSING_OVERLAY = DRAWER_USD_DIR / "Drawer_Housing_uuc_newton.usda"
+DRAWER_BOX_OVERLAY = DRAWER_USD_DIR / "Drawer_Box_uuc_newton.usda"
 KEY_URDF = EXT_ASSETS / "hiveboard/key/Key_Assembly.urdf"
 KEY_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc"
 
@@ -144,7 +146,6 @@ ARTICULATED_UUC_ASSETS = (
         "Button_Assembly",
         (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")),
     ),
-    ("drawer", DRAWER_OVERLAY, "Drawer_Assembly", (("PrismaticJoint", "PhysicsPrismaticJoint"),)),
     ("key", KEY_UUC_DIR / "Key_Assembly.usda", "Key_Assembly", (("RevoluteJoint", "PhysicsRevoluteJoint"),)),
     *(
         (label, usda, prim, (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")))
@@ -486,13 +487,107 @@ def render_ht_overlay() -> str:
     )
 
 
-def render_drawer_overlay() -> str:
-    return render_coacd_overlay(
-        urdf=DRAWER_URDF,
-        uuc_dir=DRAWER_UUC_DIR,
-        usda_name="Drawer_Assembly.usda",
-        default_prim="Drawer_Assembly",
-        targets=DRAWER_TARGETS,
+def _split_drawer_urdfs(directory: Path) -> tuple[Path, Path]:
+    """Write one-link URDFs so each Newton body is free of the other.
+
+    The authored assembly keeps both links and a floating joint. A single USD
+    nests the box under the housing articulation, and a rigid-object spawn
+    rejects that. Mesh paths stay valid because these files sit next to the
+    source URDF. Callers delete them after conversion.
+    """
+    import copy
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(str(DRAWER_URDF)).getroot()
+
+    def write(name: str, link: str) -> Path:
+        robot = ET.Element("robot", {"name": name})
+        for child in root:
+            if child.tag == "link" and child.attrib.get("name") == link:
+                robot.append(copy.deepcopy(child))
+        path = directory / f"{name}.urdf"
+        tree = ET.ElementTree(robot)
+        ET.indent(tree, space="  ")
+        tree.write(path, encoding="utf-8", xml_declaration=True)
+        return path
+
+    return write("Drawer_Housing", "base"), write("Drawer_Box", "drawer")
+
+
+def _anchor_housing(payload: Path) -> None:
+    """Mark the welded housing as an articulation root so the case stays fixed."""
+    text = payload.read_text(encoding="utf-8")
+    needle = 'prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "NewtonMassAPI"]'
+    replacement = (
+        'prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsArticulationRootAPI", '
+        '"NewtonArticulationRootAPI", "PhysicsMassAPI", "NewtonMassAPI"]'
+    )
+    if "PhysicsArticulationRootAPI" not in text:
+        if needle not in text:
+            raise RuntimeError(f"{payload} has no base rigid-body schema to anchor")
+        text = text.replace(needle, replacement, 1)
+        payload.write_text(text, encoding="utf-8")
+    if 'PhysicsFixedJoint "root_joint"' not in text:
+        raise RuntimeError(f"{payload} is missing the root weld")
+
+
+def _disable_visual_mesh_collision(geometry_usda: Path) -> None:
+    """Visual meshes stay visible. Only the named primitive cuts and shafts collide."""
+    from pxr import Usd, UsdPhysics  # noqa: PLC0415
+
+    stage = Usd.Stage.Open(str(geometry_usda))
+    if stage is None:
+        raise RuntimeError(f"could not open {geometry_usda}")
+    for prim in stage.Traverse():
+        if prim.GetTypeName() != "Mesh":
+            continue
+        collision = UsdPhysics.CollisionAPI.Apply(prim)
+        collision.CreateCollisionEnabledAttr(False)
+    stage.GetRootLayer().Save()
+
+
+def _strip_world_fixed_joint(payload: Path) -> None:
+    """Drop UUC's root weld so the link is a free rigid body.
+
+    The converter welds every non-ghost root link to the default prim. That
+    weld is a joint, and a fixed-base rigid object does not initialize. The
+    housing is held still by the kinematic flag instead.
+    """
+    from pxr import Usd  # noqa: PLC0415
+
+    stage = Usd.Stage.Open(str(payload))
+    if stage is None:
+        raise RuntimeError(f"could not open {payload}")
+    paths = [
+        prim.GetPath()
+        for prim in stage.Traverse()
+        if prim.GetName() == "root_joint" and prim.GetTypeName() == "PhysicsFixedJoint"
+    ]
+    for path in paths:
+        stage.RemovePrim(path)
+    stage.GetRootLayer().Save()
+
+
+def render_rigid_overlay(default_prim: str, reference: str) -> str:
+    """Reference one UUC layer. Do not hull the drawer's slotted plate."""
+    return "\n".join(
+        (
+            "#usda 1.0",
+            "(",
+            f'    defaultPrim = "{default_prim}"',
+            "    metersPerUnit = 1",
+            '    upAxis = "Z"',
+            ")",
+            "",
+            "# urdf-usd-converter output. Shafts and side cuts are URDF primitives;",
+            "# do not convex-hull the slotted plate over them.",
+            f'def Xform "{default_prim}" (',
+            f"    prepend references = @{reference}@</{default_prim}>",
+            ")",
+            "{",
+            "}",
+            "",
+        )
     )
 
 
@@ -604,6 +699,30 @@ def verify() -> list[str]:
                 joint = stage.GetPrimAtPath(f"/Lamp_Assembly/Physics/{name}")
                 if not joint or not joint.IsA(joint_type):
                     problems.append(f"lamp UUC missing {name}")
+    for label, overlay, default_prim in (
+        ("drawer housing", DRAWER_HOUSING_OVERLAY, "Drawer_Housing"),
+        ("drawer box", DRAWER_BOX_OVERLAY, "Drawer_Box"),
+    ):
+        if not overlay.exists():
+            problems.append(f"missing {label}: {overlay}")
+        else:
+            stage = Usd.Stage.Open(str(overlay))
+            if not stage:
+                problems.append(f"pxr could not open {overlay}")
+            else:
+                bodies = [
+                    prim.GetPath().pathString
+                    for prim in stage.Traverse()
+                    if prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                ]
+                if len(bodies) != 1:
+                    problems.append(f"{label} should be one rigid body, found {bodies}")
+                for prim in stage.Traverse():
+                    if prim.IsA(UsdPhysics.PrismaticJoint) or prim.GetTypeName() == "PhysicsPrismaticJoint":
+                        problems.append(f"{label} still has prismatic joint {prim.GetPath()}")
+                root = stage.GetPrimAtPath(f"/{default_prim}")
+                if not root or not root.IsValid():
+                    problems.append(f"{label} missing default prim {default_prim}")
     for label, usda, default_prim, joints in ARTICULATED_UUC_ASSETS:
         if not usda.exists():
             problems.append(f"missing {label} UUC: {usda}")
@@ -700,8 +819,19 @@ def main(argv: list[str] | None = None) -> int:
             run_uuc_conversion(BUTTON_URDF, BUTTON_UUC_DIR, args.uuc_python)
             print(f"[UUC] button: {BUTTON_UUC_DIR / 'Button_Assembly.usda'}")
         if want_drawer:
-            run_uuc_conversion(DRAWER_URDF, DRAWER_UUC_DIR, args.uuc_python)
-            print(f"[UUC] drawer: {DRAWER_UUC_DIR / 'Drawer_Assembly.usda'}")
+            housing_urdf, box_urdf = _split_drawer_urdfs(DRAWER_URDF.parent)
+            try:
+                run_uuc_conversion(housing_urdf, DRAWER_HOUSING_UUC_DIR, args.uuc_python)
+                run_uuc_conversion(box_urdf, DRAWER_BOX_UUC_DIR, args.uuc_python)
+            finally:
+                housing_urdf.unlink(missing_ok=True)
+                box_urdf.unlink(missing_ok=True)
+            _strip_world_fixed_joint(DRAWER_BOX_UUC_DIR / "Payload" / "Physics.usda")
+            _anchor_housing(DRAWER_HOUSING_UUC_DIR / "Payload" / "Physics.usda")
+            _disable_visual_mesh_collision(DRAWER_HOUSING_UUC_DIR / "Payload" / "Geometry.usda")
+            _disable_visual_mesh_collision(DRAWER_BOX_UUC_DIR / "Payload" / "Geometry.usda")
+            print(f"[UUC] drawer housing: {DRAWER_HOUSING_UUC_DIR / 'Drawer_Housing.usda'}")
+            print(f"[UUC] drawer box: {DRAWER_BOX_UUC_DIR / 'Drawer_Box.usda'}")
         if want_key:
             run_uuc_conversion(KEY_URDF, KEY_UUC_DIR, args.uuc_python)
             print(f"[UUC] key: {KEY_UUC_DIR / 'Key_Assembly.usda'}")
@@ -746,9 +876,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[OVERLAY] wrote {SM_OVERLAY} ({len(text) // 1024} KiB)")
 
     if want_drawer:
-        text = render_drawer_overlay()
-        DRAWER_OVERLAY.write_text(text, encoding="utf-8")
-        print(f"[OVERLAY] wrote {DRAWER_OVERLAY} ({len(text) // 1024} KiB)")
+        housing_text = render_rigid_overlay("Drawer_Housing", "./uuc_housing/Drawer_Housing.usda")
+        box_text = render_rigid_overlay("Drawer_Box", "./uuc_box/Drawer_Box.usda")
+        DRAWER_HOUSING_OVERLAY.write_text(housing_text, encoding="utf-8")
+        DRAWER_BOX_OVERLAY.write_text(box_text, encoding="utf-8")
+        print(f"[OVERLAY] wrote {DRAWER_HOUSING_OVERLAY}")
+        print(f"[OVERLAY] wrote {DRAWER_BOX_OVERLAY}")
     if want_shock:
         text = render_shock_overlay()
         SHOCK_OVERLAY.write_text(text, encoding="utf-8")

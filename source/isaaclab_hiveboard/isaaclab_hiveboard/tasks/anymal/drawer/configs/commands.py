@@ -13,7 +13,8 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
 )
 from isaaclab_hiveboard.tasks.anymal.mechanism import ANYMAL_CUROBO
 
-# Drawer travel that counts as open (stop at 0.025 m).
+# Forward travel that counts as open. This is still inside the side slot;
+# leaving the case also takes the lift, which is not part of success.
 DRAWER_OPEN = 0.02
 
 
@@ -50,8 +51,8 @@ class FramePoseCommandsCfg:
                 gripper_open=False,
                 distance_threshold=0.01,
                 # A slipping grasp leaves the TCP ahead of the drawer; finish
-                # on the drawer's own travel.
-                done_when_joint=("drawer", "PrismaticJoint", DRAWER_OPEN, 1.0),
+                # on the box's forward travel in the housing frame.
+                done_when_travel=("drawer", "drawer_housing", DRAWER_OPEN, 1.0),
                 target_frame_name="drawer_pulled",
                 velocity=0.05,
                 **ANYMAL_CUROBO,

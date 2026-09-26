@@ -7,13 +7,13 @@
     "pos": [
       0.0,
       0.0,
-      0.2
+      0.21
     ],
     "rot": [
-      0.0,
-      -0.7071067811865476,
-      0.0,
-      0.7071067811865476
+      -0.4999999925494185,
+      -0.4999999925494185,
+      -0.5000000521540624,
+      0.49999996274709657
     ]
   },
   "commands": [
@@ -21,9 +21,9 @@
       "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
         "frame_name": "target_frame",
-        "target_frame_name": "drawer_approaching",
+        "target_frame_name": "drawer_grasp",
         "target_offset_pos": [
-          0.0,
+          -0.07200002670288086,
           0.0,
           0.0
         ],
@@ -138,9 +138,10 @@
         "distance_threshold": 0.01,
         "orientation_threshold_deg": 10.0,
         "valve_done_threshold_rad": null,
-        "done_when_joint": [
+        "done_when_joint": null,
+        "done_when_travel": [
           "drawer",
-          "PrismaticJoint",
+          "drawer_housing",
           0.02,
           1.0
         ],
@@ -168,28 +169,34 @@
       "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
         "frame_name": "target_frame",
-        "target_frame_name": "drawer_approaching",
+        "target_frame_name": "drawer_pulled",
         "target_offset_pos": [
-          -0.023937642574310303,
-          -1.548323780298233e-08,
-          0.05260157585144043
+          -0.010646283626556396,
+          0.0,
+          0.055500805377960205
         ],
         "target_offset_rot": [
-          -1.1920928955069046e-07,
-          -1.2270085107947784e-06,
-          -5.960464477534523e-08,
-          -0.9999999999992384
+          0.0,
+          0.0,
+          0.0,
+          -1.0
         ],
         "target_position_env": null,
         "target_orientation_env": null,
         "gripper_open": false,
-        "velocity": 0.2,
+        "velocity": 0.05,
         "angular_velocity": 1.0,
-        "distance_threshold": 0.05,
+        "distance_threshold": 0.01,
         "orientation_threshold_deg": 10.0,
         "valve_done_threshold_rad": null,
         "done_when_joint": null,
-        "canonicalize_upward": false,
+        "done_when_travel": [
+          "drawer",
+          "drawer_housing",
+          0.02,
+          1.0
+        ],
+        "canonicalize_upward": true,
         "hold_current_orientation": false,
         "robot_joint_names": [
           "dynaarm_shoulder_rotation",
