@@ -301,6 +301,26 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
         help="Newton visualizer shows only collision geometry. No-op with --visualizer none.",
     )
     parser.add_argument(
+        "--expect-collide",
+        action="append",
+        default=None,
+        metavar="REGEX_A:REGEX_B",
+        help="Body pair that must collide, as regexes on Newton body labels (USD paths), e.g. "
+        "'/Robot/.*:/Valve/.*'. Repeatable. Prints which shape pairs Newton filters out and why, "
+        "then reports the deepest A x B penetration while playing.",
+    )
+    parser.add_argument(
+        "--collision-audit",
+        action="store_true",
+        help="Same as --expect-collide '/Robot/.*:/Valve/.*'.",
+    )
+    parser.add_argument(
+        "--penetration-tol",
+        type=float,
+        default=0.005,
+        help="Penetration depth [m] that --expect-collide flags (default: 0.005).",
+    )
+    parser.add_argument(
         "--joint-log",
         default=None,
         help="Directory for commanded vs measured joint CSV/plots. "
@@ -372,7 +392,9 @@ def _count_step_terminations(terminated, truncated) -> int:
     return int(bool(terminated or truncated))
 
 
-def _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log) -> int:
+def _play_steps(
+    env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log, collision_audit=None
+) -> int:
     base = env.unwrapped
     count = 0
     completed_demos = 0
@@ -405,6 +427,8 @@ def _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_s
             progress_bar.update(1)
             if joint_log is not None:
                 joint_log.sample(count, action)
+            if collision_audit is not None:
+                collision_audit.step(count)
             if video_writer is not None:
                 frame = _read_scene_rgb(base, args.video_env) if video_source == "scene" else env.render()
                 video_writer.write(frame)
@@ -646,12 +670,28 @@ def main() -> int:
             joint_log = JointTrajDumper(base, out_dir, env_index=args.pose_debug_env)
             print(f"[INFO] Joint tracking log: {out_dir}")
 
+        collision_audit = None
+        specs = list(args.expect_collide or [])
+        if args.collision_audit and not specs:
+            specs = ["/Robot/.*:/Valve/.*"]
+        if specs:
+            from isaaclab_hiveboard.utils.collision_audit import CollisionAudit
+
+            collision_audit = CollisionAudit(
+                specs, env_index=args.pose_debug_env, tolerance=args.penetration_tol, verbose=args.pose_debug
+            )
+            collision_audit.report_static()
+
         count = 0
         video_writer = None
         try:
             video_writer = _open_video(base, args, video_source)
-            count = _play_steps(env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log)
+            count = _play_steps(
+                env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log, collision_audit
+            )
         finally:
+            if collision_audit is not None:
+                collision_audit.report_runtime()
             if "joint_command" in base.command_manager.active_terms:
                 joint_term = base.command_manager.get_term("joint_command")
                 if hasattr(joint_term, "print_key_errors"):

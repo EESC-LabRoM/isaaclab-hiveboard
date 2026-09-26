@@ -64,9 +64,9 @@ def _set_mu(mu: float) -> None:
     if binding is None or binding.shape[0] == 0:
         raise RuntimeError("Newton model has no shape friction to set")
     wp.to_torch(binding)[:] = mu
-    from newton.solvers import SolverNotifyFlags
+    from newton import ModelFlags
 
-    NewtonManager.add_model_change(SolverNotifyFlags.SHAPE_PROPERTIES)
+    NewtonManager.add_model_change(ModelFlags.SHAPE_PROPERTIES)
 
 
 def _pose(world: _World) -> tuple[float, float, float]:

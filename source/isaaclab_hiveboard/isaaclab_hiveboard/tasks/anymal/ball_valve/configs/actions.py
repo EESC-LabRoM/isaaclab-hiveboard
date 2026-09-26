@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointPositionActionCfg, JointPositionActionCfg
+from isaaclab.envs.mdp.actions.actions_cfg import JointPositionActionCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets.anymal.bench import (
@@ -12,6 +12,7 @@ from isaaclab_hiveboard.assets.anymal.bench import (
     ANYMAL_NEWTON_GRIPPER_OPEN,
     NEWTON_GRIPPER_JOINT_NAMES,
 )
+from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionCfg
 
 
 @configclass
@@ -26,7 +27,8 @@ class AnymalJointPositionActionCfg:
         preserve_order=True,
     )
 
-    gripper_action = BinaryJointPositionActionCfg(
+    # close_speed=None keeps the stock instant step; tasks set a ramp.
+    gripper_action = RateLimitedBinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=list(NEWTON_GRIPPER_JOINT_NAMES),
         open_command_expr=dict(zip(NEWTON_GRIPPER_JOINT_NAMES, ANYMAL_NEWTON_GRIPPER_OPEN)),

@@ -1514,9 +1514,9 @@ def apply_articulation_gravcomp(
     del env_ids
     try:
         from isaaclab_newton.physics import NewtonManager as SimulationManager
-        from newton.solvers import SolverNotifyFlags
-    except ImportError:
-        print("[WARN] apply_articulation_gravcomp: Newton manager not available.")
+        from newton import ModelFlags
+    except ImportError as err:
+        print(f"[WARN] apply_articulation_gravcomp: Newton not available ({err}).")
         return
 
     import warp as wp
@@ -1552,12 +1552,73 @@ def apply_articulation_gravcomp(
         )
         return
     wp.copy(gc, wp.array(values.astype(np.float32), dtype=wp.float32, device=gc.device))
-    SimulationManager.add_model_change(SolverNotifyFlags.BODY_INERTIAL_PROPERTIES)
+    SimulationManager.add_model_change(ModelFlags.BODY_INERTIAL_PROPERTIES)
     solver = getattr(SimulationManager, "_solver", None)
     if solver is not None:
         with wp.ScopedDevice(gc.device):
-            solver.notify_model_changed(SolverNotifyFlags.BODY_INERTIAL_PROPERTIES)
+            solver.notify_model_changed(ModelFlags.BODY_INERTIAL_PROPERTIES)
     preview = ", ".join(f"{label}={old:.2f}->{gravcomp:g}" for _, label, old in matched[:16])
     if len(matched) > 16:
         preview += f", … ({len(matched)} bodies)"
     print(f"[INFO] gravcomp={gravcomp:g} on {len(matched)} {asset_cfg.name} bodies [{preview}]", flush=True)
+
+
+def set_contact_stiffness(
+    env: ManagerBasedEnv,
+    env_ids: Sequence[int] | torch.Tensor,
+    shape_regex: str,
+    ke: float,
+    kd: float,
+    solimp: tuple[float, float, float] | None = None,
+) -> None:
+    """Stiffen Newton/MJWarp contacts on shapes whose label matches ``shape_regex``.
+
+    MJWarp gets each geom's solref from ``convert_solref(ke, kd)``:
+    timeconst = 2 / kd, dampratio = kd / 2 / sqrt(ke). solref is mass-normalized,
+    so on light bodies (the 5 g small-valve stem) the default (0.02, 1) yields
+    only a few hundred N/m and a small squeeze sinks millimetres in. Keep
+    timeconst >= 2 x the physics substep, or MuJoCo clamps it.
+
+    ``solimp`` sets (dmin, dmax, width [m]). Write these to the Newton model, not
+    to ``mjw_model.geom_solref``: the solver re-syncs geoms from the model. Run
+    after any material randomization, which re-syncs shapes too.
+    """
+    del env_ids
+    import re
+
+    try:
+        from isaaclab_newton.physics import NewtonManager as SimulationManager
+        from newton import ModelFlags
+    except ImportError as err:
+        print(f"[WARN] set_contact_stiffness: Newton not available ({err}).")
+        return
+
+    model = SimulationManager.get_model()
+    pattern = re.compile(shape_regex)
+    sel = [i for i, label in enumerate(model.shape_label) if pattern.search(str(label))]
+    if not sel:
+        print(f"[WARN] set_contact_stiffness: no shape matched {shape_regex!r}.", flush=True)
+        return
+    ke_np = model.shape_material_ke.numpy()
+    kd_np = model.shape_material_kd.numpy()
+    ke_np[sel] = ke
+    kd_np[sel] = kd
+    model.shape_material_ke.assign(ke_np)
+    model.shape_material_kd.assign(kd_np)
+    if solimp is not None:
+        attr = getattr(getattr(model, "mujoco", None), "geom_solimp", None)
+        if attr is None:
+            print("[WARN] set_contact_stiffness: model.mujoco.geom_solimp is missing; solimp unchanged.")
+        else:
+            values = attr.numpy()
+            values[sel, :3] = solimp
+            attr.assign(values)
+    SimulationManager.add_model_change(ModelFlags.SHAPE_PROPERTIES)
+    solver = getattr(SimulationManager, "_solver", None)
+    if solver is not None:
+        solver.notify_model_changed(ModelFlags.SHAPE_PROPERTIES)
+    print(
+        f"[INFO] contact ke={ke:g} kd={kd:g} (solref {2.0 / kd:.4f} s) solimp={solimp} "
+        f"on {len(sel)} shapes matching {shape_regex!r}",
+        flush=True,
+    )
