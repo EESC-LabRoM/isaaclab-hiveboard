@@ -1167,6 +1167,9 @@ def _configure_preview(env_cfg, args) -> None:
 
         env_cfg.sim.physics = NewtonCfg(solver_cfg=FeatherstoneSolverCfg(), use_cuda_graph=False)
         env_cfg.sim.device = "cpu"
+    # With every Isaac Lab visualizer disabled, Newton skips visual-only USD geometry;
+    # the editor's own Viser viewer needs it.
+    env_cfg.sim.physics.load_visual_shapes = True
 
 
 def _open_viewer(args):
