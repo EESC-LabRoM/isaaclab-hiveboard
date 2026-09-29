@@ -30,6 +30,8 @@ from isaaclab.app import add_launcher_args, launch_simulation
 from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
+# "newton" is Isaac Lab's deprecated alias for the Newton GL visualizer.
+NEWTON_GL_TYPES = ("newton_gl", "newton")
 CONTACT_SENSOR_NAMES = (
     "finger_contact",
     "jaw_contact",
@@ -101,10 +103,13 @@ def _apply_collision_only(base) -> bool:
     return switched
 
 
+def _interactive_visualizers(sim) -> list:
+    """Visualizers a user watches; excludes the headless Newton viewer used only for video."""
+    return [viz for viz in getattr(sim, "visualizers", None) or [] if not getattr(viz.cfg, "headless", False)]
+
+
 def _visualizers_alive(sim) -> bool:
-    if not getattr(sim, "visualizers", None):
-        return False
-    return any(viz.is_running() and not viz.is_closed for viz in sim.visualizers)
+    return any(viz.is_running() and not viz.is_closed for viz in _interactive_visualizers(sim))
 
 
 def _force_norm(forces) -> float:
@@ -399,16 +404,17 @@ def _play_steps(
     count = 0
     completed_demos = 0
     total_steps = step_limit
-    if total_steps is None and not base.sim.visualizers and args.num_demos is None:
+    interactive = bool(_interactive_visualizers(base.sim))
+    if total_steps is None and not interactive and args.num_demos is None:
         total_steps = episode_steps
 
     with tqdm(total=total_steps, unit="steps", desc="Playing") as progress_bar:
         while True:
-            if base.sim.visualizers and not _visualizers_alive(base.sim):
+            if interactive and not _visualizers_alive(base.sim):
                 break
             if step_limit is not None and count >= step_limit:
                 break
-            if not base.sim.visualizers and step_limit is None and args.num_demos is None and count >= episode_steps:
+            if not interactive and step_limit is None and args.num_demos is None and count >= episode_steps:
                 break
 
             if not _all_finite(obs):
@@ -430,7 +436,10 @@ def _play_steps(
             if collision_audit is not None:
                 collision_audit.step(count)
             if video_writer is not None:
-                frame = _read_scene_rgb(base, args.video_env) if video_source == "scene" else env.render()
+                if video_source == "scene":
+                    frame = _read_scene_rgb(base, args.video_env)
+                else:
+                    frame = _video_visualizer(base).render_rgb_array()
                 video_writer.write(frame)
 
             log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
@@ -468,14 +477,14 @@ def _configure_visualizers(env_cfg, args) -> None:
 
     if args.collision_only:
         try:
-            from isaaclab_visualizers.newton import NewtonVisualizerCfg
+            from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
         except ImportError as err:
             raise SystemExit(
                 "--collision-only needs the Newton visualizer backend (pip install isaaclab_visualizers[newton])."
             ) from err
-        newton_cfg = next((c for c in cfgs if getattr(c, "visualizer_type", None) == "newton"), None)
+        newton_cfg = next((c for c in cfgs if getattr(c, "visualizer_type", None) in NEWTON_GL_TYPES), None)
         if newton_cfg is None:
-            cfgs.append(NewtonVisualizerCfg(show_collision=True))
+            cfgs.append(NewtonGLVisualizerCfg(show_collision=True))
         else:
             newton_cfg.show_collision = True
             newton_cfg.show_visual = False
@@ -506,16 +515,44 @@ def _configure_video(env_cfg, args) -> str:
         if video_source == "scene" and getattr(env_cfg.scene, "scene_cam", None) is None:
             raise SystemExit(f"Task {args.task} has no scene_cam; use --video-source auto or viewer.")
         if video_source == "viewer":
-            from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
-
-            env_cfg.video_recorder = VideoRecorderCfg()
+            _request_video_visualizer(env_cfg, args)
     return video_source
+
+
+def _request_video_visualizer(env_cfg, args) -> None:
+    """Make sure a Newton GL viewer exists to capture viewer frames.
+
+    Isaac Lab no longer ships a standalone headless recorder: viewer frames come from a
+    visualizer's ``render_rgb_array()``. Reuse an interactive Newton window when one was
+    requested; otherwise add a headless one that renders only when a frame is captured.
+    """
+    requested = [str(v).strip().lower() for v in (args.visualizer or [])]
+    if any(v in NEWTON_GL_TYPES for v in requested):
+        return
+    from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
+
+    cfgs = env_cfg.sim.visualizer_cfgs
+    cfgs = [] if cfgs is None else list(cfgs) if isinstance(cfgs, list) else [cfgs]
+    cfgs.append(NewtonGLVisualizerCfg(headless=True, eye=env_cfg.viewer.eye, lookat=env_cfg.viewer.lookat))
+    env_cfg.sim.visualizer_cfgs = cfgs
+    if args.visualizer is not None or getattr(args, "visualizer_explicit", False):
+        # An explicit --visualizer list filters cfgs by type, and "none" (parsed as None) disables all.
+        args.visualizer = [v for v in requested if v != "none"] + ["newton_gl"]
+
+
+def _video_visualizer(base):
+    """The Newton GL visualizer that supplies viewer video frames."""
+    for viz in base.sim.visualizers:
+        if getattr(viz.cfg, "visualizer_type", None) in NEWTON_GL_TYPES:
+            return viz
+    raise RuntimeError("Viewer video needs a Newton GL visualizer, but none is active.")
 
 
 def _position_headless_video_camera(base, env_index: int) -> None:
     """Resolve ViewerCfg's relative eye/target after reset, when asset poses exist."""
-    if base.sim.visualizers:
-        return  # The native recorder follows the live Newton camera.
+    viz = _video_visualizer(base)
+    if not getattr(viz.cfg, "headless", False):
+        return  # Record what the live Newton window shows.
     cfg = base.cfg.viewer
     index = min(max(env_index, 0), base.num_envs - 1)
     origin = torch.zeros(3, device=base.device)
@@ -531,12 +568,11 @@ def _position_headless_video_camera(base, env_index: int) -> None:
                 raise ValueError(f"Video camera expected one body matching {cfg.body_name!r}.")
             origin = _as_torch(asset.data.body_pos_w)[index, body_ids[0]]
     offset = origin.detach().cpu().tolist()
-    recorder_cfg = base.cfg.video_recorder
-    recorder_cfg.eye = tuple(value + shift for value, shift in zip(cfg.eye, offset, strict=True))
-    recorder_cfg.lookat = tuple(value + shift for value, shift in zip(cfg.lookat, offset, strict=True))
-    # The native headless recorder treats eye/lookat as world coordinates.
-    # Its capture is lazy, so recreate it before the first frame with resolved poses.
-    base.video_recorder = recorder_cfg.class_type(recorder_cfg, base.scene)
+    # The Newton viewer treats eye/lookat as world coordinates.
+    viz.set_camera_view(
+        tuple(value + shift for value, shift in zip(cfg.eye, offset, strict=True)),
+        tuple(value + shift for value, shift in zip(cfg.lookat, offset, strict=True)),
+    )
 
 
 def _open_video(base, args, video_source) -> VideoWriter | None:
@@ -547,8 +583,8 @@ def _open_video(base, args, video_source) -> VideoWriter | None:
         video_width, video_height = int(cam_cfg.width), int(cam_cfg.height)
     else:
         _position_headless_video_camera(base, args.video_env)
-        video_width = base.cfg.video_recorder.window_width
-        video_height = base.cfg.video_recorder.window_height
+        # Size the video from a real frame; the framebuffer can differ from the cfg window size.
+        video_height, video_width = _video_visualizer(base).render_rgb_array().shape[:2]
     fps = simulation_fps(base.cfg.sim.dt, base.cfg.decimation)
     if args.video_fps is not None:
         fps = Fraction(args.video_fps).limit_denominator(1_000_000)
@@ -629,9 +665,7 @@ def main() -> int:
         print(f"[INFO] Recording episodes to {rec.dataset_export_dir_path}/{rec.dataset_filename}.hdf5")
 
     with launch_simulation(env_cfg, args):
-        env = gym.make(
-            args.task, cfg=env_cfg, render_mode="rgb_array" if args.video and video_source == "viewer" else None
-        )
+        env = gym.make(args.task, cfg=env_cfg)
         base = env.unwrapped
         if args.collision_only and not _apply_collision_only(base):
             print(

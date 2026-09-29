@@ -85,7 +85,6 @@ def player_command(task: str, output: Path, args: argparse.Namespace) -> list[st
         "--no-joint-log",
         "--visualizer",
         "newton" if args.viewer else "none",
-        *([] if args.viewer else ["--headless"]),
     ]
 
 
