@@ -1789,6 +1789,12 @@ dependencies = [
     { name = "warp-lang" },
 ]
 
+[package.optional-dependencies]
+ovrtx = [
+    { name = "ovrtx" },
+    { name = "ovstage" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'rl-games'", specifier = "==3.14.1" },
@@ -1941,7 +1947,7 @@ dependencies = [
     { name = "hydra-core" },
     { name = "imgui-bundle", version = "1.92.601", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-isaaclab-hiveboard-cameras'" },
     { name = "imgui-bundle", version = "1.92.900", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-isaaclab-hiveboard-curobo' or extra != 'extra-18-isaaclab-hiveboard-cameras'" },
-    { name = "isaaclab-dev" },
+    { name = "isaaclab-dev", extra = ["ovrtx"] },
     { name = "nvidia-curobo", extra = ["cu13"] },
     { name = "pytorch-kinematics" },
     { name = "setuptools" },
@@ -1983,7 +1989,7 @@ requires-dist = [
     { name = "hydra-core", specifier = ">=1.3,<1.4" },
     { name = "imgui-bundle", specifier = ">=1.92.601" },
     { name = "inquirerpy", marker = "extra == 'data'" },
-    { name = "isaaclab-dev", virtual = "dependencies/IsaacLab" },
+    { name = "isaaclab-dev", extras = ["ovrtx"], virtual = "dependencies/IsaacLab" },
     { name = "isaacsim", extras = ["all", "extscache"], marker = "extra == 'cameras'", specifier = "==6.1.0.0" },
     { name = "nvidia-curobo", extras = ["cu13"], editable = "dependencies/curobo" },
     { name = "nvidia-curobo", extras = ["cu13"], marker = "extra == 'curobo'", editable = "dependencies/curobo" },
@@ -3737,13 +3743,19 @@ wheels = [
 ]
 
 [[package]]
+name = "ovrtx"
+version = "0.4.1.364340"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/3e/ecefd14d7dc8b377607aafe19e426f40b921b2be9a8f73ebc6e4d180ecd1/ovrtx-0.4.1.364340.tar.gz", hash = "sha256:1b20e48a69a091246b0537412e0434ee5d5437a8bfc3bbe02599f13ac7488927", size = 23382, upload-time = "2026-08-14T22:43:40.756Z" }
+
+[[package]]
 name = "ovstage"
 version = "0.1.1.355824"
-source = { registry = "https://pypi.nvidia.com/" }
+source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://pypi.nvidia.com/ovstage/ovstage-0.1.1.355824-py3-none-manylinux_2_35_aarch64.whl", hash = "sha256:046aa360959bf5344d912470aaa11d3ec1fc750e28816e5239ce0438864c9863" },
-    { url = "https://pypi.nvidia.com/ovstage/ovstage-0.1.1.355824-py3-none-manylinux_2_35_x86_64.whl", hash = "sha256:b4affd9e5b23620ec71901a164df4ae373d25de2c76b9fae4d193d97aa2df0ec" },
-    { url = "https://pypi.nvidia.com/ovstage/ovstage-0.1.1.355824-py3-none-win_amd64.whl", hash = "sha256:fc8ae7fe950aa2ff8fd24643047f7156ffa1b9b384ce3f024ee2193929e21a3b" },
+    { url = "https://files.pythonhosted.org/packages/05/fd/a1650d436b3c304720236178848d4e7ad523a2b9f2b76918d7b902934cac/ovstage-0.1.1.355824-py3-none-manylinux_2_35_aarch64.whl", hash = "sha256:046aa360959bf5344d912470aaa11d3ec1fc750e28816e5239ce0438864c9863", size = 59799282, upload-time = "2026-08-05T20:07:10.538Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/2e/e5d03719d9ab8e412187be84efe11bc6b912eca02bd8dfb09a1bf522bbe4/ovstage-0.1.1.355824-py3-none-manylinux_2_35_x86_64.whl", hash = "sha256:b4affd9e5b23620ec71901a164df4ae373d25de2c76b9fae4d193d97aa2df0ec", size = 64302147, upload-time = "2026-08-05T20:06:18.013Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/d0/ff9124f524ffadc87f8893e99de1679e7c517ca6ceb60e0b870a284b71a3/ovstage-0.1.1.355824-py3-none-win_amd64.whl", hash = "sha256:fc8ae7fe950aa2ff8fd24643047f7156ffa1b9b384ce3f024ee2193929e21a3b", size = 35031430, upload-time = "2026-08-05T20:05:29.88Z" },
 ]
 
 [[package]]

@@ -32,6 +32,7 @@ from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 DEFAULT_TASK = "Isaac-HiveBoard-Spot-BallValve-Play-v0"
 # "newton" is Isaac Lab's deprecated alias for the Newton GL visualizer.
 NEWTON_GL_TYPES = ("newton_gl", "newton")
+NEWTON_RTX_TYPE = "newton_rtx"
 CONTACT_SENSOR_NAMES = (
     "finger_contact",
     "jaw_contact",
@@ -360,6 +361,19 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
         help="auto uses scene_cam when present, otherwise the environment's perspective recorder.",
     )
     parser.add_argument(
+        "--video-renderer",
+        choices=("newton", "rtx"),
+        default="newton",
+        help="newton rasterizes (fast). rtx path-traces with kitless OVRTX: scene_cam switches to "
+        "OVRTXRendererCfg and viewer video uses the Newton RTX viewer.",
+    )
+    parser.add_argument(
+        "--video-rtx-environment",
+        choices=("default", "studio", "none"),
+        default="studio",
+        help="Lighting rig for RTX viewer video (default: studio). scene_cam keeps the scene's lights.",
+    )
+    parser.add_argument(
         "--video-name",
         default=None,
         help="Output filename (default: <task-slug>-<timestamp>.mp4).",
@@ -516,6 +530,10 @@ def _configure_video(env_cfg, args) -> str:
             raise SystemExit(f"Task {args.task} has no scene_cam; use --video-source auto or viewer.")
         if video_source == "viewer":
             _request_video_visualizer(env_cfg, args)
+        elif args.video_renderer == "rtx":
+            from isaaclab_ov.renderers import OVRTXRendererCfg
+
+            env_cfg.scene.scene_cam.renderer_cfg = OVRTXRendererCfg(log_level="warn")
     return video_source
 
 
@@ -527,25 +545,34 @@ def _request_video_visualizer(env_cfg, args) -> None:
     requested; otherwise add a headless one that renders only when a frame is captured.
     """
     requested = [str(v).strip().lower() for v in (args.visualizer or [])]
-    if any(v in NEWTON_GL_TYPES for v in requested):
+    rtx = args.video_renderer == "rtx"
+    if not rtx and any(v in NEWTON_GL_TYPES for v in requested):
         return
-    from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
+    from isaaclab_visualizers.newton import NewtonGLVisualizerCfg, NewtonRTXVisualizerCfg
 
     cfgs = env_cfg.sim.visualizer_cfgs
     cfgs = [] if cfgs is None else list(cfgs) if isinstance(cfgs, list) else [cfgs]
-    cfgs.append(NewtonGLVisualizerCfg(headless=True, eye=env_cfg.viewer.eye, lookat=env_cfg.viewer.lookat))
+    view = dict(headless=True, eye=env_cfg.viewer.eye, lookat=env_cfg.viewer.lookat)
+    if rtx:
+        # Isaac Lab forwards env_cfg.viewer (default 1280x720) over the visualizer's window size.
+        env_cfg.viewer.resolution = (1920, 1080)
+        # A live window, if any, stays GL; the RTX viewer renders only when a frame is captured.
+        cfgs.append(NewtonRTXVisualizerCfg(**view, rtx_environment=args.video_rtx_environment))
+    else:
+        cfgs.append(NewtonGLVisualizerCfg(**view))
     env_cfg.sim.visualizer_cfgs = cfgs
     if args.visualizer is not None or getattr(args, "visualizer_explicit", False):
         # An explicit --visualizer list filters cfgs by type, and "none" (parsed as None) disables all.
-        args.visualizer = [v for v in requested if v != "none"] + ["newton_gl"]
+        args.visualizer = [v for v in requested if v != "none"] + [NEWTON_RTX_TYPE if rtx else "newton_gl"]
 
 
 def _video_visualizer(base):
-    """The Newton GL visualizer that supplies viewer video frames."""
-    for viz in base.sim.visualizers:
-        if getattr(viz.cfg, "visualizer_type", None) in NEWTON_GL_TYPES:
-            return viz
-    raise RuntimeError("Viewer video needs a Newton GL visualizer, but none is active.")
+    """The Newton visualizer that supplies viewer video frames; RTX wins when both are active."""
+    by_type = {getattr(viz.cfg, "visualizer_type", None): viz for viz in base.sim.visualizers}
+    for kind in (NEWTON_RTX_TYPE, *NEWTON_GL_TYPES):
+        if kind in by_type:
+            return by_type[kind]
+    raise RuntimeError("Viewer video needs a Newton visualizer, but none is active.")
 
 
 def _position_headless_video_camera(base, env_index: int) -> None:

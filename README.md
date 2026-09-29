@@ -134,6 +134,17 @@ otherwise uses Isaac Lab's perspective video recorder with the task's configured
 view. `--viewer` also opens the live Newton viewer. Both `ffmpeg` and `ffprobe`
 must be on PATH, and the tasks require their usual GPU/runtime and assets.
 
+Videos are path-traced with kitless RTX (OVRTX, installed through
+`isaaclab-dev[ovrtx]`; no Isaac Sim needed). `scene_cam` switches to
+`OVRTXRendererCfg` and keeps the scene's lights. Tasks without one record
+through the headless Newton RTX viewer at 1920x1080 with its `studio` lighting
+rig (`play.py --video-rtx-environment default|studio|none`). RTX takes roughly
+twice as long as rasterizing; `--renderer newton` restores the fast Warp/GL
+output. Newton's USD import segfaults intermittently, so a task that exits
+with a crash is re-run up to `--crash-retries` times (default 2). `summary.json`
+records the attempts. The same renderer is available in the player:
+`scripts/play.py --video --video-renderer rtx`.
+
 ```bash
 just record-all --list                           # Preview all registered IDs
 just record-all --duration 30                    # Up to 30 simulated seconds each
@@ -141,6 +152,7 @@ just record-all --match Spot --duration 5         # Only IDs containing Spot
 just record-all --task validate_command_spot      # One exact ID; --task can repeat
 just record-all --viewer --match BenchValve       # Watch while recording
 just record-all --dry-run                        # Print commands without running
+just record-all --renderer newton                # Fast rasterized videos instead of RTX
 ```
 
 Videos and per-environment logs are saved under a new dated folder in

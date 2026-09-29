@@ -150,3 +150,27 @@ def test_filter_selected_tasks_match_pattern():
     assert "Isaac-HiveBoard-Spot-BallValve-v0" not in spot_play_tasks
     assert "Isaac-HiveBoard-Franka-BallValve-Play-v0" not in spot_play_tasks
 
+
+def test_batch_retries_crashed_task(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.mp4"
+    writer = VideoWriter(fixture, 32, 24, Fraction(20))
+    writer.write(np.zeros((24, 32, 3), dtype=np.uint8))
+    writer.close()
+    marker = tmp_path / "crashed-once"
+
+    def command(task, output, args):
+        # Segfault on the first run only, as Newton's USD import does intermittently.
+        script = (
+            "import os, shutil, signal, sys\n"
+            "if not os.path.exists(sys.argv[3]):\n"
+            "    open(sys.argv[3], 'w').close(); os.kill(os.getpid(), signal.SIGSEGV)\n"
+            "shutil.copyfile(sys.argv[1], sys.argv[2])"
+        )
+        return [sys.executable, "-c", script, str(fixture), str(output / f"{task}.mp4"), str(marker)]
+
+    monkeypatch.setattr(batch, "discover_tasks", lambda: ["flaky-Play"])
+    monkeypatch.setattr(batch, "player_command", command)
+    assert batch.main(["--output", str(tmp_path / "runs")]) == 0
+    report = json.loads(next((tmp_path / "runs").glob("*/summary.json")).read_text())
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["attempts"] == 2

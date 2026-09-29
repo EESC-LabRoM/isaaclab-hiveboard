@@ -121,7 +121,7 @@ precompute-cache:
 collect-demos num_demos="10":
     uv run python scripts/collect_demos.py --headless --device cuda:0 --num_demos {{num_demos}}
 
-# Record every registered HiveBoard environment at its simulation-time FPS
+# Record every registered HiveBoard environment at its simulation-time FPS (RTX path-traced)
 record-all *args:
     uv run python scripts/record_all_envs.py {{args}}
 

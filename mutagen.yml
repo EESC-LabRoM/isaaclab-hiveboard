@@ -1,0 +1,34 @@
+sync:
+  isaaclab-hiveboard:
+    alpha: "."
+    beta: "nexus:/home/gonzales/Documents/repositories/isaaclab-hiveboard"
+    mode: "two-way-resolved"
+    ignore:
+      vcs: true
+      paths:
+        - .venv/
+        - __pycache__/
+        - .mypy_cache/
+        - .pytest_cache/
+        - .ruff_cache/
+        - /logs/
+        - /outputs/
+        - /my_folder/
+        - "*.mp4"
+        - "*.step"
+        - "*.usd"
+        - "*.usda"
+        - "*.obj"
+        - "*.mtl"
+        - "*.jpg"
+        - "*.jpeg"
+        - "*.png"
+        - "*.svg"
+        - "*.dae"
+        - "*.PNG"
+        - "*.JPG"
+        - "*.JPEG"
+        - "*.stl"
+        - "*.STL"
+        - "*.webm"
+
