@@ -18,11 +18,13 @@ import math
 
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointPositionActionCfg, JointPositionActionCfg
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg, ObservationTermCfg, SceneEntityCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import ASSET_DIR, FRANKA_EE, FRANKA_FR3_HIGH_PD_CFG, as_command_offset, make_ee_frame
+from isaaclab_hiveboard.mdp.events import set_contact_stiffness
 
 FRANKA_ARM_JOINT_NAMES = [f"fr3_joint{i}" for i in range(1, 8)]
 FRANKA_FINGER_JOINT_NAMES = ["fr3_finger_joint1", "fr3_finger_joint2"]
@@ -95,6 +97,30 @@ FRANKA_OBJECT_POSE_RANGE = {
 }
 
 
+def finger_contact_stiffness(object_prim_name: str) -> EventTerm:
+    """Stiffen FR3 finger and object contacts (see :func:`set_contact_stiffness`).
+
+    MJWarp's default solref is mass-normalized, so the light fingers and parts let
+    the stiff FR3 arm push them tens of millimetres into each other (25 mm on the
+    button). Same values as the ANYmal small valve. Add it after any material
+    randomization event, which re-syncs shape properties.
+
+    Args:
+        object_prim_name: Leading name of the object prims under the env, e.g.
+            ``"Button"``. It is a prefix, so ``"Drawer"`` also stiffens ``DrawerHousing``.
+    """
+    return EventTerm(
+        func=set_contact_stiffness,
+        mode="startup",
+        params={
+            "shape_regex": f"/Robot/fr3_(left|right)finger/|/{object_prim_name}",
+            "ke": 4.0e4,
+            "kd": 400.0,
+            "solimp": (0.95, 0.99, 0.001),
+        },
+    )
+
+
 @configclass
 class FrankaJointPositionActionCfg:
     """Absolute FR3 joint positions from cuRobo waypoints, plus a binary hand."""
@@ -152,6 +178,12 @@ def use_franka(
                 setattr(command, key, value)
 
     env_cfg.actions = FrankaJointPositionActionCfg()
+
+    # Replace any stiffening that targets the legged robots' grippers.
+    for name, term in list(vars(env_cfg.events).items()):
+        if isinstance(term, EventTerm) and term.func is set_contact_stiffness:
+            setattr(env_cfg.events, name, None)
+    env_cfg.events.finger_contacts = finger_contact_stiffness(obj.prim_path.rsplit("/", 1)[-1])
 
     material = getattr(env_cfg.events, "robot_physics_material", None)
     if material is not None:
