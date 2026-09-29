@@ -66,7 +66,7 @@ class SpotSmallValveEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 15
-        self.episode_length_s = 8.0
+        self.episode_length_s = 15.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "small_valve"
         self.viewer.body_name = "eixo_trans"
