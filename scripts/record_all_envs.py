@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Crash exits (SIGSEGV/SIGABRT, raw or via the crash reporter): Newton's USD import segfaults intermittently.
+CRASH_RETURNCODES = {-signal.SIGSEGV, -signal.SIGABRT, 128 + signal.SIGSEGV, 128 + signal.SIGABRT}
 
 
 def discover_tasks() -> list[str]:
@@ -81,6 +83,8 @@ def player_command(task: str, output: Path, args: argparse.Namespace) -> list[st
         f"{task}.mp4",
         "--video-source",
         args.video_source,
+        "--video-renderer",
+        args.renderer,
         "--no-dataset",
         "--no-joint-log",
         "--visualizer",
@@ -177,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--duration", type=positive_seconds, default=20.0, help="Maximum simulated seconds per clip (10)."
     )
+    parser.add_argument(
+        "--crash-retries", type=int, default=2, help="Re-run a task that segfaults or aborts (default 2)."
+    )
     parser.add_argument("--timeout", type=positive_seconds, default=900.0, help="Maximum wall seconds per task (900).")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=0)
@@ -184,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--match", default="", help="Case-insensitive substring filter on task IDs.")
     parser.add_argument("--viewer", action="store_true", help="Also show the live Newton viewer.")
     parser.add_argument("--video-source", choices=("auto", "scene", "viewer"), default="auto")
+    parser.add_argument(
+        "--renderer",
+        choices=("rtx", "newton"),
+        default="rtx",
+        help="rtx path-traces with kitless OVRTX (default); newton uses the faster Warp/GL rasterizers.",
+    )
     parser.add_argument("--list", action="store_true", help="Print selected task IDs without running simulations.")
     parser.add_argument("--dry-run", action="store_true", help="Print recording commands without running simulations.")
     parser.add_argument(
@@ -226,7 +239,12 @@ def main(argv: list[str] | None = None) -> int:
     print("FPS is computed separately from each resolved environment's timestep and decimation.", flush=True)
     for index, task in enumerate(tasks, 1):
         print(f"[{index}/{len(tasks)}] {task}", flush=True)
-        result = record_task(task, player_command(task, output, args), output, args.timeout)
+        for attempt in range(args.crash_retries + 1):
+            result = record_task(task, player_command(task, output, args), output, args.timeout)
+            if result.get("returncode") not in CRASH_RETURNCODES or attempt == args.crash_retries:
+                break
+            print(f"  crashed (status {result['returncode']}); retrying", flush=True)
+        result["attempts"] = attempt + 1
         report["results"].append(result)
         report_path.write_text(json.dumps(report, indent=2) + "\n")
         if result["status"] == "ok":
