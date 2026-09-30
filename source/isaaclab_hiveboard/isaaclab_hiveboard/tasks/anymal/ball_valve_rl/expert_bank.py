@@ -15,12 +15,14 @@ reference for that episode:
   where the plan does not move - the scripted expert settling onto each
   segment's end pose before starting the next - are dropped, so the reference
   moves at the plan's speeds with no pauses.
-* **Turn** (once held): the expert's joints as a function of valve angle,
-  evaluated at the valve's actual angle. It asks the policy to hold and turn
-  the lever with the expert's joint configuration; *when* to turn is scored
-  separately against the turning-rate command's reference angle. (Evaluating
-  it at the reference angle instead put a constant ~0.1 rad lead into the
-  joint reference, because the expert pauses ~0.5 s for its gripper to close.)
+* **Turn** (from the expert's grasp on): the expert's measured joints, also
+  by episode time, held at the pose where it opened the valve (the scripted
+  expert lets go afterwards). An earlier version evaluated the expert's joints
+  at the valve's *actual* angle, so a lever held still kept the arm exactly on
+  the reference and joint tracking paid for not turning (teachers v17/v18).
+
+Before the grasp, episode time is the reach's idle-free timeline; the turn
+and the valve reference are shifted by the idle steps dropped from the reach.
 """
 
 from __future__ import annotations
@@ -38,8 +40,6 @@ from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
-#: Samples of the turn reference over valve angle.
-TURN_GRID = 64
 #: Largest joint-target change [rad] of a step counted as idle in the reach.
 IDLE_STEP_RAD = 1.0e-3
 
@@ -73,52 +73,52 @@ class ExpertBank:
         self.reach = torch.stack([torch.cat((p, p[-1:].expand(horizon - len(p), -1))) for p in paths])  # (N, H, 6)
         self.grasp_step = torch.tensor([len(p) - 1 for p in paths])
 
-        # Turn: joints sampled on a uniform valve-angle grid from the grasp
-        # angle to open, by linear interpolation over the expert's samples.
-        theta0 = valve[torch.arange(self.size), grasp]
-        grid = theta0[:, None] + (valve_open_rad - theta0)[:, None] * torch.linspace(0, 1, TURN_GRID)[None]
-        self.turn = torch.empty(self.size, TURN_GRID, q.shape[-1])
-        for i in range(self.size):
-            seg = slice(int(grasp[i]), int(open_step[i]) + 1)
-            # The valve angle falls monotonically while turning; flip to ascending.
-            angles = -valve[i, seg]
-            angles = torch.cummax(angles, dim=0).values
-            joints = q[i, seg]
-            self.turn[i] = _interp(-grid[i], angles, joints)
-        self.turn_theta0 = theta0
-        self.valve_open_rad = valve_open_rad
-
-        # Valve angle over the expert's episode, for tracking by time.
+        # Turn and valve: the expert's measured joints and valve angle by time.
+        # Episode steps past the reach's grasp map to the bank's own steps by
+        # the idle steps the reach dropped.
+        self.q = q
         self.valve = valve
+        self.gripper_q = bank["gripper_q"].float()
+        self.idle_shift = grasp - self.grasp_step
+        self.open_step = open_step
+        self.valve_open_rad = valve_open_rad
         self.arm_q0 = bank["arm_q0"].float()
         self.valve_angle0 = bank["valve_angle0"].float()
         self.valve_pose_env = bank["valve_pose_env"].float()
-        for name in ("reach", "grasp_step", "turn", "turn_theta0", "valve", "arm_q0", "valve_angle0", "valve_pose_env"):
+        for name in (
+            "reach",
+            "grasp_step",
+            "q",
+            "valve",
+            "gripper_q",
+            "idle_shift",
+            "open_step",
+            "arm_q0",
+            "valve_angle0",
+            "valve_pose_env",
+        ):
             setattr(self, name, getattr(self, name).to(device))
 
     def reach_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert joints at episode ``step`` (held at the grasp afterwards), ``(len(idx), 6)``."""
         return self.reach[idx, step.clamp(max=self.reach.shape[1] - 1)]
 
+    def _bank_step(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """The bank's own step for episode ``step``, held at the expert's open step."""
+        shifted = torch.where(step >= self.grasp_step[idx], step + self.idle_shift[idx], step)
+        return torch.minimum(shifted, self.open_step[idx])
+
     def valve_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """Expert valve angle at episode ``step`` (held at its last value afterwards), ``(len(idx),)`` [rad]."""
-        return self.valve[idx, step.clamp(max=self.valve.shape[1] - 1)]
+        """Expert valve angle at episode ``step`` (held once open), ``(len(idx),)`` [rad]."""
+        return self.valve[idx, self._bank_step(idx, step)]
 
-    def turn_reference(self, idx: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
-        """Expert joints at valve ``angle`` [rad] along the turn, ``(len(idx), 6)``."""
-        theta0 = self.turn_theta0[idx]
-        frac = ((angle - theta0) / (self.valve_open_rad - theta0)).clamp(0.0, 1.0) * (TURN_GRID - 1)
-        lo = frac.floor().long().clamp(max=TURN_GRID - 2)
-        w = (frac - lo.float())[:, None]
-        return self.turn[idx, lo] * (1.0 - w) + self.turn[idx, lo + 1] * w
+    def gripper_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """Expert finger joint position at episode ``step`` (held once open), ``(len(idx),)`` [rad]."""
+        return self.gripper_q[idx, self._bank_step(idx, step)]
 
-
-def _interp(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
-    """Piecewise-linear interpolation of rows ``fp`` (len(xp), D) at ``x``; clamped at the ends."""
-    idx = torch.searchsorted(xp.contiguous(), x.contiguous()).clamp(1, len(xp) - 1)
-    x0, x1 = xp[idx - 1], xp[idx]
-    w = ((x - x0) / (x1 - x0).clamp(min=1.0e-9)).clamp(0.0, 1.0)[:, None]
-    return fp[idx - 1] * (1.0 - w) + fp[idx] * w
+    def turn_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """Expert measured joints at episode ``step`` (held once open), ``(len(idx), 6)``."""
+        return self.q[idx, self._bank_step(idx, step)]
 
 
 class reset_from_expert_bank(ManagerTermBase):
@@ -139,6 +139,8 @@ class reset_from_expert_bank(ManagerTermBase):
         self.index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         robot: BaseArticulation = env.scene["robot"]
         self._arm_ids = robot.find_joints(list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)[0]
+        # The joint the bank recorded as gripper_q (build_expert_bank.py).
+        self._finger_id = robot.find_joints(env.cfg.actions.gripper_action.joint_names)[0][0]
         valve: BaseArticulation = env.scene["ball_valve"]
         self._valve_joint = valve.find_joints(mdp.VALVE_JOINT)[0]
         # Reference terms find the bank here.
@@ -182,19 +184,16 @@ def _bank_term(env: ManagerBasedEnv) -> reset_from_expert_bank:
 
 
 def expert_joint_reference(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
-    """Expert arm-joint reference for the current phase, ``(N, 6)`` [rad].
+    """Expert arm-joint reference at the current episode time, ``(N, 6)`` [rad].
 
-    Reach reference by episode time until the turning command engages at the
-    first grasp; afterwards the turn reference at the valve's actual angle.
+    The reach until the expert's grasp step, then the expert's turn (see the
+    module docstring). ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
-    idx = term.index
-    command = env.command_manager.get_term(command_name)
-    reach = term.bank.reach_reference(idx, env.episode_length_buf)
-    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
-
-    turn = term.bank.turn_reference(idx, mdp.valve_angle(env))
-    return torch.where(command.engaged[:, None], turn, reach)
+    idx, step = term.index, env.episode_length_buf
+    reach = term.bank.reach_reference(idx, step)
+    turn = term.bank.turn_reference(idx, step)
+    return torch.where((step >= term.bank.grasp_step[idx])[:, None], turn, reach)
 
 
 def expert_joint_error(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
@@ -204,25 +203,10 @@ def expert_joint_error(env: ManagerBasedRLEnv, command_name: str = "valve_turn")
     return robot.data.joint_pos.torch[:, arm] - expert_joint_reference(env, command_name)
 
 
-def track_expert_joints(
-    env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn", hold: dict | None = None
-) -> torch.Tensor:
-    """``exp(-||q - q_expert||^2 / std^2)`` over the six arm joints; ``std`` [rad].
-
-    With ``hold`` (``lever_held`` thresholds), pays only while the lever is held
-    once the expert's gripper is closed. Without the gate, parking open-handed
-    at the grasp tracked perfectly: the reach reference holds the grasp pose
-    and the turn reference only moves with the valve. Teachers v13/v14 did that
-    for the rest of every episode and never grasped.
-    """
+def track_expert_joints(env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn") -> torch.Tensor:
+    """``exp(-||q - q_expert||^2 / std^2)`` over the six arm joints; ``std`` [rad]."""
     error = expert_joint_error(env, command_name)
-    reward = torch.exp(-error.square().sum(dim=-1) / std**2)
-    if hold is not None:
-        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
-
-        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
-        reward = reward * (~expert_closed | mdp.lever_held(env, **hold)).float()
-    return reward
+    return torch.exp(-error.square().sum(dim=-1) / std**2)
 
 
 def expert_valve_error(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -233,23 +217,14 @@ def expert_valve_error(env: ManagerBasedRLEnv) -> torch.Tensor:
     return (mdp.valve_angle(env) - term.bank.valve_reference(term.index, env.episode_length_buf)).unsqueeze(-1)
 
 
-def track_expert_valve(
-    env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn", hold: dict | None = None
-) -> torch.Tensor:
+def track_expert_valve(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     """``exp(-(θ - θ_expert(t))^2 / std^2)``: the valve follows the expert's by episode time; ``std`` [rad].
 
     Before the expert grasps, this pays for leaving the valve where it is;
-    after, for turning it on the expert's schedule. With ``hold``
-    (``lever_held`` thresholds), the second part pays only while the lever is
-    held, so pushing it round with a closed fist (teacher v0) earns nothing.
+    after, for turning it on the expert's schedule; once the expert has
+    opened, for keeping it open.
     """
-    reward = torch.exp(-expert_valve_error(env)[:, 0].square() / std**2)
-    if hold is not None:
-        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
-
-        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
-        reward = reward * (~expert_closed | mdp.lever_held(env, **hold)).float()
-    return reward
+    return torch.exp(-expert_valve_error(env)[:, 0].square() / std**2)
 
 
 def reset_from_expert_bank_cfg(path: str) -> EventTermCfg:
@@ -260,20 +235,27 @@ def reset_from_expert_bank_cfg(path: str) -> EventTermCfg:
 def expert_gripper_reference(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
     """1 where the expert's gripper is closed, ``(N, 1)`` (privileged observation).
 
-    Closed from the expert's grasp step on the idle-free reach timeline (see
-    :class:`ExpertBank`), and once the turning command has engaged.
+    Closed from the expert's grasp step on the reach timeline (see
+    :class:`ExpertBank`). ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
-    command = env.command_manager.get_term(command_name)
-    closed = (env.episode_length_buf >= term.bank.grasp_step[term.index]) | command.engaged
+    closed = env.episode_length_buf >= term.bank.grasp_step[term.index]
     return closed.float().unsqueeze(-1)
 
 
-def track_expert_gripper(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
-    """1 while the policy's gripper command (open/close) matches the expert's."""
-    policy_closed = env.action_manager.get_term("gripper_action").raw_actions[:, 0] < 0.0
-    expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
-    return (policy_closed == expert_closed).float()
+def track_expert_gripper(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
+    """``exp(-(q_finger - q_expert(t))^2 / std^2)``: the fingers follow the expert's by episode time; ``std`` [rad].
+
+    Tracks where the fingers are, not the open/close command: scoring the
+    command's sign let teacher v21 cage the lever with half-closed fingers
+    (0.2-0.54 rad against the expert's 0.68 on the lever) and reopen one step
+    in seven while still earning 6/7 of the reward.
+    """
+    term = _bank_term(env)
+    robot: BaseArticulation = env.scene["robot"]
+    finger = robot.data.joint_pos.torch[:, term._finger_id]
+    error = finger - term.bank.gripper_reference(term.index, env.episode_length_buf)
+    return torch.exp(-error.square() / std**2)
 
 
 def expert_joint_drift(env: ManagerBasedRLEnv, max_error: float, command_name: str = "valve_turn") -> torch.Tensor:
@@ -281,33 +263,11 @@ def expert_joint_drift(env: ManagerBasedRLEnv, max_error: float, command_name: s
     return torch.linalg.vector_norm(expert_joint_error(env, command_name), dim=-1) > max_error
 
 
-class missed_grasp(ManagerTermBase):
-    """Termination: the expert's gripper has been closed for ``grace_s`` without the lever held.
+def expert_valve_lag(env: ManagerBasedRLEnv, max_error: float) -> torch.Tensor:
+    """Termination: the valve is more than ``max_error`` [rad] off the expert's valve angle at this episode time.
 
-    Covers arriving too late to grasp, grasping off the lever, and letting go
-    after the first grasp (the expert reference stays closed once the turn has
-    engaged). Joint drift alone does not catch these: parked open-handed at the
-    grasp, the arm sits right on the reference.
+    Behind catches holding the lever without turning it (teacher v17), ahead
+    catches whipping it round (teacher v16); before the grasp it catches
+    knocking the lever.
     """
-
-    def __init__(self, cfg, env: ManagerBasedRLEnv):
-        super().__init__(cfg, env)
-        self._unheld_s = torch.zeros(env.num_envs, device=env.device)
-
-    def __call__(
-        self,
-        env: ManagerBasedRLEnv,
-        grace_s: float,
-        dist_threshold: float,
-        ang_threshold: float,
-        command_name: str = "valve_turn",
-    ) -> torch.Tensor:
-        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
-
-        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
-        unheld = expert_closed & ~mdp.lever_held(env, dist_threshold, ang_threshold)
-        self._unheld_s = torch.where(unheld, self._unheld_s + env.step_dt, torch.zeros_like(self._unheld_s))
-        return self._unheld_s > grace_s
-
-    def reset(self, env_ids: Sequence[int] | None = None) -> None:
-        self._unheld_s[slice(None) if env_ids is None else env_ids] = 0.0
+    return expert_valve_error(env)[:, 0].abs() > max_error
