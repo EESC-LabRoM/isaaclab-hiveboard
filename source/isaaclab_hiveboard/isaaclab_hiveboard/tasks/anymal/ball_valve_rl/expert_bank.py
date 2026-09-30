@@ -40,6 +40,9 @@ from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
+#: Pad force [N] above which a finger pad counts as touching the lever. The
+#: expert's pads read 0 N before the grasp and 8-14 N while turning.
+CONTACT_FORCE_N = 1.0
 #: Largest joint-target change [rad] of a step counted as idle in the reach.
 IDLE_STEP_RAD = 1.0e-3
 
@@ -79,6 +82,10 @@ class ExpertBank:
         self.q = q
         self.valve = valve
         self.gripper_q = bank["gripper_q"].float()
+        if "pad_force" not in bank:
+            raise ValueError(f"{path} has no pad_force; rebuild it with scripts/rl/build_expert_bank.py")
+        # Per-pad contact with the lever, (N, T, 2).
+        self.contact = (bank["pad_force"].float() > CONTACT_FORCE_N).float()
         self.idle_shift = grasp - self.grasp_step
         self.open_step = open_step
         self.valve_open_rad = valve_open_rad
@@ -91,6 +98,7 @@ class ExpertBank:
             "q",
             "valve",
             "gripper_q",
+            "contact",
             "idle_shift",
             "open_step",
             "arm_q0",
@@ -115,6 +123,10 @@ class ExpertBank:
     def gripper_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert finger joint position at episode ``step`` (held once open), ``(len(idx),)`` [rad]."""
         return self.gripper_q[idx, self._bank_step(idx, step)]
+
+    def contact_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """Expert per-pad lever contact (1/0) at episode ``step`` (held once open), ``(len(idx), 2)``."""
+        return self.contact[idx, self._bank_step(idx, step)]
 
     def turn_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert measured joints at episode ``step`` (held once open), ``(len(idx), 6)``."""
@@ -256,6 +268,21 @@ def track_expert_gripper(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     finger = robot.data.joint_pos.torch[:, term._finger_id]
     error = finger - term.bank.gripper_reference(term.index, env.episode_length_buf)
     return torch.exp(-error.square() / std**2)
+
+
+def track_expert_contact(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Fraction of the two finger pads whose lever contact matches the expert's at this episode time.
+
+    Pays for gripping the lever when the expert does (both pads over
+    ``CONTACT_FORCE_N``) and for not touching it before. Nothing else pays
+    for contact itself, while contact can disturb the tracked joints and valve.
+    """
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+    term = _bank_term(env)
+    policy = (mdp.pad_valve_force(env) > CONTACT_FORCE_N).float()
+    expert = term.bank.contact_reference(term.index, env.episode_length_buf)
+    return (policy == expert).float().mean(dim=-1)
 
 
 def expert_joint_drift(env: ManagerBasedRLEnv, max_error: float, command_name: str = "valve_turn") -> torch.Tensor:

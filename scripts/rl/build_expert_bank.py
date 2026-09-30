@@ -169,7 +169,17 @@ def main() -> None:
                 ).clone(),
             }
             steps = {
-                k: [] for k in ("arm_q", "arm_target", "gripper_cmd", "gripper_q", "valve_angle", "tcp_pose", "phase")
+                k: []
+                for k in (
+                    "arm_q",
+                    "arm_target",
+                    "gripper_cmd",
+                    "gripper_q",
+                    "valve_angle",
+                    "tcp_pose",
+                    "phase",
+                    "pad_force",
+                )
             }
             opened_held = torch.zeros(n_envs, dtype=torch.bool, device=dev)
             ever_held = torch.zeros(n_envs, dtype=torch.bool, device=dev)
@@ -188,6 +198,8 @@ def main() -> None:
                     steps["valve_angle"].append(rl_mdp.valve_angle(env).clone())
                     steps["tcp_pose"].append(rl_mdp.tcp_pose_b(env).clone())
                     steps["phase"].append(command._current_command_idx.clone())
+                    # Valve-filtered contact force on each finger pad [N].
+                    steps["pad_force"].append(rl_mdp.pad_valve_force(env).clone())
                     env.step(action)
                     held = rl_mdp.lever_held(env, HOLD["dist_threshold"], HOLD["ang_threshold"])
                     is_open = rl_mdp.valve_open_success(env, SUCCESS_TOLERANCE_RAD)
