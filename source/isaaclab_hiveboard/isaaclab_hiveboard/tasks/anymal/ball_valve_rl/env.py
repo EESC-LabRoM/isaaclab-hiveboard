@@ -68,7 +68,7 @@ ARM_RANGE = (-0.1, 0.1)
 
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_chain.pt")
 
 
 @configclass
@@ -173,6 +173,8 @@ class ObservationsCfg:
         # reference angle). Appended last, like the command terms above.
         expert_joint_error = ObsTerm(func=expert_bank.expert_joint_error, params={"command_name": "valve_turn"})
         expert_gripper = ObsTerm(func=expert_bank.expert_gripper_reference, params={"command_name": "valve_turn"})
+        # Appended last as well (teacher v17 warm-started from v16).
+        expert_valve_error = ObsTerm(func=expert_bank.expert_valve_error, scale=5.0)
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -269,7 +271,9 @@ class EventCfg:
 class CommandsCfg:
     """Operator-set turning speed; its reference angle is what the turn is scored against."""
 
-    valve_turn = mdp.ValveTurnRateCommandCfg(rate_range=(0.25, 0.8), hold_dist=0.03, hold_ang=0.35)
+    # The expert bank turns at 0.31 rad/s (median; p10-p90 0.30-0.33), so the
+    # teacher is asked for the same speed its valve-tracking reward follows.
+    valve_turn = mdp.ValveTurnRateCommandCfg(rate_range=(0.3, 0.3), hold_dist=0.03, hold_ang=0.35)
 
 
 @configclass
@@ -297,11 +301,22 @@ class RewardsCfg:
     # expert's paced joint path onto a fast approach that arrived 0.5-0.8 rad
     # off in orientation. The coarse kernel keeps a gradient back to the
     # expert when the arm is far from it; the fine one asks for precision.
-    track_expert_coarse = RewTerm(func=expert_bank.track_expert_joints, weight=2.0, params={"std": 0.5})
-    track_expert = RewTerm(func=expert_bank.track_expert_joints, weight=3.0, params={"std": 0.15})
+    # Once the expert has closed its gripper, tracking pays only while holding
+    # the lever (see track_expert_joints).
+    track_expert_coarse = RewTerm(
+        func=expert_bank.track_expert_joints, weight=2.0, params={"std": 0.5, "hold": dict(HOLD)}
+    )
+    track_expert = RewTerm(func=expert_bank.track_expert_joints, weight=3.0, params={"std": 0.15, "hold": dict(HOLD)})
     # Close the gripper when the expert does (teacher v10, rewarded on joints
-    # only, reached the lever every time but never closed it in 600 iterations).
-    track_expert_gripper = RewTerm(func=expert_bank.track_expert_gripper, weight=1.0)
+    # only, reached the lever every time but never closed it in 600 iterations;
+    # at weight 1.0, v13/v14 unlearned closing by iteration 300).
+    track_expert_gripper = RewTerm(func=expert_bank.track_expert_gripper, weight=3.0)
+    # Turn the valve on the expert's schedule (by episode time). The turning
+    # rate command is fixed to the expert's speed to match; a bank with varied
+    # speeds would let it vary again.
+    track_expert_valve = RewTerm(
+        func=expert_bank.track_expert_valve, weight=3.0, params={"std": 0.1, "hold": dict(HOLD)}
+    )
     success = RewTerm(
         func=mdp.valve_opened_on_schedule, weight=10.0, params={"threshold_rad": SUCCESS_TOLERANCE_RAD, **HOLD}
     )
@@ -320,10 +335,16 @@ class RewardsCfg:
 
 @configclass
 class TerminationsCfg:
-    """Timeout and solver blow-up (success is scored, not terminated; see RewardsCfg)."""
+    """Timeout, solver blow-up, and leaving the expert (success is scored, not terminated; see RewardsCfg)."""
 
     time_out = DoneTerm(func=base_mdp.time_out, time_out=True)
     invalid = DoneTerm(func=mdp.invalid_state, params={"asset_cfg": ARM})
+    # Follow the expert or lose the rest of the episode (DeepMimic-style early
+    # termination). 0.3 rad is 5-10x the expert's own tracking error.
+    expert_drift = DoneTerm(func=expert_bank.expert_joint_drift, params={"max_error": 0.3})
+    # Teachers v13-v15 parked at the grasp pose without holding the lever,
+    # which joint drift does not catch; see expert_bank.missed_grasp.
+    missed_grasp = DoneTerm(func=expert_bank.missed_grasp, params={"grace_s": 0.5, **HOLD})
 
 
 @configclass
