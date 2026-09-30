@@ -68,7 +68,7 @@ ARM_RANGE = (-0.1, 0.1)
 
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_chain.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_contact.pt")
 
 
 @configclass
@@ -305,6 +305,9 @@ class RewardsCfg:
     # at weight 1.0, v13/v14 unlearned closing by iteration 300). Tracks the
     # finger position, not the command (see track_expert_gripper).
     track_expert_gripper = RewTerm(func=expert_bank.track_expert_gripper, weight=3.0, params={"std": 0.1})
+    # Touch the lever with both pads exactly when the expert does: no other
+    # term pays for contact, while contact can disturb the tracked joints.
+    track_expert_contact = RewTerm(func=expert_bank.track_expert_contact, weight=3.0)
     # Turn the valve on the expert's schedule (by episode time). The turning
     # rate command is fixed to the expert's speed to match; a bank with varied
     # speeds would let it vary again. The coarse kernel keeps a gradient when
