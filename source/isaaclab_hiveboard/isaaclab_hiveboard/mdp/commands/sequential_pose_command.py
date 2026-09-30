@@ -1065,15 +1065,174 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         self._clear_plan_state(env_ids)
 
     def _plan(self, env_ids: torch.Tensor) -> None:
-        """Plan every env in ``env_ids``, one at a time.
+        """Plan every env in ``env_ids``.
 
-        The cached cuRobo solvers are built for a single problem (the
-        retargeter cannot take a larger batch at all), and envs enter a
-        segment at different ticks, so each env gets its own solve from its
-        own measured state.
+        By default one at a time: envs enter a segment at different ticks, so
+        each gets its own solve from its own measured state. With
+        ``cfg.plan_batch_size > 1`` the envs entering on the same tick are
+        solved together in padded batches of that size (``BatchMotionPlanner``
+        / a batched ``MotionRetargeter``), with the same targets and joint
+        seeding as the single-env path. Reference-steered plans stay per env.
         """
+        batch = int(getattr(self.cfg, "plan_batch_size", 1))
+        if batch > 1 and getattr(self.cfg, "reference_pos_env", None) is None:
+            for start in range(0, len(env_ids), batch):
+                self._plan_batch(env_ids[start : start + batch])
+            return
         for i in range(len(env_ids)):
             self._plan_env(env_ids[i : i + 1])
+
+    def _curobo_base_in_isaac_base(self, kinematics_state, tool_frame: str, env_ids: torch.Tensor):
+        """Per-env cuRobo URDF base pose in the Isaac base frame (xyzw), as in :meth:`_plan_env`."""
+        curobo_flange = kinematics_state.tool_poses.get_link_pose(tool_frame)
+        isaac_flange_pos_b, isaac_flange_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w.torch[env_ids],
+            self._asset.data.root_quat_w.torch[env_ids],
+            self._asset.data.body_pos_w.torch[env_ids, self._command_term._body_idx],
+            self._asset.data.body_quat_w.torch[env_ids, self._command_term._body_idx],
+        )
+        flange_quat_inv_c = math_utils.quat_inv(_wxyz_to_xyzw(curobo_flange.quaternion))
+        flange_pos_inv_c = -math_utils.quat_apply(flange_quat_inv_c, curobo_flange.position)
+        return math_utils.combine_frame_transforms(
+            isaac_flange_pos_b, isaac_flange_quat_b, flange_pos_inv_c, flange_quat_inv_c
+        )
+
+    def _plan_batch(self, env_ids: torch.Tensor) -> None:
+        """Plan up to ``cfg.plan_batch_size`` envs in one ``BatchMotionPlanner`` solve.
+
+        Mirrors :meth:`_plan_env` (trivial-move shortcut, base calibration,
+        fallback on failure) without its per-env audit prints. The batch is
+        padded to the planner's fixed size by repeating the last problem.
+        """
+        from isaaclab_hiveboard.assets import ASSET_DIR
+        from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
+        from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
+
+        if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+            raise ValueError("CuroboPlannedGoToFrameCfg requires pose_command.body_offset")
+        with curobo_compatible_warp():
+            from curobo.batch_motion_planner import BatchMotionPlanner, MotionPlannerCfg
+            from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
+
+            robot_cfg = load_curobo_robot_cfg(
+                self.cfg.robot_curobo_yaml or f"{ASSET_DIR}/franka/cumotion/fr3.yaml",
+                self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
+            )
+            size = int(self.cfg.plan_batch_size)
+            cache_key = (
+                "batch_planner",
+                self.cfg.robot_curobo_yaml,
+                self.cfg.robot_urdf,
+                self.cfg.num_ik_seeds,
+                self.cfg.num_trajopt_seeds,
+                self.cfg.interpolation_buffer_size,
+                size,
+            )
+
+            def _make_planner() -> BatchMotionPlanner:
+                with torch.inference_mode(False):
+                    return BatchMotionPlanner(
+                        MotionPlannerCfg.create(
+                            robot=robot_cfg,
+                            self_collision_check=False,
+                            use_cuda_graph=True,
+                            num_ik_seeds=self.cfg.num_ik_seeds,
+                            num_trajopt_seeds=self.cfg.num_trajopt_seeds,
+                            interpolation_dt=self._dt,
+                            interpolation_buffer_size=self.cfg.interpolation_buffer_size,
+                            device_cfg=DeviceCfg(),
+                            max_batch_size=size,
+                        )
+                    )
+
+            planner, build_s = self._command_term.get_curobo_solver(cache_key, _make_planner)
+            solve_start = time.perf_counter()
+            tool_frame = planner.tool_frames[0]
+            joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
+
+            target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
+            flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(
+                target_pos_b, target_quat_b, env_ids
+            )
+            ee_pos_b, ee_quat_b = self._command_term._get_ee_in_base_frame(env_ids)
+            q = self._asset.data.joint_pos.torch[env_ids][:, joint_ids]
+            near = torch.linalg.vector_norm(ee_pos_b - target_pos_b, dim=-1) <= float(self.cfg.distance_threshold)
+            aligned = math_utils.quat_error_magnitude(ee_quat_b, target_quat_b) <= math.radians(
+                self.cfg.orientation_threshold_deg
+            )
+            trivial = near & aligned
+            for k in torch.where(trivial)[0].tolist():
+                self._store_plan(env_ids[k : k + 1], ee_pos_b[k : k + 1], ee_quat_b[k : k + 1], q[k : k + 1])
+            rows = torch.where(~trivial)[0]
+            if len(rows) == 0:
+                return
+            # Pad to the planner's fixed batch with copies of the last problem.
+            pad = torch.cat((rows, rows[-1:].expand(size - len(rows))))
+            pad_env_ids = env_ids[pad]
+
+            try:
+                current = JointState.from_position(q[pad], joint_names=joint_names)
+                base_pos, base_quat = self._curobo_base_in_isaac_base(
+                    planner.compute_kinematics(current), tool_frame, pad_env_ids
+                )
+                flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                    base_pos, base_quat, flange_pos_b[pad], flange_quat_b[pad]
+                )
+                with torch.inference_mode(False), torch.enable_grad():
+                    current = JointState.from_position(q[pad].clone(), joint_names=joint_names)
+                    goal = GoalToolPose.from_poses(
+                        {
+                            tool_frame: Pose(
+                                position=flange_pos_c.clone(), quaternion=_xyzw_to_wxyz(flange_quat_c.clone())
+                            )
+                        },
+                        ordered_tool_frames=planner.tool_frames,
+                        num_goalset=1,
+                    )
+                    result = planner.plan_pose(
+                        goal, current, max_attempts=self.cfg.max_plan_attempts, enable_graph_attempt=99
+                    )
+            except Exception as err:
+                print(
+                    f"[WARN] cuRobo batch plan threw ({type(err).__name__}: {err}); "
+                    f"{len(rows)} envs fall back to direct servo",
+                    flush=True,
+                )
+                self._fallback[env_ids[rows]] = True
+                return
+            if result is None:
+                self._fallback[env_ids[rows]] = True
+                return
+            success = result.success.view(size, -1).any(dim=-1)
+            trajectory = result.interpolated_trajectory.position.view(size, -1, len(joint_names))
+            last = result.interpolated_last_tstep.view(size, -1)[:, 0]
+            solve_s = time.perf_counter() - solve_start
+            planned = 0
+            for k in range(len(rows)):
+                env = env_ids[rows[k] : rows[k] + 1]
+                if not bool(success[k]):
+                    self._fallback[env] = True
+                    continue
+                joints = trajectory[k, : int(last[k]) + 1]
+                poses = planner.compute_kinematics(
+                    JointState.from_position(joints, joint_names=joint_names)
+                ).tool_poses.get_link_pose(tool_frame)
+                tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
+                    poses.position,
+                    _wxyz_to_xyzw(poses.quaternion),
+                    self._command_term._offset_pos[0].expand_as(poses.position),
+                    self._command_term._offset_rot[0].expand_as(poses.quaternion),
+                )
+                tcp_pos, tcp_quat = math_utils.combine_frame_transforms(
+                    base_pos[k].expand_as(tcp_pos), base_quat[k].expand_as(tcp_quat), tcp_pos, tcp_quat
+                )
+                self._store_plan(env, tcp_pos, tcp_quat, joints)
+                planned += 1
+            print(
+                f"[INFO] cuRobo batch plan {self.cfg.target_frame_name or self.cfg.target_position_env}: "
+                f"{planned}/{len(rows)} solved (batch={size} build={build_s:.2f}s solve={solve_s:.2f}s)",
+                flush=True,
+            )
 
     def _plan_env(self, env_ids: torch.Tensor) -> None:
         """Build a bounded cuRobo plan for one env and convert it to TCP pose waypoints."""
@@ -2041,6 +2200,138 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                 f"[INFO] cuRobo env={self._diag_env} retargeted {num_waypoints} ordered waypoints for the valve arc."
             )
 
+    def _plan_batch(self, env_ids: torch.Tensor) -> None:
+        """Retarget up to ``cfg.plan_batch_size`` envs' arcs in one batched solve.
+
+        Same arc, seeding and infeasible-arc handling as :meth:`_plan_env`.
+        Arcs with fewer waypoints (a part-open valve turns less) are padded by
+        holding their final pose; each env stores only its own waypoints.
+        """
+        from isaaclab_hiveboard.assets import ASSET_DIR
+        from isaaclab_hiveboard.mdp.curobo_robot_cfg import load_curobo_robot_cfg
+        from isaaclab_hiveboard.mdp.curobo_warp import curobo_compatible_warp
+
+        if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
+            raise ValueError("CuroboPlannedRotateFrameCfg requires pose_command.body_offset")
+        with curobo_compatible_warp():
+            from curobo.motion_retargeter import MotionRetargeter, MotionRetargeterCfg, SequenceGoalToolPose
+            from curobo.types import DeviceCfg, JointState, ToolPoseCriteria
+
+            robot_cfg = load_curobo_robot_cfg(
+                self.cfg.robot_curobo_yaml or f"{ASSET_DIR}/franka/cumotion/fr3.yaml",
+                self.cfg.robot_urdf or f"{ASSET_DIR}/franka/cumotion/fr3.urdf",
+            )
+            tool_frame = robot_cfg["robot_cfg"]["kinematics"]["tool_frames"][0]
+            size = int(self.cfg.plan_batch_size)
+            cache_key = ("retargeter", self.cfg.robot_curobo_yaml, self.cfg.robot_urdf, self.cfg.num_ik_seeds, size)
+
+            def _make_retargeter() -> MotionRetargeter:
+                with torch.inference_mode(False):
+                    return _batched_retargeter_class()(
+                        MotionRetargeterCfg.create(
+                            robot=robot_cfg,
+                            tool_pose_criteria={
+                                tool_frame: ToolPoseCriteria.track_position_and_orientation(
+                                    xyz=[1.0, 1.0, 1.0], rpy=[1.0, 1.0, 1.0], non_terminal_scale=1.0
+                                )
+                            },
+                            num_envs=size,
+                            use_mpc=False,
+                            self_collision_check=False,
+                            scene_model=None,
+                            load_collision_spheres=False,
+                            optimization_dt=self._dt,
+                            num_seeds_global=self.cfg.num_ik_seeds,
+                            num_seeds_local=1,
+                            position_tolerance=0.002,
+                            orientation_tolerance=0.02,
+                            device_cfg=DeviceCfg(),
+                        )
+                    )
+
+            retargeter, build_s = self._command_term.get_curobo_solver(cache_key, _make_retargeter)
+            solve_start = time.perf_counter()
+            n = len(env_ids)
+            pad = torch.cat((torch.arange(n, device=self._device), torch.full((size - n,), n - 1, device=self._device)))
+            pad_env_ids = env_ids[pad]
+
+            # Per-env arc: same angle step as _plan_env, padded to the longest.
+            final_angle = self.angle_rad_tensor[pad_env_ids]
+            step_angle = self.cfg.angular_velocity * self._dt
+            num_waypoints = (torch.ceil(final_angle.abs() / step_angle).clamp(min=1) + 1).long()
+            horizon = int(num_waypoints.max())
+            frac = torch.arange(horizon, device=self._device, dtype=torch.float32)[None] / (
+                (num_waypoints - 1).clamp(min=1)[:, None].float()
+            )
+            angles = final_angle[:, None] * frac.clamp(max=1.0)  # (size, horizon)
+            flat_ids = pad_env_ids.repeat_interleave(horizon)
+            flat_angles = angles.reshape(-1)
+            axis_b = self.rot_axis_b[flat_ids]
+            tcp_pos_b = (
+                self.axis_pos_b[flat_ids]
+                + self.axial_vec[flat_ids]
+                + self._rodrigues_rotate(self.radius_vec[flat_ids], axis_b, flat_angles)
+            )
+            tcp_quat_b = math_utils.quat_mul(
+                math_utils.quat_from_angle_axis(flat_angles, axis_b), self.initial_quat_b[flat_ids]
+            )
+            flange_pos_b, flange_quat_b = self._command_term._tcp_pose_to_body_pose(tcp_pos_b, tcp_quat_b, flat_ids)
+
+            joint_ids, joint_names = self._asset.find_joints(self.cfg.robot_joint_names, preserve_order=True)
+            q = self._asset.data.joint_pos.torch[pad_env_ids][:, joint_ids]
+            base_pos, base_quat = self._curobo_base_in_isaac_base(
+                retargeter.kinematics.compute_kinematics(JointState.from_position(q, joint_names=joint_names)),
+                tool_frame,
+                pad_env_ids,
+            )
+            flange_pos_c, flange_quat_c = math_utils.subtract_frame_transforms(
+                base_pos.repeat_interleave(horizon, 0),
+                base_quat.repeat_interleave(horizon, 0),
+                flange_pos_b,
+                flange_quat_b,
+            )
+            # SequenceGoalToolPose is (frames, envs, links, goalset, 3/4).
+            seq_pos = flange_pos_c.view(size, horizon, 3).transpose(0, 1)
+            seq_quat = _xyzw_to_wxyz(flange_quat_c).view(size, horizon, 4).transpose(0, 1)
+
+            with torch.inference_mode(False), torch.enable_grad():
+                arc_targets = SequenceGoalToolPose(
+                    tool_frames=[tool_frame],
+                    position=seq_pos[:, :, None, None, :].contiguous().clone(),
+                    quaternion=seq_quat[:, :, None, None, :].contiguous().clone(),
+                )
+                # Seed local IK from each env's grasp joints (see _plan_env).
+                retargeter.reset()
+                retargeter._prev_solution = q.clone()
+                frame_solutions = [q.clone()]
+                for index in range(1, horizon):
+                    frame_solutions.append(
+                        retargeter.solve_frame(arc_targets.get_frame(index)).joint_state.reorder(joint_names).position
+                    )
+                joint_waypoints = torch.stack(frame_solutions, dim=1)  # (size, horizon, J)
+
+            solve_s = time.perf_counter() - solve_start
+            tcp_pos_b = tcp_pos_b.view(size, horizon, 3)
+            tcp_quat_b = tcp_quat_b.view(size, horizon, 4)
+            densified = 0
+            for k in range(n):
+                env = env_ids[k : k + 1]
+                self._diag_env = int(env.item())
+                count = int(num_waypoints[k])
+                joints, pos, quat = joint_waypoints[k, :count], tcp_pos_b[k, :count], tcp_quat_b[k, :count]
+                if self._check_joint_discontinuity(
+                    joints[None], joint_names, tcp_pos_b=pos, tcp_quat_b=quat, angles=angles[k, :count]
+                ):
+                    pos, quat, joints = self._densify_arc(pos, quat, joints)
+                    self._densified[env] = True
+                    densified += 1
+                self._store_plan(env, pos, quat, joints)
+            print(
+                f"[INFO] cuRobo batch arc: {n} envs, {horizon} waypoints max, {densified} densified "
+                f"(batch={size} build={build_s:.2f}s solve={solve_s:.2f}s)",
+                flush=True,
+            )
+
     def _densify_arc(
         self, tcp_pos_b: torch.Tensor, tcp_quat_b: torch.Tensor, joints: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -2323,6 +2614,73 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             lo, hi = float(bound[0]), float(bound[1])
             bits.append(f"{name}={value:.4f} in [{lo:.4f}, {hi:.4f}] to_lo={value - lo:.4f} to_hi={hi - value:.4f}")
         return "  limits: " + "  ".join(bits)
+
+
+def _batched_retargeter_class():
+    """``MotionRetargeter`` whose IK solvers accept ``num_envs`` problems per call.
+
+    cuRobo's retargeter takes ``num_envs`` but builds its global and local IK
+    solvers with the default ``max_batch_size=1``, so any batch above one is
+    rejected by ``IKSolver.solve_pose``. This rebuilds both solvers with the
+    same settings plus ``max_batch_size=num_envs``. Import lazily: cuRobo must
+    be imported inside ``curobo_compatible_warp``.
+    """
+    from curobo._src.solver.solver_ik import IKSolver
+    from curobo._src.solver.solver_ik_cfg import IKSolverCfg
+    from curobo.motion_retargeter import MotionRetargeter
+
+    class _BatchedMotionRetargeter(MotionRetargeter):
+        def _build_global_ik_solver(self) -> IKSolver:
+            cfg = self._config
+            solver = IKSolver(
+                IKSolverCfg.create(
+                    robot=cfg.robot,
+                    num_seeds=cfg.num_seeds_global,
+                    position_tolerance=cfg.position_tolerance,
+                    orientation_tolerance=cfg.orientation_tolerance,
+                    self_collision_check=cfg.self_collision_check,
+                    scene_model=cfg.scene_model,
+                    optimization_dt=None,
+                    override_iters_for_multi_link_ik=None,
+                    override_optimizer_num_iters={"lbfgs": cfg.global_ik_num_iters},
+                    optimizer_configs=cfg.ik_optimizer_configs,
+                    device_cfg=cfg.device_cfg,
+                    load_collision_spheres=cfg.load_collision_spheres,
+                    optimizer_collision_activation_distance=cfg.collision_activation_distance,
+                    max_batch_size=cfg.num_envs,
+                )
+            )
+            solver.update_tool_pose_criteria(self._tool_pose_criteria)
+            return solver
+
+        def _build_local_ik_solver(self) -> IKSolver:
+            cfg = self._config
+            solver = IKSolver(
+                IKSolverCfg.create(
+                    robot=cfg.robot,
+                    optimizer_configs=cfg.ik_optimizer_configs,
+                    num_seeds=cfg.num_seeds_local,
+                    position_tolerance=cfg.position_tolerance,
+                    orientation_tolerance=cfg.orientation_tolerance,
+                    self_collision_check=cfg.self_collision_check,
+                    scene_model=cfg.scene_model,
+                    optimization_dt=cfg.optimization_dt,
+                    override_iters_for_multi_link_ik=None,
+                    override_optimizer_num_iters={"lbfgs": cfg.local_ik_num_iters},
+                    device_cfg=cfg.device_cfg,
+                    load_collision_spheres=cfg.load_collision_spheres,
+                    velocity_regularization_weight=cfg.velocity_regularization_weight,
+                    acceleration_regularization_weight=cfg.acceleration_regularization_weight,
+                    optimizer_collision_activation_distance=cfg.collision_activation_distance,
+                    max_batch_size=cfg.num_envs,
+                )
+            )
+            solver.update_tool_pose_criteria(self._tool_pose_criteria)
+            solver.use_lm_seed = False
+            solver.exit_early = False
+            return solver
+
+    return _BatchedMotionRetargeter
 
 
 @dataclass
@@ -2771,6 +3129,9 @@ class CuroboPlannedGoToFrameCfg(GoToFrameCfg):
     num_trajopt_seeds: int = 1
     max_plan_attempts: int = 1
     interpolation_buffer_size: int = 128
+    plan_batch_size: int = 1
+    """Envs solved per cuRobo call. ``1`` plans each env alone; larger values batch
+    the envs that enter this segment on the same tick (padded to this size)."""
     reference_pos_env: tuple[tuple[float, float, float], ...] | None = None
     """Dense env-frame TCP positions steering the plan (retargeted, not free)."""
     reference_quat_xyzw: tuple[tuple[float, float, float, float], ...] | None = None
@@ -2837,6 +3198,8 @@ class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
     robot_urdf: str | None = None
     num_ik_seeds: int = 4
     interpolation_buffer_size: int = 128
+    plan_batch_size: int = 1
+    """Envs retargeted per cuRobo call; see :attr:`CuroboPlannedGoToFrameCfg.plan_batch_size`."""
     max_joint_step: float = 0.15
     """Maximum accepted change of any joint between arc waypoints [rad]."""
     on_infeasible_arc: str = "densify"

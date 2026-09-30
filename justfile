@@ -140,3 +140,29 @@ il-dagger dataset rounds="5" *args:
 # Measure a checkpoint's success rate (pass --expert for the scripted ceiling)
 il-eval *args:
     uv run python scripts/imitation/eval_policy.py {{args}}
+
+# RL teacher: PPO on privileged state (ANYmal ball valve by default)
+rl-teacher num_envs="4096" *args:
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} {{args}}
+
+# RL student: distil the teacher checkpoint onto proprioception + registered valve pose
+rl-student teacher num_envs="4096" *args:
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} \
+        --agent rsl_rl_distillation_cfg_entry_point --checkpoint {{teacher}} {{args}}
+
+# Replay expert-bank trajectories in simulation, shown in Viser (http://localhost:9080)
+rl-bank-replay *args:
+    uv run python scripts/rl/replay_expert_bank.py {{args}}
+
+# Success rate / reliability / stage metrics of a teacher or student checkpoint
+rl-eval checkpoint *args:
+    uv run python scripts/rl/evaluate.py --checkpoint {{checkpoint}} {{args}}
+
+# Watch a checkpoint in the Newton viewer and export it (TorchScript + ONNX)
+rl-play checkpoint *args:
+    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-BallValve-RL-Play-v0 --checkpoint {{checkpoint}} --viz newton {{args}}
+
+# Record one 12 s episode of a checkpoint to <run>/videos/play/ (student: --agent rsl_rl_distillation_cfg_entry_point)
+rl-video checkpoint *args:
+    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-BallValve-RL-Play-v0 --checkpoint {{checkpoint}} \
+        --num_envs 1 --video --video_length 240 --viz newton {{args}}

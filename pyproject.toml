@@ -25,6 +25,7 @@ dependencies = [
     "h5py>=3.16.0",
     "nvidia-curobo[cu13]",
     "viser>=0.2.11",
+    "moviepy<2",
 ]
 
 [project.optional-dependencies]

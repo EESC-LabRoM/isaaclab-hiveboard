@@ -292,6 +292,42 @@ gym.register(
     },
 )
 
+_ANYMAL_BALL_VALVE_RL_AGENTS = {
+    # PPO teacher on privileged state (default agent).
+    "rsl_rl_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_ppo_cfg:AnymalBallValveTeacherPPORunnerCfg"
+    ),
+    "default_agent": "rsl_rl",
+    # Deployable student distilled from the teacher (--agent <key>).
+    "rsl_rl_distillation_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_distillation_cfg:AnymalBallValveStudentRunnerCfg"
+    ),
+    "rsl_rl_distillation_recurrent_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_distillation_cfg:"
+        "AnymalBallValveStudentRecurrentRunnerCfg"
+    ),
+}
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-RL-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env:AnymalBallValveRLEnvCfg",
+        **_ANYMAL_BALL_VALVE_RL_AGENTS,
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-BallValve-RL-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env:AnymalBallValveRLEnvCfg_PLAY",
+        **_ANYMAL_BALL_VALVE_RL_AGENTS,
+    },
+)
+
 gym.register(
     id="Isaac-HiveBoard-Anymal-CircuitBreaker-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
