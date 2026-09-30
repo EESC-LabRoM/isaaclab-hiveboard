@@ -155,7 +155,7 @@ def main() -> None:
         command = env.command_manager.get_term("pose_command")
         horizon = int(env.max_episode_length)
         kept: dict[str, list[torch.Tensor]] = {}
-        stats = {"waves": 0, "episodes": 0, "successes": 0, "fallback": 0, "wall_s": 0.0}
+        stats = {"waves": 0, "episodes": 0, "successes": 0, "fallback": 0, "kept": 0, "wall_s": 0.0}
 
         for wave in range(args.max_waves):
             t0 = time.perf_counter()
@@ -201,11 +201,15 @@ def main() -> None:
                     opened_held |= now_open
                     fallback |= command.expert_fallback()
             wave_s = time.perf_counter() - t0
-            ok = opened_held
+            # Keep only trajectories the expert ran as planned: a cuRobo
+            # fallback (e.g. a chain that could not be planned as one motion)
+            # is discarded even when it opened the valve.
+            ok = opened_held & ~fallback
             stats["waves"] += 1
             stats["episodes"] += n_envs
-            stats["successes"] += int(ok.sum())
-            stats["fallback"] += int((ok & fallback).sum())
+            stats["successes"] += int(opened_held.sum())
+            stats["fallback"] += int((opened_held & fallback).sum())
+            stats["kept"] += int(ok.sum())
             stats["wall_s"] += wave_s
             for key, values in steps.items():
                 kept.setdefault(key, []).append(torch.stack(values, dim=1)[ok].cpu())
@@ -213,7 +217,7 @@ def main() -> None:
                 kept.setdefault(key, []).append(value[ok].cpu())
             kept.setdefault("t_open", []).append(t_open[ok].cpu())
             kept.setdefault("expert_fallback", []).append(fallback[ok].cpu())
-            total = stats["successes"]
+            total = stats["kept"]
             print(
                 f"[BANK] wave {wave} diagnostics: ever held {int(ever_held.sum())}/{n_envs}, "
                 f"opened by any means {int(opened_any.sum())}/{n_envs}, "
@@ -223,8 +227,8 @@ def main() -> None:
                 flush=True,
             )
             print(
-                f"[BANK] wave {wave}: {int(ok.sum())}/{n_envs} opened while held "
-                f"({int((ok & fallback).sum())} used a fallback) in {wave_s:.1f}s; total {total}",
+                f"[BANK] wave {wave}: {int(opened_held.sum())}/{n_envs} opened while held, "
+                f"{int((opened_held & fallback).sum())} discarded for a fallback, in {wave_s:.1f}s; kept {total}",
                 flush=True,
             )
             if total >= args.num_trajectories:
@@ -245,11 +249,11 @@ def main() -> None:
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
         torch.save(bank, args.output)
         rate = stats["successes"] / max(stats["episodes"], 1)
-        per_traj = stats["wall_s"] / max(stats["successes"], 1)
+        per_traj = stats["wall_s"] / max(stats["kept"], 1)
         print(
             f"[BANK] saved {len(bank['arm_q'])} trajectories to {args.output}\n"
             f"[BANK] expert success {stats['successes']}/{stats['episodes']} = {rate:.1%}, "
-            f"{stats['fallback']} kept trajectories used a cuRobo fallback\n"
+            f"{stats['fallback']} successes discarded for using a cuRobo fallback\n"
             f"[BANK] wall time {stats['wall_s']:.0f}s over {stats['waves']} waves = "
             f"{per_traj:.2f}s per kept trajectory",
             flush=True,

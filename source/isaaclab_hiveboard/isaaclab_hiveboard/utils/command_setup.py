@@ -81,7 +81,19 @@ def validate_command(cmd) -> None:
     for name in ("angle_deg", "axial_distance"):
         if hasattr(cmd, name) and not math.isfinite(getattr(cmd, name)):
             raise ValueError(f"{name} must be finite")
-    for name in ("gripper_open", "open_gripper", "use_valve_angle", "canonicalize_upward", "hold_current_orientation"):
+    for name in ("chain_blend_s", "chain_max_joint_step", "chain_max_pose_error_m"):
+        if hasattr(cmd, name):
+            value = getattr(cmd, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+    for name in (
+        "gripper_open",
+        "open_gripper",
+        "use_valve_angle",
+        "canonicalize_upward",
+        "hold_current_orientation",
+        "chain_with_next",
+    ):
         if hasattr(cmd, name) and not isinstance(getattr(cmd, name), bool):
             raise ValueError(f"{name} must be a boolean")
     for name in ("target_offset_pos", "target_position_env", "axis"):
