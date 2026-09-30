@@ -41,6 +41,8 @@ class AnymalBallValveStudentRunnerCfg(RslRlDistillationRunnerCfg):
     max_iterations = 1500
     save_interval = 100
     experiment_name = "anymal_ball_valve_student"
+    logger = "wandb"
+    wandb_project = "isaaclab-hiveboard"
     clip_actions = 1.0
     obs_groups = {"student": ["policy"], "teacher": ["teacher"]}
     student = RslRlMLPModelCfg(

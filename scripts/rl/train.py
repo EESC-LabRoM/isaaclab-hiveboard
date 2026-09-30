@@ -20,6 +20,7 @@ Student (distilled onto the deployable observations; needs the teacher)::
         --checkpoint logs/rsl_rl/anymal_ball_valve_teacher/<run>/model_<it>.pt
 """
 
+import os
 import sys
 
 import isaaclab_hiveboard  # noqa: F401  (registers the HiveBoard tasks)
@@ -34,5 +35,21 @@ def with_newton_default(argv: list[str]) -> list[str]:
     return argv
 
 
+def ensure_wandb_run_id() -> None:
+    """Give Isaac Lab a wandb run id up front.
+
+    Isaac Lab's wandb helper otherwise calls ``wandb.util.generate_id``, which
+    wandb 0.30 removed. A fresh id per launch keeps runs separate.
+    """
+    if "WANDB_RUN_ID" in os.environ:
+        return
+    try:
+        from wandb.sdk.lib.runid import generate_id
+    except ImportError:
+        return
+    os.environ["WANDB_RUN_ID"] = generate_id()
+
+
 if __name__ == "__main__":
+    ensure_wandb_run_id()
     sys.exit(run_train_cli(["--rl_library", "rsl_rl", *with_newton_default(sys.argv[1:])]) or 0)

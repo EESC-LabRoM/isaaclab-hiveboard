@@ -18,6 +18,8 @@ class AnymalBallValveTeacherPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 3000
     save_interval = 100
     experiment_name = "anymal_ball_valve_teacher"
+    logger = "wandb"
+    wandb_project = "isaaclab-hiveboard"
     clip_actions = 1.0
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}
     actor = RslRlMLPModelCfg(

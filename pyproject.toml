@@ -26,6 +26,7 @@ dependencies = [
     "nvidia-curobo[cu13]",
     "viser>=0.2.11",
     "moviepy<2",
+    "wandb>=0.26.1",
 ]
 
 [project.optional-dependencies]
