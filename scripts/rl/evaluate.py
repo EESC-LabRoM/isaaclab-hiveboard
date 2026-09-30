@@ -61,7 +61,9 @@ parser.add_argument("--episodes", type=int, default=100)
 parser.add_argument("--num_envs", type=int, default=50)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", default=None, help="JSON output path (default: next to the checkpoint).")
-parser.add_argument("--trace", action="store_true", help="Print environment 0 step by step for its first episode.")
+parser.add_argument(
+    "--trace", action="store_true", help="Print environment 0 step by step for its first episode, and what ended it."
+)
 add_launcher_args(parser)
 args, hydra_args = setup_preset_cli(parser)
 if not any(t.startswith(("physics=", "presets=")) for t in hydra_args):
@@ -203,6 +205,7 @@ def main() -> None:
         stats, step_count = fresh(), torch.zeros(n_envs, device=dev)
         episodes: list[dict] = []
         obs = env.get_observations()
+        trace_done = False
         with torch.inference_mode():
             while len(episodes) < args.episodes:
                 # Metrics are read from the state the action is applied to;
@@ -240,7 +243,7 @@ def main() -> None:
                 stats["prev_v"] = v.clone()
                 speed = torch.norm(robot.data.body_lin_vel_w.torch[:, gripper_body], dim=-1)
                 stats["max_tcp_speed"] = torch.maximum(stats["max_tcp_speed"], speed)
-                if args.trace and not episodes:
+                if args.trace and not trace_done:
                     print(
                         f"[trace] t={step_count[0].item() * dt:5.2f}s dist={dist[0]:.3f}m ang={ang[0]:.2f}rad"
                         f" held={int(mdp.lever_held(uenv, grasp['dist_threshold'], grasp['ang_threshold'])[0])}"
@@ -263,6 +266,11 @@ def main() -> None:
                 policy.reset(dones)
                 step_count += 1
                 invalid = uenv.termination_manager.get_term("invalid")
+                if args.trace and not trace_done and bool(dones[0]):
+                    manager = uenv.termination_manager
+                    fired = [name for name in manager.active_terms if bool(manager.get_term(name)[0])]
+                    print(f"[trace] episode ended at step {int(step_count[0])}: {', '.join(fired) or 'unknown'}")
+                    trace_done = True
                 for i in dones.nonzero(as_tuple=False).flatten().tolist():
                     if len(episodes) >= args.episodes:
                         break

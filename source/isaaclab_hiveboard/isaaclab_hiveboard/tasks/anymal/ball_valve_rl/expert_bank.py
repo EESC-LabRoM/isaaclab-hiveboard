@@ -88,15 +88,21 @@ class ExpertBank:
         self.turn_theta0 = theta0
         self.valve_open_rad = valve_open_rad
 
+        # Valve angle over the expert's episode, for tracking by time.
+        self.valve = valve
         self.arm_q0 = bank["arm_q0"].float()
         self.valve_angle0 = bank["valve_angle0"].float()
         self.valve_pose_env = bank["valve_pose_env"].float()
-        for name in ("reach", "grasp_step", "turn", "turn_theta0", "arm_q0", "valve_angle0", "valve_pose_env"):
+        for name in ("reach", "grasp_step", "turn", "turn_theta0", "valve", "arm_q0", "valve_angle0", "valve_pose_env"):
             setattr(self, name, getattr(self, name).to(device))
 
     def reach_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert joints at episode ``step`` (held at the grasp afterwards), ``(len(idx), 6)``."""
         return self.reach[idx, step.clamp(max=self.reach.shape[1] - 1)]
+
+    def valve_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """Expert valve angle at episode ``step`` (held at its last value afterwards), ``(len(idx),)`` [rad]."""
+        return self.valve[idx, step.clamp(max=self.valve.shape[1] - 1)]
 
     def turn_reference(self, idx: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
         """Expert joints at valve ``angle`` [rad] along the turn, ``(len(idx), 6)``."""
@@ -198,10 +204,52 @@ def expert_joint_error(env: ManagerBasedRLEnv, command_name: str = "valve_turn")
     return robot.data.joint_pos.torch[:, arm] - expert_joint_reference(env, command_name)
 
 
-def track_expert_joints(env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn") -> torch.Tensor:
-    """``exp(-||q - q_expert||^2 / std^2)`` over the six arm joints; ``std`` [rad]."""
+def track_expert_joints(
+    env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn", hold: dict | None = None
+) -> torch.Tensor:
+    """``exp(-||q - q_expert||^2 / std^2)`` over the six arm joints; ``std`` [rad].
+
+    With ``hold`` (``lever_held`` thresholds), pays only while the lever is held
+    once the expert's gripper is closed. Without the gate, parking open-handed
+    at the grasp tracked perfectly: the reach reference holds the grasp pose
+    and the turn reference only moves with the valve. Teachers v13/v14 did that
+    for the rest of every episode and never grasped.
+    """
     error = expert_joint_error(env, command_name)
-    return torch.exp(-error.square().sum(dim=-1) / std**2)
+    reward = torch.exp(-error.square().sum(dim=-1) / std**2)
+    if hold is not None:
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
+        reward = reward * (~expert_closed | mdp.lever_held(env, **hold)).float()
+    return reward
+
+
+def expert_valve_error(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Valve angle minus the expert's at the same episode time, ``(N, 1)`` [rad] (privileged observation)."""
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+    term = _bank_term(env)
+    return (mdp.valve_angle(env) - term.bank.valve_reference(term.index, env.episode_length_buf)).unsqueeze(-1)
+
+
+def track_expert_valve(
+    env: ManagerBasedRLEnv, std: float, command_name: str = "valve_turn", hold: dict | None = None
+) -> torch.Tensor:
+    """``exp(-(θ - θ_expert(t))^2 / std^2)``: the valve follows the expert's by episode time; ``std`` [rad].
+
+    Before the expert grasps, this pays for leaving the valve where it is;
+    after, for turning it on the expert's schedule. With ``hold``
+    (``lever_held`` thresholds), the second part pays only while the lever is
+    held, so pushing it round with a closed fist (teacher v0) earns nothing.
+    """
+    reward = torch.exp(-expert_valve_error(env)[:, 0].square() / std**2)
+    if hold is not None:
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
+        reward = reward * (~expert_closed | mdp.lever_held(env, **hold)).float()
+    return reward
 
 
 def reset_from_expert_bank_cfg(path: str) -> EventTermCfg:
@@ -226,3 +274,40 @@ def track_expert_gripper(env: ManagerBasedRLEnv, command_name: str = "valve_turn
     policy_closed = env.action_manager.get_term("gripper_action").raw_actions[:, 0] < 0.0
     expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
     return (policy_closed == expert_closed).float()
+
+
+def expert_joint_drift(env: ManagerBasedRLEnv, max_error: float, command_name: str = "valve_turn") -> torch.Tensor:
+    """Termination: the arm is more than ``max_error`` [rad] (joint-space norm) from the expert reference."""
+    return torch.linalg.vector_norm(expert_joint_error(env, command_name), dim=-1) > max_error
+
+
+class missed_grasp(ManagerTermBase):
+    """Termination: the expert's gripper has been closed for ``grace_s`` without the lever held.
+
+    Covers arriving too late to grasp, grasping off the lever, and letting go
+    after the first grasp (the expert reference stays closed once the turn has
+    engaged). Joint drift alone does not catch these: parked open-handed at the
+    grasp, the arm sits right on the reference.
+    """
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._unheld_s = torch.zeros(env.num_envs, device=env.device)
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        grace_s: float,
+        dist_threshold: float,
+        ang_threshold: float,
+        command_name: str = "valve_turn",
+    ) -> torch.Tensor:
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        expert_closed = expert_gripper_reference(env, command_name)[:, 0].bool()
+        unheld = expert_closed & ~mdp.lever_held(env, dist_threshold, ang_threshold)
+        self._unheld_s = torch.where(unheld, self._unheld_s + env.step_dt, torch.zeros_like(self._unheld_s))
+        return self._unheld_s > grace_s
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        self._unheld_s[slice(None) if env_ids is None else env_ids] = 0.0
