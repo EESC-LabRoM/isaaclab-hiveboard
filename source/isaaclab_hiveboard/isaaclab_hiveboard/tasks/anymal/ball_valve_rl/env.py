@@ -169,8 +169,8 @@ class ObservationsCfg:
         # zero-padding its input layer (scripts/rl/expand_checkpoint_inputs.py).
         turn_rate = ObsTerm(func=mdp.turn_rate_command, params={"command_name": "valve_turn"})
         valve_reference = ObsTerm(func=mdp.valve_reference_state, params={"command_name": "valve_turn"})
-        # Distance of each arm joint from the expert's (reach by time, turn by
-        # reference angle). Appended last, like the command terms above.
+        # Distance of each arm joint from the expert's at the same episode
+        # time. Appended last, like the command terms above.
         expert_joint_error = ObsTerm(func=expert_bank.expert_joint_error, params={"command_name": "valve_turn"})
         expert_gripper = ObsTerm(func=expert_bank.expert_gripper_reference, params={"command_name": "valve_turn"})
         # Appended last as well (teacher v17 warm-started from v16).
@@ -278,48 +278,39 @@ class CommandsCfg:
 
 @configclass
 class RewardsCfg:
-    """Expert-tracked reach and grasp, then tracking of the commanded turn.
+    """Tracking the expert by episode time: its arm joints, gripper and valve angle.
 
-    Once the lever is held, the reward is for following the reference angle of
-    the ``valve_turn`` command, and the per-step "open" bonus only pays once the
-    reference itself has reached open. Turning faster than commanded therefore
-    earns nothing; the first teachers, rewarded for progress, flicked the lever
-    open at 6-7 rad/s.
+    There is no "lever held" gate. Teacher v19 showed that a held test built
+    from the TCP pose and the commanded gripper could be met without gripping:
+    it closed the fingers to just short of the lever, reopened for one step
+    every seven, and collected every hold-gated reward. With the references
+    all indexed by time, following the expert's joints (see TerminationsCfg),
+    closing when it closes and keeping the valve on its schedule is the task.
 
-    Episodes do not end on success: a terminal bonus would be outweighed by the
-    dense reward forfeited for the rest of the episode, teaching the policy to
-    stop just short of open. Holding the valve open instead pays every step.
+    Episodes do not end on success: once the expert has opened the valve, the
+    valve terms keep paying for holding it open. A terminal bonus would be
+    outweighed by the dense reward forfeited for the rest of the episode.
     """
 
-    grasp = RewTerm(func=mdp.grasp_lever, weight=2.0, params=dict(HOLD))
-    align_held = RewTerm(func=mdp.align_held, weight=2.0, params={"std": 0.1, **HOLD})
-    track_turn = RewTerm(func=mdp.track_valve_reference, weight=5.0, params={"std": 0.1, **HOLD})
     # Follow the expert joint by joint, not only at the TCP: near the wrist
     # singularity a small TCP error can hide large forearm/wrist excursions.
-    # The reach is shaped only by these: Cartesian reach terms paid for being
-    # at the lever as early as possible, which pulled teacher v11 off the
-    # expert's paced joint path onto a fast approach that arrived 0.5-0.8 rad
-    # off in orientation. The coarse kernel keeps a gradient back to the
-    # expert when the arm is far from it; the fine one asks for precision.
-    # Once the expert has closed its gripper, tracking pays only while holding
-    # the lever (see track_expert_joints).
-    track_expert_coarse = RewTerm(
-        func=expert_bank.track_expert_joints, weight=2.0, params={"std": 0.5, "hold": dict(HOLD)}
-    )
-    track_expert = RewTerm(func=expert_bank.track_expert_joints, weight=3.0, params={"std": 0.15, "hold": dict(HOLD)})
+    # Cartesian reach terms paid for being at the lever as early as possible,
+    # which pulled teacher v11 onto a fast approach 0.5-0.8 rad off in
+    # orientation. The coarse kernel keeps a gradient back to the expert when
+    # the arm is far from it; the fine one asks for precision.
+    track_expert_coarse = RewTerm(func=expert_bank.track_expert_joints, weight=2.0, params={"std": 0.5})
+    track_expert = RewTerm(func=expert_bank.track_expert_joints, weight=3.0, params={"std": 0.15})
     # Close the gripper when the expert does (teacher v10, rewarded on joints
     # only, reached the lever every time but never closed it in 600 iterations;
-    # at weight 1.0, v13/v14 unlearned closing by iteration 300).
-    track_expert_gripper = RewTerm(func=expert_bank.track_expert_gripper, weight=3.0)
+    # at weight 1.0, v13/v14 unlearned closing by iteration 300). Tracks the
+    # finger position, not the command (see track_expert_gripper).
+    track_expert_gripper = RewTerm(func=expert_bank.track_expert_gripper, weight=3.0, params={"std": 0.1})
     # Turn the valve on the expert's schedule (by episode time). The turning
     # rate command is fixed to the expert's speed to match; a bank with varied
-    # speeds would let it vary again.
-    track_expert_valve = RewTerm(
-        func=expert_bank.track_expert_valve, weight=3.0, params={"std": 0.1, "hold": dict(HOLD)}
-    )
-    success = RewTerm(
-        func=mdp.valve_opened_on_schedule, weight=10.0, params={"threshold_rad": SUCCESS_TOLERANCE_RAD, **HOLD}
-    )
+    # speeds would let it vary again. The coarse kernel keeps a gradient when
+    # the valve is far behind, where the 0.1 rad one is flat (teacher v17).
+    track_expert_valve = RewTerm(func=expert_bank.track_expert_valve, weight=6.0, params={"std": 0.1})
+    track_expert_valve_coarse = RewTerm(func=expert_bank.track_expert_valve, weight=5.0, params={"std": 0.5})
     # Strong enough that the raw actions are smooth themselves, not only after
     # the action filter: teacher v7 (-0.05, no magnitude term) dithered between
     # +-1 every step behind the filter (lag-1 autocorrelation -0.85), which the
@@ -329,8 +320,6 @@ class RewardsCfg:
     arm_joint_vel = RewTerm(func=base_mdp.joint_vel_l2, weight=-1.0e-3, params={"asset_cfg": ARM})
     pad_force = RewTerm(func=mdp.pad_force_excess, weight=-1.0e-3, params={"max_force": 60.0})
     valve_overspeed = RewTerm(func=mdp.valve_rate_excess, weight=-1.0, params={"factor": 1.5})
-    valve_rate_deviation = RewTerm(func=mdp.valve_rate_deviation, weight=-2.0)
-    valve_unheld_motion = RewTerm(func=mdp.valve_unheld_motion, weight=-2.0, params=dict(HOLD))
 
 
 @configclass
@@ -342,9 +331,10 @@ class TerminationsCfg:
     # Follow the expert or lose the rest of the episode (DeepMimic-style early
     # termination). 0.3 rad is 5-10x the expert's own tracking error.
     expert_drift = DoneTerm(func=expert_bank.expert_joint_drift, params={"max_error": 0.3})
-    # Teachers v13-v15 parked at the grasp pose without holding the lever,
-    # which joint drift does not catch; see expert_bank.missed_grasp.
-    missed_grasp = DoneTerm(func=expert_bank.missed_grasp, params={"grace_s": 0.5, **HOLD})
+    # Teacher v17 held the lever still, right on the joint reference (which
+    # then followed the valve's actual angle); falling off the expert's valve
+    # schedule ends the episode instead.
+    expert_valve_lag = DoneTerm(func=expert_bank.expert_valve_lag, params={"max_error": 0.3})
 
 
 @configclass

@@ -171,11 +171,13 @@ def main() -> None:
 
         uenv = env.unwrapped
         n_envs, dev, dt = uenv.num_envs, uenv.device, uenv.step_dt
-        grasp = uenv.cfg.rewards.grasp.params
+        grasp = task_env.HOLD
         turn = uenv.command_manager.get_term("valve_turn")
         robot = uenv.scene["robot"]
         gripper_body = robot.find_bodies("robotiq_base_link")[0][0]
         arm_ids = robot.find_joints(list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)[0]
+        finger_ids = robot.find_joints(uenv.cfg.actions.gripper_action.joint_names)[0]
+        gripper_action = uenv.action_manager.get_term("gripper_action")
         bank_term = getattr(uenv, "expert_bank_term", None)
         zeros6 = lambda: torch.zeros(n_envs, 6, device=dev)  # noqa: E731
 
@@ -249,6 +251,8 @@ def main() -> None:
                         f" held={int(mdp.lever_held(uenv, grasp['dist_threshold'], grasp['ang_threshold'])[0])}"
                         f" progress={progress[0]:.3f} valve_rate={mdp.valve_state(uenv)[0, 1]:+.2f}rad/s"
                         f" gripper_speed={speed[0]:.2f}m/s pad_force={mdp.pad_valve_force(uenv)[0].max():.1f}N"
+                        f" grip_cmd={'close' if gripper_action.raw_actions[0, 0] < 0 else 'open'}"
+                        f" finger_q={robot.data.joint_pos.torch[0, finger_ids].abs().max():.2f}"
                         + (
                             f" |q-q_exp|={expert_bank.expert_joint_error(uenv)[0].norm():.3f}rad"
                             f" ep_step={int(uenv.episode_length_buf[0])} bank_idx={int(bank_term.index[0])}"
