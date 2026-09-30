@@ -58,7 +58,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "chain_with_next": true
       }
     },
     {
@@ -102,7 +103,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "chain_with_next": true
       }
     },
     {
