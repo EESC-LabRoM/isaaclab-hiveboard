@@ -550,6 +550,124 @@ empty dataset.
 
 ---
 
+## 🤖 Reinforcement Learning (teacher → student)
+
+`Isaac-HiveBoard-Anymal-BallValve-RL-v0` trains a sim-to-real expert for the
+fixed-base ANYmal + DynaArm opening the ball valve (closed → -90°), with the
+two-stage recipe from IndustReal/AutoMate and Zhang et al. (CoRL 2024):
+
+1. **Teacher** - PPO (RSL-RL) whose actor and critic read privileged simulator
+   state (`teacher` group: valve angle and rate, true valve pose, lever grasp
+   target, pad contact forces, joint velocities).
+2. **Student** - distilled from the teacher with RSL-RL's DAgger-style
+   `Distillation`, reading only what the robot has at deployment (`policy`
+   group, 5-step history): arm encoders, gripper motor angle, TCP pose from
+   forward kinematics, the previous action, and the **registration** of the
+   board latched at the start of the episode - the valve pose with a
+   per-episode error (±1 cm, ±2°, plus 2 mm jitter) and the lever's initial
+   angle (±2°). After that the student tracks the lever only through its own
+   proprioception; it never sees the live valve angle. It also receives the commanded
+   turning speed - the one operator input - so a single policy turns the valve
+   at whatever speed is asked for.
+
+| | |
+| --- | --- |
+| Action | 6 arm joint increments integrated into the position target (0.05 rad/step at 20 Hz, a joint-space version of IndustReal's action integrator) + binary ramped gripper |
+| Command | turning speed [rad/s], sampled per episode in 0.25-0.8 (Play: 0.3, the cuRobo expert's speed). A reference angle starts moving at that speed once the lever is first grasped |
+| Reward | reach → align → grasp, then tracking of the reference angle (only while the lever is held at the expert grasp pose: ≤3 cm, ≤0.35 rad, closed). "Open" only pays once the reference has also reached open, so turning faster than commanded earns nothing. Penalties on valve speed deviating from the command, valve motion while not held, pad force > 60 N, action rate |
+| Randomization | valve pose ±3-4 cm / ±0.1 rad yaw, start angle 0 to -0.4 rad, arm ±0.1 rad, valve friction / armature / materials, pad friction |
+| Success | valve within 0.035 rad (2°) of fully open, same as the scripted task |
+
+**Expert bank.** The teacher is trained against precomputed cuRobo expert
+trajectories. `scripts/rl/build_expert_bank.py` runs the scripted expert
+(with its saved command setup) in 1024 parallel environments from the RL task's
+reset distribution, at the RL task's 20 Hz, with cuRobo planning every
+environment that enters a segment on the same tick as one batch
+(`plan_batch_size` on the cuRobo command configs; `BatchMotionPlanner` and a
+batched `MotionRetargeter`). 5000 trajectories took 170 s, and the expert
+opened the valve while holding the lever in 5120/5120 randomized episodes
+(7.7 ± 0.5 s to open). The saved ANYmal ball-valve setup no longer has a
+separate gripper-close step before the turn: the rotate segment closes the
+gripper as it starts, so the expert turns without idling.
+
+```bash
+uv run python scripts/rl/build_expert_bank.py --num_envs 1024 --num_trajectories 5000
+uv run python scripts/rl/build_expert_bank.py --num_envs 1 --max_waves 4 \
+  --video logs/expert_bank/video_review "env.viewer.origin_type=world" \
+  "env.viewer.eye=[0.55,1.05,1.05]" "env.viewer.lookat=[0.9,0.0,0.8]"   # review clip
+```
+
+Each RL episode resets to a random bank trajectory's start state
+(`reset_from_expert_bank`), and `track_expert` rewards following the expert
+joint by joint: during the reach, the expert's planned joint path by time, with
+the steps where the scripted expert settles onto a segment end before starting
+the next removed; during the turn, the joint configuration the expert had at
+the lever's current angle. A small
+TCP error near the wrist singularity can hide large forearm/wrist excursions,
+so the evaluator reports per-joint RMS error against the expert, RMS
+acceleration and velocity reversals per second, next to the same numbers for
+the bank's own trajectories.
+
+The lever grasp pose (`GRASP_OFFSET_*` in `tasks/anymal/ball_valve_rl/mdp.py`)
+is the cuRobo expert's, measured by replaying its demonstration through the RL
+action space. The same replay checks that every reward term is reachable; the
+expert opens the valve in 8.7 s of the 12 s episode:
+
+```bash
+uv run python scripts/rl/measure_grasp_offset.py
+```
+
+```bash
+just rl-teacher                                   # PPO, 4096 envs, 3000 iterations
+just rl-student logs/rsl_rl/anymal_ball_valve_teacher/<run>/model_2999.pt
+just rl-eval logs/rsl_rl/anymal_ball_valve_teacher/<run>/model_2999.pt
+just rl-eval logs/rsl_rl/anymal_ball_valve_student/<run>/model_1499.pt \
+  --agent rsl_rl_distillation_cfg_entry_point
+just rl-play <checkpoint>                         # Newton viewer + TorchScript/ONNX export
+```
+
+Use `--agent rsl_rl_distillation_recurrent_cfg_entry_point` for an LSTM student.
+`scripts/rl/evaluate.py` runs the `-Play-v0` task (nominal physics, closed
+valve, registration error kept) and reports the success rate with a 95% Wilson
+interval, the NIST one-sided 95% reliability bound, time to open, and stage
+rates (reached / grasped / opened while held / opened by any means), peak valve
+rate and peak gripper speed. `--trace` prints one episode step by step. It
+writes JSON next to the checkpoint. Any
+Hydra override applies, e.g. a turning-speed sweep with
+`env.commands.valve_turn.rate_range=[0.6,0.6]` (the report compares commanded
+and achieved rate), or a registration-error sweep with
+`env.observations.policy.registered_valve.params.bias_pos=0.02`.
+
+Results so far (Newton MJWarp, `-Play-v0`, 100 episodes unless noted; success =
+valve open while the lever is held at the expert grasp):
+
+| Policy | Observations | Success | 95% Wilson | Reliability ≥ | Time to open | Peak pad force |
+| --- | --- | --- | --- | --- | --- | --- |
+| cuRobo scripted expert (replay) | privileged | opens in 8.7 s | - | - | 8.7 s | - |
+| Teacher v4, it. 2299 | privileged | 100/100 | [96.3, 100]% | 97.0% | 1.43 ± 0.06 s | 97 N |
+| Student v6, it. 500 | proprio + registration | 99/100 | [94.6, 99.8]% | 95.3% | 1.58 ± 0.37 s | 294 N |
+| Student v6, it. 1499 | proprio + registration | 100/100 | [96.3, 100]% | 97.0% | 1.48 ± 0.12 s | 281 N |
+| Student v6, it. 500, 2 cm registration error (50 ep.) | proprio + registration | 43/50 | [73.8, 93.0]% | 75.3% | 1.73 ± 0.39 s | - |
+
+The learned policies turn the lever much faster than the scripted expert
+(peak valve rate ~6-7 rad/s for teacher and final student, expert 0.3 rad/s) and the
+student's pad forces peak near 300 N. Both are worth bounding (a lower
+`valve_overspeed` threshold, a stronger `pad_force` weight) before running on
+hardware.
+
+The hold gate and penalties close the shortcuts the teacher found on the way:
+with a distance-only gate it pushed the lever open with a closed "fist"
+(100% "opened" in 1 s, 0% grasped); with the full gate but no impact penalty it
+struck the lever on the approach, flinging it half open at ~11 rad/s before
+grasping. Check `grasped`, peak valve rate and `--trace` before trusting a
+success rate.
+
+The environment silences MJWarp's per-world `linesearch iterations limit
+reached` printf at startup: with thousands of worlds it prints hundreds of
+thousands of lines a minute and stalls training.
+
+---
+
 ## 📁 Repository Structure
 
 ```
