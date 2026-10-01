@@ -40,13 +40,14 @@ from isaaclab.assets.articulation import ArticulationCfg
 
 from isaaclab_hiveboard.assets.anymal.bench import (
     ANYMAL_ARM_JOINT_NAMES,
+    ANYMAL_HOME_ARM,
     ANYMAL_NEWTON_GRIPPER_OPEN,
     NEWTON_GRIPPER_JOINT_NAMES,
 )
 from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionCfg
 from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_contact_stiffness
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.scene import BallValveSceneCfg
-from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import expert_bank, mdp, valve_dynamics
+from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import actuator_delay, expert_bank, mdp, valve_dynamics
 
 ARM = SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)
 GRIPPER = SceneEntityCfg("robot", joint_names=list(NEWTON_GRIPPER_JOINT_NAMES), preserve_order=True)
@@ -72,8 +73,26 @@ VALVE_POSE_RANGE = {
 registration error."""
 VALVE_ANGLE_RANGE = (-0.4, 0.0)
 """Initial valve angle offset [rad]: some episodes start part-open."""
+ARM_POSTURES = {
+    "home": ANYMAL_HOME_ARM,
+    "raised": (0.0, -0.4, 1.9, 0.0, 0.4, 1.5708),
+    "lowered": (0.0, 0.3, 1.9, 0.0, -0.5, 1.5708),
+    "left": (0.5, 0.0, 1.7, 0.0, 0.0, 1.5708),
+    "right": (-0.5, 0.0, 1.7, 0.0, 0.0, 1.5708),
+    "wrist_down": (0.0, 0.2, 1.8, 0.0, -0.8, 1.5708),
+    "wrist_up": (0.0, 0.2, 1.8, 0.0, 0.8, 1.5708),
+}
+"""Arm start postures [rad, arm joint order], one picked per episode: the stowed home pose, the hand raised,
+lowered, swung to either side, and the wrist bent either way."""
 ARM_RANGE = (-0.1, 0.1)
-"""Initial arm joint offset [rad]."""
+"""Initial arm joint offset around the posture [rad]."""
+ARM_FLIP_PROB = 0.35
+"""Fraction of starts on a posture's wrist-flipped twin (forearm rolled half a turn, same hand pose)."""
+ARM_WRIST_FLIP = tuple(
+    ANYMAL_ARM_JOINT_NAMES.index(name)
+    for name in ("dynaarm_forearm_rotation", "dynaarm_wrist_flexion", "dynaarm_wrist_rotation")
+)
+"""The (roll, pitch, roll) wrist joints in the arm joint order."""
 
 # Force-limited gripper, like the real 2F-140 (grip force set between 10 and
 # 125 N). The shared ANYmal config drives the finger to 0.7 rad with an
@@ -99,7 +118,7 @@ def force_limited_gripper(robot: ArticulationCfg, torque: float = GRIP_TORQUE_NM
 
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_strong.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_branch.pt")
 
 
 @configclass
@@ -270,9 +289,8 @@ class EventCfg:
     # integrated arm action then starts from the resulting joints (it resets
     # after the events).
     reset_all = EventTerm(func=base_mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
-    # Friction, damping, return spring, seat breakaway and inertia of the
-    # lever, per episode; a bank reset below replaces them by its trajectory's.
-    valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg()
+    # The arm's command latency, 0-40 ms per episode (actuator_delay.py).
+    arm_delay = actuator_delay.randomize_actuator_delay_cfg()
     reset_valve_root = EventTerm(
         func=base_mdp.reset_root_state_uniform,
         mode="reset",
@@ -292,10 +310,21 @@ class EventCfg:
         params={"position_range": VALVE_ANGLE_RANGE, "velocity_range": (0.0, 0.0), "asset_cfg": VALVE_JOINT},
     )
     reset_arm = EventTerm(
-        func=base_mdp.reset_joints_by_offset,
+        func=mdp.reset_joints_from_postures,
         mode="reset",
-        params={"position_range": ARM_RANGE, "velocity_range": (0.0, 0.0), "asset_cfg": ARM},
+        params={
+            "postures": dict(ARM_POSTURES),
+            "position_range": ARM_RANGE,
+            "asset_cfg": ARM,
+            "flip_prob": ARM_FLIP_PROB,
+            "flip_joints": ARM_WRIST_FLIP,
+        },
     )
+    # Friction, damping, return spring, seat breakaway and inertia of the
+    # lever, per episode, some valves stuck closed (which reseats the lever,
+    # so after the joint reset); a bank reset below replaces them by its
+    # trajectory's.
+    valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg()
     # Replaces the three uniform resets above when an expert bank is used
     # (see AnymalBallValveRLEnvCfg.__post_init__): same distribution, but each
     # episode starts exactly where a successful expert trajectory started.
@@ -391,16 +420,20 @@ class AnymalBallValveRLEnvCfg(ManagerBasedRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(dt=1 / 200, render_interval=10, physics=BallValveRLPhysicsCfg())  # type: ignore
 
     def __post_init__(self):
-        # 20 Hz policy. The slowest commanded turn (0.25 rad/s) takes 6.3 s after
-        # a ~1.5 s reach, leaving ~4 s of held-open time within 12 s.
+        # 20 Hz policy. The slowest commanded turn (0.25 rad/s) takes 6.3 s; the
+        # expert's slowest reaches (a far start posture, a wrist flip, a slow
+        # reach speed) take ~5 s, and 99% of its trajectories open by 12.5 s.
         self.decimation = 10
-        self.episode_length_s = 12.0
+        self.episode_length_s = 14.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"
         self.viewer.eye = (-1.5, 1.5, 0.5)
         self.viewer.lookat = (0.0, 0.0, 0.0)
         self.scene.robot = force_limited_gripper(self.scene.robot)
+        self.scene.robot = actuator_delay.delayed_actuators(
+            self.scene.robot, actuator_delay.ARM_ACTUATOR_GROUPS, actuator_delay.ARM_DELAY_RANGE_S[1], self.sim.dt
+        )
         # Bank resets replace the uniform ones; they come from the same ranges.
         self.events.reset_valve_root = None
         self.events.reset_valve_joint = None

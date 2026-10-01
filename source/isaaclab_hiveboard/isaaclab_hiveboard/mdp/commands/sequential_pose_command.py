@@ -45,6 +45,9 @@ RGB frames on sampled waypoints (plus the next goal) show the planned
 orientation: red +X is the TCP approach axis, blue +Z is jaw-up.
 """
 
+WRIST_BRANCH_NEAREST = 2.0
+"""``wrist_branch`` value picking the IK branch nearest the current joints (see ``_plan_pose_on_branch``)."""
+
 
 def _xyzw_to_wxyz(q: torch.Tensor) -> torch.Tensor:
     """Reorder Isaac Lab (x, y, z, w) quaternions to cuRobo (w, x, y, z)."""
@@ -1000,6 +1003,14 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         self._chain_exhaust = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._chain_rejected = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._chain_members_cache: list | None = None
+        # Per-env IK branch of the trajopt goal (see CuroboPlannedGoToFrameCfg.wrist_flip_joints):
+        # ``wrist_branch`` 0 keeps the IK solver's choice, -1/+1 asks for the
+        # wrist pitch joint's sign at the goal, WRIST_BRANCH_NEAREST for the
+        # branch nearest the current joints; ``forearm_winding`` +1/-1 is the way the first roll
+        # joint turns by pi when flipped, 0 whichever lands nearer its current
+        # position.
+        self.wrist_branch = torch.zeros(self._num_envs, device=self._device)
+        self.forearm_winding = torch.zeros(self._num_envs, device=self._device)
 
     def _clear_plan_state(self, env_ids: torch.Tensor) -> None:
         self._waypoint_index[env_ids] = 0
@@ -1576,8 +1587,67 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 ordered_tool_frames=planner.tool_frames,
                 num_goalset=1,
             )
-            result = planner.plan_pose(goal, current, max_attempts=self.cfg.max_plan_attempts, enable_graph_attempt=99)
+            if getattr(self.cfg, "wrist_flip_joints", None) and bool((self.wrist_branch[pad_env_ids] != 0).any()):
+                result = self._plan_pose_on_branch(planner, goal, current, pad_env_ids)
+            else:
+                result = planner.plan_pose(
+                    goal, current, max_attempts=self.cfg.max_plan_attempts, enable_graph_attempt=99
+                )
         return result, base_pos, base_quat
+
+    def _plan_pose_on_branch(self, planner, goal, current, pad_env_ids: torch.Tensor):
+        """``planner.plan_pose`` (one attempt) with each env's IK goal moved to its :attr:`wrist_branch`.
+
+        With a (roll, pitch, roll) wrist whose axes meet, turning the first
+        roll by pi, negating the pitch and turning the last roll by pi leaves
+        the flange pose unchanged, so the IK goal can be flipped exactly. A
+        flip that would leave the joint limits (minus ``wrist_flip_margin``) is
+        not applied; the env keeps the solver's branch. With
+        :data:`WRIST_BRANCH_NEAREST` the goal is whichever of the two is nearer
+        the current joints, so the branch follows from the arm's state.
+        Call with grad enabled.
+        """
+        num_seeds = planner.trajopt_solver.config.num_seeds
+        ik = planner.ik_solver.solve_pose(goal, return_seeds=num_seeds, current_state=current)
+        if torch.count_nonzero(ik.success) == 0:
+            return None
+        solution = ik.solution.clone()  # (B, seeds, dof)
+        names = list(planner.joint_names)
+        roll1, pitch, roll2 = (names.index(n) for n in self.cfg.wrist_flip_joints)
+        limits = planner.kinematics.get_joint_limits().position
+        margin = float(self.cfg.wrist_flip_margin)
+        low, high = limits[0] + margin, limits[1] - margin
+        q_now = current.position[:, None, :].expand_as(solution)
+
+        want = self.wrist_branch[pad_env_ids][:, None].expand(-1, solution.shape[1])
+        sign = torch.where(solution[..., pitch] >= 0.0, 1.0, -1.0)
+        flip = (want != 0) & (want != WRIST_BRANCH_NEAREST) & (sign != want)
+
+        winding = self.forearm_winding[pad_env_ids][:, None].expand_as(want)
+        up, down = solution[..., roll1] + math.pi, solution[..., roll1] - math.pi
+        nearer_up = (up - q_now[..., roll1]).abs() <= (down - q_now[..., roll1]).abs()
+        prefer_up = torch.where(winding == 0, nearer_up, winding > 0)
+        up_ok = (up >= low[roll1]) & (up <= high[roll1])
+        down_ok = (down >= low[roll1]) & (down <= high[roll1])
+        new_roll1 = torch.where((prefer_up & up_ok) | ~down_ok, up, down)
+        roll1_ok = up_ok | down_ok
+        # The last roll's range spans 2 pi at most, so one of the two fits.
+        up2, down2 = solution[..., roll2] + math.pi, solution[..., roll2] - math.pi
+        up2_ok = (up2 >= low[roll2]) & (up2 <= high[roll2])
+        down2_ok = (down2 >= low[roll2]) & (down2 <= high[roll2])
+        new_roll2 = torch.where(down2_ok, down2, up2)
+        flipped = solution.clone()
+        flipped[..., roll1], flipped[..., pitch], flipped[..., roll2] = new_roll1, -solution[..., pitch], new_roll2
+        nearer = (flipped - q_now).norm(dim=-1) < (solution - q_now).norm(dim=-1)
+        flip = (flip | ((want == WRIST_BRANCH_NEAREST) & nearer)) & roll1_ok & (up2_ok | down2_ok)
+
+        solution[..., roll1] = torch.where(flip, new_roll1, solution[..., roll1])
+        solution[..., pitch] = torch.where(flip, -solution[..., pitch], solution[..., pitch])
+        solution[..., roll2] = torch.where(flip, new_roll2, solution[..., roll2])
+        result = planner.trajopt_solver.solve_pose(
+            goal, current, seed_config=solution, use_implicit_goal=True, finetune_attempts=1
+        )
+        return result
 
     def _joints_to_tcp_b(self, kinematics, tool_frame: str, joints: torch.Tensor, base_pos, base_quat):
         """TCP poses (Isaac base frame, xyzw) of ``(T, J)`` joints for one env with cuRobo base ``base_pos/quat``."""
@@ -3604,6 +3674,14 @@ class CuroboPlannedGoToFrameCfg(GoToFrameCfg):
     """Largest joint change between chain waypoints before the chain is rejected [rad] (leader only)."""
     chain_max_pose_error_m: float = 0.01
     """Largest TCP position error of the retargeted chain before it is rejected [m] (leader only)."""
+    wrist_flip_joints: tuple[str, str, str] | None = None
+    """The arm's (roll, pitch, roll) wrist joints, whose axes meet, enabling a per-env IK branch.
+
+    Flipping them (first roll and last roll by pi, pitch negated) leaves the
+    flange pose unchanged; the handler's ``wrist_branch``/``forearm_winding``
+    then pick the trajopt goal's branch per env. Batched plans only."""
+    wrist_flip_margin: float = 0.05
+    """Distance from the joint limits a flipped goal keeps [rad]; closer flips are not applied."""
 
 
 @configclass
