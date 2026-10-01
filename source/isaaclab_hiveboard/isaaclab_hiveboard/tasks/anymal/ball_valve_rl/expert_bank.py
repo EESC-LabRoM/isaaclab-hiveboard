@@ -37,6 +37,8 @@ from isaaclab.managers import EventTermCfg, ManagerTermBase
 
 from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
 
+from .valve_dynamics import VALVE_DYNAMICS
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
@@ -109,6 +111,14 @@ class ExpertBank:
         self.arm_q0 = bank["arm_q0"].float()
         self.valve_angle0 = bank["valve_angle0"].float()
         self.valve_pose_env = bank["valve_pose_env"].float()
+        # Per-trajectory valve dynamics and expert variation (valve_dynamics.py,
+        # expert_diversity.py); older banks have neither.
+        self.valve_dynamics = bank["valve_dynamics"].float() if "valve_dynamics" in bank else None
+        if self.valve_dynamics is not None and list(meta["valve_dynamics"]) != list(VALVE_DYNAMICS):
+            raise ValueError(f"Bank valve dynamics {meta['valve_dynamics']} differ from {VALVE_DYNAMICS}")
+        self.turn_rate = None
+        if "expert_diversity" in bank:
+            self.turn_rate = bank["expert_diversity"][:, list(meta["expert_diversity"]).index("turn_rate")].float()
         for name in (
             "reach",
             "grasp_step",
@@ -122,8 +132,11 @@ class ExpertBank:
             "arm_q0",
             "valve_angle0",
             "valve_pose_env",
+            "valve_dynamics",
+            "turn_rate",
         ):
-            setattr(self, name, getattr(self, name).to(device))
+            if getattr(self, name) is not None:
+                setattr(self, name, getattr(self, name).to(device))
 
     def reach_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert joints at episode ``step`` (held at the grasp afterwards), ``(len(idx), 6)``."""
@@ -158,7 +171,11 @@ class reset_from_expert_bank(ManagerTermBase):
     trajectory (the scene's other joints keep the preceding default reset) and
     remembers the index, which the reference terms read. Replaces the valve
     pose, valve angle and arm reset randomization, which the bank already
-    samples from the same distribution.
+    samples from the same distribution. When the bank recorded them, the
+    trajectory's valve dynamics replace the ones the ``valve_dynamics`` event
+    sampled (it must run first), and the turn-rate command takes the expert's
+    turning speed (:class:`ValveTurnRateCommand`), so the references stay
+    feasible and the observed speed matches them.
 
     With probability ``mid_start_prob`` the episode starts at a random step of
     the trajectory up to the expert's open step instead of its beginning
@@ -216,6 +233,8 @@ class reset_from_expert_bank(ManagerTermBase):
         valve.write_joint_velocity_to_sim_index(
             velocity=torch.zeros(len(ids), 1, device=env.device), joint_ids=self._valve_joint, env_ids=ids
         )
+        if self.bank.valve_dynamics is not None:
+            env.valve_dynamics_term.write(ids, self.bank.valve_dynamics[draw])
         robot.write_joint_position_to_sim_index(position=self.bank.arm_q0[draw], joint_ids=self._arm_ids, env_ids=ids)
         robot.write_joint_velocity_to_sim_index(
             velocity=torch.zeros(len(ids), len(self._arm_ids), device=env.device), joint_ids=self._arm_ids, env_ids=ids

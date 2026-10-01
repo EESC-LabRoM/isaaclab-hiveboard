@@ -758,6 +758,15 @@ class _BaseCmdHandler:
         self._device = command_term.device
         self._num_envs = command_term.num_envs
         self._dt = float(command_term._env.step_dt)
+        # Per-environment variations of the authored command, e.g. for a bank
+        # of diverse demonstrations: a factor on ``velocity`` and
+        # ``angular_velocity``, and a goal offset composed after
+        # ``target_offset_pos``/``target_offset_rot`` (xyzw). Set them before
+        # the command plans; the defaults change nothing.
+        self.speed_scale = torch.ones(self._num_envs, device=self._device)
+        self.env_offset_pos = torch.zeros(self._num_envs, 3, device=self._device)
+        self.env_offset_rot = torch.zeros(self._num_envs, 4, device=self._device)
+        self.env_offset_rot[:, 3] = 1.0
 
     def reset(self, env_ids: torch.Tensor):
         """Reset the handler for the given environment IDs."""
@@ -782,19 +791,22 @@ class _BaseCmdHandler:
         command[:, 4:8] = quat
         return command
 
-    def _apply_target_offset(self, pos: torch.Tensor, quat: torch.Tensor):
-        """Compose the authored goal/pivot offset in its reference frame."""
-        return math_utils.combine_frame_transforms(
+    def _apply_target_offset(self, pos: torch.Tensor, quat: torch.Tensor, env_ids: torch.Tensor | None = None):
+        """Compose the authored goal/pivot offset in its reference frame, then ``env_ids``' own offsets."""
+        pos, quat = math_utils.combine_frame_transforms(
             pos, quat,
             pos.new_tensor(self.cfg.target_offset_pos).expand_as(pos),
             quat.new_tensor(self.cfg.target_offset_rot).expand_as(quat),
         )
+        if env_ids is None:
+            return pos, quat
+        return math_utils.combine_frame_transforms(pos, quat, self.env_offset_pos[env_ids], self.env_offset_rot[env_ids])
 
     def _step_pos_towards(
         self,
         current: torch.Tensor,
         target: torch.Tensor,
-        velocity: float,
+        velocity: float | torch.Tensor,
     ) -> torch.Tensor:
         """Advance ``current`` toward ``target`` by at most ``velocity * dt``."""
         delta = target - current
@@ -802,7 +814,9 @@ class _BaseCmdHandler:
         scale = torch.clamp(velocity * self._dt / dist.clamp(min=1.0e-8), max=1.0)
         return current + delta * scale
 
-    def _step_quat_towards(self, current: torch.Tensor, target: torch.Tensor, angular_velocity: float) -> torch.Tensor:
+    def _step_quat_towards(
+        self, current: torch.Tensor, target: torch.Tensor, angular_velocity: float | torch.Tensor
+    ) -> torch.Tensor:
         """Advance ``current`` toward ``target`` by at most ``angular_velocity * dt``."""
         err = math_utils.quat_box_minus(target, current)
         angle = torch.linalg.vector_norm(err, dim=-1, keepdim=True)
@@ -862,11 +876,12 @@ class _GoToFrameHandler(_BaseCmdHandler):
         env_ids = torch.where(env_mask)[0]
         target_pos_b, target_quat_b = self.get_target_in_base_frame(env_ids)
 
+        scale = self.speed_scale[env_ids, None]
         self.command_pos_b[env_ids] = self._step_pos_towards(
-            self.command_pos_b[env_ids], target_pos_b, self.cfg.velocity
+            self.command_pos_b[env_ids], target_pos_b, self.cfg.velocity * scale
         )
         self.command_quat_b[env_ids] = self._step_quat_towards(
-            self.command_quat_b[env_ids], target_quat_b, self.cfg.angular_velocity
+            self.command_quat_b[env_ids], target_quat_b, self.cfg.angular_velocity * scale
         )
         return self._pack_command(
             self.cfg.gripper_open,
@@ -931,7 +946,7 @@ class _GoToFrameHandler(_BaseCmdHandler):
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
         target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
 
-        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w)
+        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w, env_ids)
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],
@@ -1172,13 +1187,15 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
                 _RotateFrameHandler.reset(member, env_ids)
                 member._setup_arc(env_ids, pos, quat)
                 angle = member.angle_rad_tensor[env_ids]
-                count = torch.ceil(angle.abs() / (member.cfg.angular_velocity * dt)).clamp(min=1).long()
+                angular_velocity = member.cfg.angular_velocity * member.speed_scale[env_ids]
+                count = torch.ceil(angle.abs() / (angular_velocity * dt)).clamp(min=1).long()
             else:
                 _GoToFrameHandler.reset(member, env_ids)
                 target_pos, target_quat = member.get_target_in_base_frame(env_ids)
+                scale = member.speed_scale[env_ids]
                 duration = torch.maximum(
-                    torch.linalg.vector_norm(target_pos - pos, dim=-1) / member.cfg.velocity,
-                    math_utils.quat_error_magnitude(target_quat, quat) / member.cfg.angular_velocity,
+                    torch.linalg.vector_norm(target_pos - pos, dim=-1) / (member.cfg.velocity * scale),
+                    math_utils.quat_error_magnitude(target_quat, quat) / (member.cfg.angular_velocity * scale),
                 )
                 count = torch.ceil(duration / dt).clamp(min=1).long()
             horizon = int(count.max())
@@ -1244,7 +1261,9 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         norm = sum(weights)
         return sum(w / norm * x[:, k : k + frames + 2 * h] for k, w in enumerate(weights))
 
-    def _retime_reach(self, planner, trajectory: torch.Tensor, last: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _retime_reach(
+        self, planner, trajectory: torch.Tensor, last: torch.Tensor, env_ids: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Resample trajopt joint paths so the TCP moves at the command's speeds throughout.
 
         cuRobo's timing starts and ends at rest; only its geometric path is
@@ -1268,9 +1287,10 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
             flange.position.reshape(-1, 3), _wxyz_to_xyzw(flange.quaternion.reshape(-1, 4)), offset_pos, offset_rot
         )
         tcp_pos, tcp_quat = tcp_pos.view(num, frames, 3), tcp_quat.view(num, frames, 4)
+        scale = self.speed_scale[env_ids, None]
         step = torch.maximum(
-            torch.linalg.vector_norm(tcp_pos[:, 1:] - tcp_pos[:, :-1], dim=-1) / self.cfg.velocity,
-            math_utils.quat_error_magnitude(tcp_quat[:, 1:], tcp_quat[:, :-1]) / self.cfg.angular_velocity,
+            torch.linalg.vector_norm(tcp_pos[:, 1:] - tcp_pos[:, :-1], dim=-1) / (self.cfg.velocity * scale),
+            math_utils.quat_error_magnitude(tcp_quat[:, 1:], tcp_quat[:, :-1]) / (self.cfg.angular_velocity * scale),
         )
         step = step * (torch.arange(1, frames, device=self._device)[None] <= last[:, None])
         tau = torch.cat((torch.zeros(num, 1, device=self._device), step.cumsum(dim=1)), dim=1)
@@ -1373,7 +1393,7 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
             solved = result.success.view(size, -1).any(dim=-1)
             trajectory = result.interpolated_trajectory.position.view(size, -1, len(joint_names))
             last = result.interpolated_last_tstep.view(size, -1)[:, 0]
-            reach, reach_counts = self._retime_reach(planner, trajectory, last)
+            reach, reach_counts = self._retime_reach(planner, trajectory, last, pad_env_ids)
 
             # Cartesian legs from the planned target, retargeted from the reach's end.
             leg_pos, leg_quat, leg_counts = self._chain_legs(pad_env_ids, members[1:], target_pos, target_quat)
@@ -2231,6 +2251,9 @@ class _RotateFrameHandler(_BaseCmdHandler):
         self.radius_vec = torch.zeros(self._num_envs, 3, device=self._device)
         self.axial_vec = torch.zeros(self._num_envs, 3, device=self._device)
         self._angle_threshold_rad = math.radians(self.cfg.angle_threshold_deg)
+        # Per-environment extra arc [rad] in the direction of the turn, e.g. to
+        # press a loaded lever onto its end stop despite the grip's compliance.
+        self.angle_extra_rad = torch.zeros(self._num_envs, device=self._device)
 
     def reset(self, env_ids: torch.Tensor):
         self._progress_abs[env_ids] = 0.0
@@ -2240,6 +2263,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
             self.angle_rad_tensor[env_ids] = self._command_term.valve_rotate_angle_rad[env_ids]
         else:
             self.angle_rad_tensor[env_ids] = math.radians(self.cfg.angle_deg)
+        self.angle_rad_tensor[env_ids] += torch.copysign(self.angle_extra_rad[env_ids], self.angle_rad_tensor[env_ids])
         self._clamp_ee_rotation(env_ids)
         self._setup_arc(env_ids, *self._command_term._get_ee_in_base_frame(env_ids))
 
@@ -2317,7 +2341,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         env_ids = torch.where(env_mask)[0]
         abs_angle = torch.abs(self.angle_rad_tensor[env_ids])
         self._progress_abs[env_ids] = torch.clamp(
-            self._progress_abs[env_ids] + self.cfg.angular_velocity * self._dt,
+            self._progress_abs[env_ids] + self.cfg.angular_velocity * self.speed_scale[env_ids] * self._dt,
             max=abs_angle,
         )
         angle = torch.copysign(self._progress_abs[env_ids], self.angle_rad_tensor[env_ids])
@@ -2345,7 +2369,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         target_pos_w = self._frame.data.target_pos_w.torch[env_ids, self._frame_idx]
         target_quat_w = self._frame.data.target_quat_w.torch[env_ids, self._frame_idx]
 
-        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w)
+        target_pos_w, target_quat_w = self._apply_target_offset(target_pos_w, target_quat_w, env_ids)
 
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             self._asset.data.root_pos_w.torch[env_ids],

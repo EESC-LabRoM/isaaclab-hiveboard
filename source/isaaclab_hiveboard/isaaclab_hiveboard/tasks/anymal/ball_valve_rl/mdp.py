@@ -276,7 +276,7 @@ def episode_time(env: ManagerBasedRLEnv) -> torch.Tensor:
 def gripper_object_detected(
     env: ManagerBasedEnv,
     asset_cfg: SceneEntityCfg,
-    stopped_below: float = 0.688,
+    stopped_below: float = 0.745,
     moved_above: float = 0.3,
     max_speed: float = 0.05,
 ) -> torch.Tensor:
@@ -284,9 +284,10 @@ def gripper_object_detected(
 
     Like the Robotiq's gOBJ: commanded closed, and the fingers have come to
     rest (``max_speed`` [rad/s]) short of the closed target, between
-    ``moved_above`` and ``stopped_below`` [rad]. Closing on empty air the
-    finger joint settles at the 0.70 rad target; on the lever it stops at
-    0.667-0.680 rad. ``asset_cfg`` selects the finger joint.
+    ``moved_above`` and ``stopped_below`` [rad]. With the force-limited
+    gripper (``env.py``) the finger joint closes onto its 0.785 rad limit on
+    empty air and stops at ~0.703 rad on the lever. ``asset_cfg`` selects the
+    finger joint.
     """
     robot: BaseArticulation = env.scene[asset_cfg.name]
     finger = robot.data.joint_pos.torch[:, asset_cfg.joint_ids[0]]
@@ -448,7 +449,8 @@ def invalid_state(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, max_joint_v
 class ValveTurnRateCommand(CommandTerm):
     """Commanded valve turning speed and the reference angle it generates.
 
-    Each episode samples a turning rate [rad/s] from ``rate_range``. The
+    Each episode samples a turning rate [rad/s] from ``rate_range``, or takes
+    the expert's when the episode replays an expert bank that varies it. The
     reference angle starts at the valve's reset angle and stays there until the
     lever is first held (:func:`lever_held`), so it waits for the grasp instead
     of running away during the reach. From then on it advances toward open at
@@ -486,8 +488,12 @@ class ValveTurnRateCommand(CommandTerm):
 
     def _resample_command(self, env_ids: Sequence[int]):
         # The command manager resets after the reset events, so the valve angle
-        # read here is the new episode's.
+        # and expert-bank trajectory read here are the new episode's.
         self.rate[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.rate_range)
+        bank_term = getattr(self._env, "expert_bank_term", None)
+        if bank_term is not None and bank_term.bank.turn_rate is not None:
+            # The expert's own turning speed: the references follow it.
+            self.rate[env_ids] = bank_term.bank.turn_rate[bank_term.index[env_ids]]
         self.ref_angle[env_ids] = valve_angle(self._env)[env_ids]
         self.engaged[env_ids] = False
         self.engaged_time[env_ids] = 0.0
