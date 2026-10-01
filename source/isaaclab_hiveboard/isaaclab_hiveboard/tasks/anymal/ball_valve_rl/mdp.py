@@ -144,6 +144,48 @@ def silence_solver_overflow_warnings(env: ManagerBasedEnv, env_ids: torch.Tensor
 ##
 
 
+def reset_joints_from_postures(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    postures: dict[str, tuple[float, ...]],
+    position_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg,
+    flip_prob: float = 0.0,
+    flip_joints: tuple[int, int, int] | None = None,
+    flip_margin: float = 0.05,
+) -> None:
+    """Reset event: put ``asset_cfg``'s joints at one of ``postures`` (uniform pick) plus a uniform offset, at rest.
+
+    Each posture lists the joints in ``asset_cfg.joint_ids`` order. With
+    probability ``flip_prob`` the start is the posture's wrist-flipped twin:
+    the (roll, pitch, roll) wrist joints at ``flip_joints`` (indices into the
+    posture) turned by +/-pi (random way), negated and turned by pi, which
+    keeps the hand where it is with the forearm rolled half a turn. Joints are
+    then kept ``flip_margin`` inside their limits (which may roll the hand a
+    little).
+    """
+    asset: BaseArticulation = env.scene[asset_cfg.name]
+    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+    table = torch.tensor(list(postures.values()), device=env.device)
+    pick = torch.randint(len(table), (len(ids),), device=env.device)
+    q = table[pick] + torch.empty(len(ids), table.shape[1], device=env.device).uniform_(*position_range)
+    if flip_prob > 0.0 and flip_joints is not None:
+        roll1, pitch, roll2 = flip_joints
+        flip = torch.rand(len(ids), device=env.device) < flip_prob
+        way = torch.where(torch.rand(len(ids), device=env.device) < 0.5, 1.0, -1.0)
+        limits = asset.data.joint_pos_limits.torch[ids][:, asset_cfg.joint_ids]
+        low, high = limits[..., 0] + flip_margin, limits[..., 1] - flip_margin
+        # The last roll turns by -pi: the grasp's flipped twin is there too
+        # (the DynaArm's postures sit at +pi/2, its range is [-pi/2, 3pi/2]).
+        r2 = q[:, roll2] - torch.pi
+        q[:, roll1] = torch.where(flip, q[:, roll1] + way * torch.pi, q[:, roll1])
+        q[:, pitch] = torch.where(flip, -q[:, pitch], q[:, pitch])
+        q[:, roll2] = torch.where(flip, r2, q[:, roll2])
+        q = torch.minimum(torch.maximum(q, low), high)
+    asset.write_joint_position_to_sim_index(position=q, joint_ids=asset_cfg.joint_ids, env_ids=ids)
+    asset.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(q), joint_ids=asset_cfg.joint_ids, env_ids=ids)
+
+
 def _body_frame_w(
     env: ManagerBasedEnv, asset_name: str, body_name: str, offset_pos, offset_rot
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -258,6 +300,29 @@ def pad_valve_force(env: ManagerBasedEnv, sensor_names: tuple[str, ...] = ("fing
         matrix = sensor.data.force_matrix_w.torch.reshape(env.num_envs, -1, 3)
         forces.append(torch.norm(matrix.sum(dim=1), dim=-1))
     return torch.stack(forces, dim=-1)
+
+
+def pad_force_split(
+    env: ManagerBasedEnv, sensor_names: tuple[str, str] = ("finger_contact", "jaw_contact")
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Valve contact force on the (left, right) pads split into squeeze and lateral parts, each ``(N, 2)`` [N].
+
+    Squeeze is the part along the closing axis (inner finger to inner finger),
+    which the gripper's motor sets; lateral is the rest, e.g. the arm pushing
+    the lever through the fingers.
+    """
+    robot: BaseArticulation = env.scene["robot"]
+    left, right = (robot.find_bodies(name)[0][0] for name in ("left_inner_finger", "right_inner_finger"))
+    axis = robot.data.body_pos_w.torch[:, right] - robot.data.body_pos_w.torch[:, left]
+    axis = axis / axis.norm(dim=-1, keepdim=True).clamp(min=1.0e-6)
+    squeeze, lateral = [], []
+    for name, sign in zip(sensor_names, (1.0, -1.0)):
+        sensor: ContactSensor = env.scene[name]
+        force = sensor.data.force_matrix_w.torch.reshape(env.num_envs, -1, 3).sum(dim=1)
+        along = (force * axis).sum(dim=-1, keepdim=True)
+        squeeze.append(sign * along[:, 0])
+        lateral.append((force - along * axis).norm(dim=-1))
+    return torch.stack(squeeze, dim=-1), torch.stack(lateral, dim=-1)
 
 
 def episode_time(env: ManagerBasedRLEnv) -> torch.Tensor:

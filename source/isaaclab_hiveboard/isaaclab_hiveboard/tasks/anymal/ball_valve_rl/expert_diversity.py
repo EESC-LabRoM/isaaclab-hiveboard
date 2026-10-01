@@ -20,6 +20,14 @@ the values in :data:`EXPERT_DIVERSITY` and writes them into the
   (:func:`turn_overshoot`) and the valve's end stop holds the lever at open.
   Without it the expert opened 38% of the 3-4 N·m valves; with it 85%.
 
+With ``wrist_branch_nearest`` the cuRobo reach and retreat plan to the IK
+branch nearest the arm's current joints: the usual one (wrist flexion
+negative) or its wrist-flipped twin with the same hand pose (forearm turned by
+pi, wrist flexion negated, wrist rotation by pi; the DynaArm has no other
+branch within its limits). Which one the expert takes then follows from the
+start posture (some start flipped, see ``mdp.reset_joints_from_postures``),
+which the student observes; a randomly drawn branch would not be learnable.
+
 The grasp offset is applied in the grasp goal's frame, whose ``y`` axis runs
 along the lever (the goal sits 6 cm out along it from the valve axis). The
 approach goals before the grasp get the same offset expressed from their own
@@ -42,8 +50,7 @@ if TYPE_CHECKING:
 #: Order of :attr:`sample_expert_diversity.values` and the bank's ``expert_diversity``.
 EXPERT_DIVERSITY = ("turn_rate", "reach_scale", "grasp_shift", "grasp_roll", "turn_overshoot")
 #: Sampling ranges. The authored expert turns at 0.3 rad/s with ``reach_scale``
-#: 1 and no grasp offset. Slowest case: a ~4 s reach and a 6.3 s turn, open by
-#: ~10.5 s of the RL task's 12 s episode.
+#: 1 and no grasp offset.
 EXPERT_DIVERSITY_RANGES = {
     "turn_rate": (0.25, 0.5),
     "reach_scale": (0.75, 1.3),
@@ -55,6 +62,8 @@ OVERSHOOT_RAD = 0.03
 OVERSHOOT_RAD_PER_NM = 0.05
 #: Lever axis in the grasp goal's frame.
 LEVER_AXIS = (0.0, 1.0, 0.0)
+#: The DynaArm's (roll, pitch, roll) wrist, for the wrist flip.
+WRIST_FLIP_JOINTS = ("dynaarm_forearm_rotation", "dynaarm_wrist_flexion", "dynaarm_wrist_rotation")
 
 
 def turn_overshoot(env: ManagerBasedEnv, env_ids: torch.Tensor) -> torch.Tensor:
@@ -74,7 +83,8 @@ class sample_expert_diversity(ManagerTermBase):
 
     The ``pose_command`` handlers are found on the first call (the command
     manager is built after the event manager): the rotate segment, the
-    go-to segments before it (the reach), and the last of those (the grasp).
+    go-to segments before it (the reach), the last of those (the grasp) and
+    the cuRobo go-to segments after it (the retreat).
     ``values`` holds every environment's current sample, ``(num_envs, 5)``.
     """
 
@@ -85,13 +95,18 @@ class sample_expert_diversity(ManagerTermBase):
         env.expert_diversity_term = self
 
     def _resolve(self, env: ManagerBasedEnv, command_name: str) -> None:
-        from isaaclab_hiveboard.mdp.commands.sequential_pose_command import _GoToFrameHandler, _RotateFrameHandler
+        from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
+            _CuroboPlannedGoToFrameHandler,
+            _GoToFrameHandler,
+            _RotateFrameHandler,
+        )
 
         handlers = env.command_manager.get_term(command_name)._command_handlers
         rotate = next(i for i, h in enumerate(handlers) if isinstance(h, _RotateFrameHandler))
         self._rotate = handlers[rotate]
         self._reach = [h for h in handlers[:rotate] if isinstance(h, _GoToFrameHandler)]
         self._grasp = self._reach[-1]
+        self._retreat = [h for h in handlers[rotate + 1 :] if isinstance(h, _CuroboPlannedGoToFrameHandler)]
         # Each earlier goal in the grasp goal's frame, K, from the frames'
         # authored offsets. Reading the frame transformer here would latch its
         # pre-reset poses for this step, and the command would then plan to
@@ -120,6 +135,7 @@ class sample_expert_diversity(ManagerTermBase):
         env: ManagerBasedEnv,
         env_ids: torch.Tensor | None,
         ranges: dict[str, tuple[float, float]],
+        wrist_branch_nearest: bool = False,
         command_name: str = "pose_command",
     ) -> None:
         if self._rotate is None:
@@ -138,6 +154,14 @@ class sample_expert_diversity(ManagerTermBase):
         self._rotate.angle_extra_rad[ids] = overshoot
         for handler in self._reach:
             handler.speed_scale[ids] = reach_scale
+        if wrist_branch_nearest:
+            from isaaclab_hiveboard.mdp.commands.sequential_pose_command import WRIST_BRANCH_NEAREST
+
+            for handler in self._reach + self._retreat:
+                if getattr(handler.cfg, "wrist_flip_joints", None) is None:
+                    raise ValueError("wrist_branch_nearest needs the cuRobo go-to commands' wrist_flip_joints.")
+                handler.wrist_branch[ids] = WRIST_BRANCH_NEAREST
+                handler.forearm_winding[ids] = 0.0
 
         axis = torch.tensor(LEVER_AXIS, device=env.device).expand(n, 3)
         grasp_pos = axis * shift[:, None]
@@ -157,8 +181,12 @@ class sample_expert_diversity(ManagerTermBase):
         pass
 
 
-def sample_expert_diversity_cfg(ranges: dict[str, tuple[float, float]] | None = None) -> EventTermCfg:
+def sample_expert_diversity_cfg(
+    ranges: dict[str, tuple[float, float]] | None = None, wrist_branch_nearest: bool = False
+) -> EventTermCfg:
     """Reset event sampling the expert's variations from ``ranges`` (default :data:`EXPERT_DIVERSITY_RANGES`)."""
     return EventTermCfg(
-        func=sample_expert_diversity, mode="reset", params={"ranges": dict(ranges or EXPERT_DIVERSITY_RANGES)}
+        func=sample_expert_diversity,
+        mode="reset",
+        params={"ranges": dict(ranges or EXPERT_DIVERSITY_RANGES), "wrist_branch_nearest": wrist_branch_nearest},
     )

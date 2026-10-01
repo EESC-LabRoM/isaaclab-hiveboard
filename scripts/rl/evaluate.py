@@ -18,7 +18,7 @@ board protocol, FurnitureBench-style stage progress):
 Success means the valve reached open *while the lever was held* at the
 expert grasp pose, matching the reward's definition. Opening it any other way
 (pushing, knocking) is reported separately as ``opened_any``;
-* peak pad force and solver blow-ups.
+* peak pad force (and its squeeze and lateral parts) and solver blow-ups.
 
 Results are printed and written as JSON next to the checkpoint::
 
@@ -100,6 +100,10 @@ def reliability_lower_bound(successes: int, n: int, confidence: float = 0.95) ->
     return lo
 
 
+def _quantiles(values: list[float], qs: tuple[float, ...] = (0.5, 0.99)) -> list[float]:
+    return torch.quantile(torch.tensor(values), torch.tensor(qs)).tolist()
+
+
 def _nanmean(values: list[float]) -> float:
     finite = [v for v in values if not math.isnan(v)]
     return sum(finite) / len(finite) if finite else float("nan")
@@ -179,6 +183,7 @@ def main() -> None:
         finger_ids = robot.find_joints(uenv.cfg.actions.gripper_action.joint_names)[0]
         gripper_action = uenv.action_manager.get_term("gripper_action")
         bank_term = getattr(uenv, "expert_bank_term", None)
+        wrist_col = list(ANYMAL_ARM_JOINT_NAMES).index("dynaarm_wrist_flexion")
         zeros6 = lambda: torch.zeros(n_envs, 6, device=dev)  # noqa: E731
 
         def fresh() -> dict[str, torch.Tensor]:
@@ -190,6 +195,8 @@ def main() -> None:
                 "t_success": torch.full((n_envs,), float("nan"), device=dev),
                 "max_progress": torch.zeros(n_envs, device=dev),
                 "max_pad_force": torch.zeros(n_envs, device=dev),
+                "max_pad_squeeze": torch.zeros(n_envs, device=dev),
+                "max_pad_lateral": torch.zeros(n_envs, device=dev),
                 "max_valve_rate": torch.zeros(n_envs, device=dev),
                 "max_tcp_speed": torch.zeros(n_envs, device=dev),
                 "turn_rate_sum": torch.zeros(n_envs, device=dev),
@@ -202,6 +209,10 @@ def main() -> None:
                 "joint_steps": torch.zeros(n_envs, device=dev),
                 "prev_q": robot.data.joint_pos.torch[:, arm_ids].clone(),
                 "prev_v": zeros6(),
+                # Which bank trajectory the episode started from, and the wrist
+                # flexion at the first held step (its sign is the IK branch).
+                "bank_index": bank_term.index.clone() if bank_term is not None else torch.zeros(n_envs, device=dev),
+                "grasp_wrist": torch.full((n_envs,), float("nan"), device=dev),
             }
 
         stats, step_count = fresh(), torch.zeros(n_envs, device=dev)
@@ -217,6 +228,8 @@ def main() -> None:
                 opened = mdp.valve_open_success(uenv, task_env.SUCCESS_TOLERANCE_RAD)
                 stats["reached"] |= dist < grasp["dist_threshold"]
                 held = mdp.lever_held(uenv, grasp["dist_threshold"], grasp["ang_threshold"])
+                first_hold = held & stats["grasp_wrist"].isnan()
+                stats["grasp_wrist"][first_hold] = robot.data.joint_pos.torch[first_hold, arm_ids[wrist_col]]
                 stats["grasped"] |= held
                 stats["opened_any"] |= opened
                 new = opened & held & ~stats["success"]
@@ -262,6 +275,9 @@ def main() -> None:
                         )
                     )
                 stats["max_valve_rate"] = torch.maximum(stats["max_valve_rate"], mdp.valve_state(uenv)[:, 1].abs())
+                squeeze, lateral = mdp.pad_force_split(uenv)
+                stats["max_pad_squeeze"] = torch.maximum(stats["max_pad_squeeze"], squeeze.max(dim=-1).values)
+                stats["max_pad_lateral"] = torch.maximum(stats["max_pad_lateral"], lateral.max(dim=-1).values)
                 stats["max_pad_force"] = torch.maximum(
                     stats["max_pad_force"], mdp.pad_valve_force(uenv).max(dim=-1).values
                 )
@@ -287,6 +303,8 @@ def main() -> None:
                             "grasped": bool(stats["grasped"][i]),
                             "max_progress": float(stats["max_progress"][i]),
                             "max_pad_force_n": float(stats["max_pad_force"][i]),
+                            "max_pad_squeeze_n": float(stats["max_pad_squeeze"][i]),
+                            "max_pad_lateral_n": float(stats["max_pad_lateral"][i]),
                             "max_valve_rate_rad_s": float(stats["max_valve_rate"][i]),
                             "max_tcp_speed_m_s": float(stats["max_tcp_speed"][i]),
                             "commanded_rate_rad_s": float(stats["commanded_rate"][i]),
@@ -299,10 +317,14 @@ def main() -> None:
                             "joint_acc_sq": stats["joint_acc_sq"][i].tolist(),
                             "joint_reversals": stats["joint_reversals"][i].tolist(),
                             "length_s": float(step_count[i] * dt),
+                            "bank_index": int(stats["bank_index"][i]),
+                            "grasp_wrist_flexion": float(stats["grasp_wrist"][i]),
                         }
                     )
                     for key, value in stats.items():
-                        value[i] = float("nan") if key == "t_success" else 0
+                        value[i] = float("nan") if key in ("t_success", "grasp_wrist") else 0
+                    if bank_term is not None:
+                        stats["bank_index"][i] = bank_term.index[i]
                     stats["prev_q"][i] = robot.data.joint_pos.torch[i, arm_ids]
                     step_count[i] = 0
         expert_bank_stats = bank_joint_stats(bank_term.cfg.params["path"], dt) if bank_term is not None else None
@@ -337,6 +359,9 @@ def main() -> None:
         },
         "mean_max_progress": sum(e["max_progress"] for e in episodes) / n,
         "max_pad_force_n": max(e["max_pad_force_n"] for e in episodes),
+        # Per-episode peaks, median and 99th percentile.
+        "pad_squeeze_n_p50_p99": _quantiles([e["max_pad_squeeze_n"] for e in episodes]),
+        "pad_lateral_n_p50_p99": _quantiles([e["max_pad_lateral_n"] for e in episodes]),
         "mean_peak_valve_rate_rad_s": sum(e["max_valve_rate_rad_s"] for e in episodes) / n,
         "mean_peak_tcp_speed_m_s": sum(e["max_tcp_speed_m_s"] for e in episodes) / n,
         "mean_commanded_rate_rad_s": sum(e["commanded_rate_rad_s"] for e in episodes) / n,
@@ -363,6 +388,11 @@ def main() -> None:
     )
     print(
         f"progress     mean max {summary['mean_max_progress']:.3f} | peak pad force {summary['max_pad_force_n']:.1f} N"
+    )
+    sq, lat = summary["pad_squeeze_n_p50_p99"], summary["pad_lateral_n_p50_p99"]
+    print(
+        f"pad force    per-episode peak, median / p99: squeeze {sq[0]:.0f} / {sq[1]:.0f} N"
+        f" | lateral {lat[0]:.0f} / {lat[1]:.0f} N"
     )
     print(
         f"turn rate    commanded {summary['mean_commanded_rate_rad_s']:.2f} rad/s"

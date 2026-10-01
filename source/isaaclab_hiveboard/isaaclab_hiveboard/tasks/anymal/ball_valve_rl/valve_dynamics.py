@@ -16,6 +16,11 @@ Each reset samples five parameters per environment (:data:`VALVE_DYNAMICS`):
   where it starts to open); applied by :class:`ValveLoadAction`;
 * ``armature`` - added rotor inertia [kg·m²].
 
+With probability ``stuck_prob`` an episode's valve is instead stuck closed:
+the lever starts seated at closed and ``breakaway`` comes from
+:data:`STUCK_BREAKAWAY_RANGE`, so it takes several N·m to unseat before it
+turns like the others.
+
 Friction, damping and armature are simulator joint properties written on
 reset. The spring and seat torques depend on the angle and are applied by
 :class:`ValveLoadAction` every env step (writing the valve drive's
@@ -56,6 +61,14 @@ VALVE_DYNAMICS_RANGES = {
     "breakaway": (0.0, 2.0),
     "armature": (0.001, 0.02),
 }
+#: Seat torque [N·m] of a valve stuck closed, and how often that happens.
+STUCK_BREAKAWAY_RANGE = (2.0, 5.0)
+STUCK_PROB = 0.25
+#: :func:`valve_dynamics_obs` scale: each parameter's largest sampled value.
+VALVE_DYNAMICS_SCALE = tuple(
+    max(VALVE_DYNAMICS_RANGES[name][1], STUCK_BREAKAWAY_RANGE[1] if name == "breakaway" else 0.0)
+    for name in VALVE_DYNAMICS
+)
 #: Opening [rad] over which the seat torque fades from ``breakaway`` to 0.
 BREAKAWAY_WIDTH_RAD = 0.15
 #: Opening [rad] up to which the spring may not overcome friction. A lever
@@ -78,7 +91,8 @@ class randomize_valve_dynamics(ManagerTermBase):
     ``params`` holds every environment's current values, ``(num_envs, 5)``;
     :meth:`write` sets given values instead (the expert-bank reset uses it).
     The spring is capped so that it cannot overcome friction up to
-    :data:`SPRING_STATIC_RAD` of opening.
+    :data:`SPRING_STATIC_RAD` of opening. A stuck valve's lever is moved to
+    closed, so this event runs after the valve joint's reset.
     """
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
@@ -94,6 +108,8 @@ class randomize_valve_dynamics(ManagerTermBase):
         env: ManagerBasedEnv,
         env_ids: torch.Tensor | None,
         ranges: dict[str, tuple[float, float]],
+        stuck_prob: float = 0.0,
+        stuck_breakaway: tuple[float, float] = STUCK_BREAKAWAY_RANGE,
         asset_name: str = "ball_valve",
     ) -> None:
         ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
@@ -102,6 +118,14 @@ class randomize_valve_dynamics(ManagerTermBase):
             values[:, i].uniform_(*ranges[name])
         spring_cap = values[:, 0] / SPRING_STATIC_RAD
         values[:, 2] = torch.minimum(values[:, 2], spring_cap)
+        stuck = torch.rand(len(ids), device=env.device) < stuck_prob
+        if stuck.any():
+            values[stuck, 3] = torch.empty(int(stuck.sum()), device=env.device).uniform_(*stuck_breakaway)
+            closed = torch.full((int(stuck.sum()), 1), VALVE_CLOSED_RAD, device=env.device)
+            self.valve.write_joint_position_to_sim_index(position=closed, joint_ids=self.joint_ids, env_ids=ids[stuck])
+            self.valve.write_joint_velocity_to_sim_index(
+                velocity=torch.zeros_like(closed), joint_ids=self.joint_ids, env_ids=ids[stuck]
+            )
         self.write(ids, values)
 
     def write(self, env_ids: torch.Tensor, values: torch.Tensor) -> None:
@@ -120,17 +144,21 @@ class randomize_valve_dynamics(ManagerTermBase):
         pass
 
 
-def randomize_valve_dynamics_cfg(ranges: dict[str, tuple[float, float]] | None = None) -> EventTermCfg:
+def randomize_valve_dynamics_cfg(
+    ranges: dict[str, tuple[float, float]] | None = None, stuck_prob: float = STUCK_PROB
+) -> EventTermCfg:
     """Reset event sampling the valve dynamics from ``ranges`` (default :data:`VALVE_DYNAMICS_RANGES`)."""
     return EventTermCfg(
-        func=randomize_valve_dynamics, mode="reset", params={"ranges": dict(ranges or VALVE_DYNAMICS_RANGES)}
+        func=randomize_valve_dynamics,
+        mode="reset",
+        params={"ranges": dict(ranges or VALVE_DYNAMICS_RANGES), "stuck_prob": stuck_prob},
     )
 
 
 def valve_dynamics_obs(env: ManagerBasedEnv) -> torch.Tensor:
-    """The episode's valve dynamics, each divided by its range's upper bound, ``(N, 5)`` (privileged)."""
+    """The episode's valve dynamics, each divided by its largest sampled value, ``(N, 5)`` (privileged)."""
     term = env.valve_dynamics_term
-    scale = term.params.new_tensor([VALVE_DYNAMICS_RANGES[name][1] for name in VALVE_DYNAMICS])
+    scale = term.params.new_tensor(VALVE_DYNAMICS_SCALE)
     return term.params / scale
 
 

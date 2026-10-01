@@ -8,10 +8,11 @@
 
 Runs the scripted cuRobo expert (``Isaac-HiveBoard-Anymal-BallValve-v0`` with
 its saved command setup) in many parallel environments, with the RL task's
-reset randomization (valve pose, initial valve angle, arm start) and valve
-dynamics (``valve_dynamics.py``), at the RL task's 20 Hz control rate. Each
-episode also varies the expert itself (``expert_diversity.py``: turning speed,
-reach speed, grasp point and grasp angle around the lever). cuRobo plans all
+reset randomization (valve pose, initial valve angle, arm start posture) and
+valve dynamics (``valve_dynamics.py``, including valves stuck closed), at the
+RL task's 20 Hz control rate. Each episode also varies the expert itself
+(``expert_diversity.py``: turning speed, reach speed, grasp point and grasp
+angle around the lever, and the arm's IK branch). cuRobo plans all
 environments entering a segment on the same tick as one batch
 (``plan_batch_size``).
 
@@ -51,13 +52,18 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--num_envs", type=int, default=512)
 parser.add_argument("--num_trajectories", type=int, default=5000, help="Successful trajectories to keep.")
 parser.add_argument("--plan_batch_size", type=int, default=None, help="cuRobo batch (default: num_envs).")
-parser.add_argument("--episode_length_s", type=float, default=13.0)
+parser.add_argument("--episode_length_s", type=float, default=15.0, help="One second past the RL episode.")
 parser.add_argument("--max_waves", type=int, default=50)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", default="logs/expert_bank/anymal_ball_valve_bank.pt")
 parser.add_argument("--nominal_valve", action="store_true", help="Fixed valve dynamics (no randomization).")
 parser.add_argument("--nominal_expert", action="store_true", help="The authored expert (no speed or grasp variation).")
 parser.add_argument("--nominal_pose", action="store_true", help="The previous, narrower valve placement range.")
+parser.add_argument("--nominal_arm", action="store_true", help="Start the arm around the home posture only.")
+parser.add_argument(
+    "--no_wrist_flip", action="store_true", help="No wrist-flipped starts; the IK solver picks the branch."
+)
+parser.add_argument("--no_stuck", action="store_true", help="No valves stuck closed.")
 parser.add_argument("--setup", default=None)
 parser.add_argument("--no_setup", action="store_true")
 parser.add_argument(
@@ -82,13 +88,14 @@ sys.argv = [sys.argv[0], *hydra_args]
 def configure(env_cfg) -> dict:
     """Apply the RL task's randomization, rate and sizing to the scripted task."""
     from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
-    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import expert_diversity, valve_dynamics
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import actuator_delay, expert_diversity
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp as rl_mdp
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import valve_dynamics
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import AnymalBallValveRLEnvCfg
 
     from isaaclab.managers import EventTermCfg, SceneEntityCfg
     from isaaclab.managers.recorder_manager import RecorderManagerBaseCfg
 
-    from isaaclab_tasks.core.cabinet import mdp as base_mdp
 
     rl = AnymalBallValveRLEnvCfg()
     # apply_setup rewrites the scene TCP frame with the setup's body offset,
@@ -98,7 +105,11 @@ def configure(env_cfg) -> dict:
     # RL task's convention.
     env_cfg.scene.ee_frame = rl.scene.ee_frame
     # The RL task's force-limited gripper and stiff gripper-valve contacts.
-    env_cfg.scene.robot = rl.scene.robot
+    # Its arm command latency is for the policy; the expert records without
+    # (max_delay 0: no delay buffer).
+    env_cfg.scene.robot = actuator_delay.delayed_actuators(
+        rl.scene.robot, actuator_delay.ARM_ACTUATOR_GROUPS, 0.0, rl.sim.dt
+    )
     env_cfg.events.gripper_valve_contacts = rl.events.gripper_valve_contacts
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
@@ -113,6 +124,10 @@ def configure(env_cfg) -> dict:
         "valve_pose": dict(rl_env.VALVE_POSE_RANGE),
         "valve_angle": rl_env.VALVE_ANGLE_RANGE,
         "arm": rl_env.ARM_RANGE,
+        "arm_postures": dict(rl_env.ARM_POSTURES),
+        "arm_flip_prob": 0.0 if args.no_wrist_flip else rl_env.ARM_FLIP_PROB,
+        "stuck_prob": 0.0 if args.no_stuck else valve_dynamics.STUCK_PROB,
+        "stuck_breakaway": valve_dynamics.STUCK_BREAKAWAY_RANGE,
         "valve_dynamics": dict(valve_dynamics.VALVE_DYNAMICS_RANGES),
         "expert_diversity": dict(expert_diversity.EXPERT_DIVERSITY_RANGES),
     }
@@ -125,27 +140,39 @@ def configure(env_cfg) -> dict:
         ranges["expert_diversity"] = {
             "turn_rate": (0.3, 0.3), "reach_scale": (1.0, 1.0), "grasp_shift": (0.0, 0.0), "grasp_roll": (0.0, 0.0),
         }
+    if args.nominal_arm:
+        ranges["arm_postures"] = {"home": rl_env.ARM_POSTURES["home"]}
     if args.nominal_pose:
         ranges["valve_pose"] = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
     env_cfg.events.reset_valve_root.params["pose_range"] = dict(ranges["valve_pose"])
     env_cfg.events.reset_valve_joint.params["position_range"] = ranges["valve_angle"]
     env_cfg.events.reset_arm = EventTermCfg(
-        func=base_mdp.reset_joints_by_offset,
+        func=rl_mdp.reset_joints_from_postures,
         mode="reset",
         params={
+            "postures": dict(ranges["arm_postures"]),
             "position_range": ranges["arm"],
-            "velocity_range": (0.0, 0.0),
             "asset_cfg": SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True),
+            "flip_prob": ranges["arm_flip_prob"],
+            "flip_joints": rl_env.ARM_WRIST_FLIP,
         },
     )
     # The RL task's per-episode valve dynamics replace the scripted task's
-    # fixed-per-env ones; the trajectory records them for the RL reset.
+    # fixed-per-env ones; the trajectory records them for the RL reset. After
+    # the valve joint reset: a stuck valve reseats the lever.
     env_cfg.events.valve_actuator_gains = None
     env_cfg.events.valve_joint_parameters = None
-    env_cfg.events.valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg(ranges["valve_dynamics"])
+    env_cfg.events.valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg(
+        ranges["valve_dynamics"], stuck_prob=ranges["stuck_prob"]
+    )
+    env_cfg.events.valve_dynamics.params["stuck_breakaway"] = ranges["stuck_breakaway"]
     env_cfg.actions.valve_load = valve_dynamics.ValveLoadActionCfg()
     # Applied last, after the valve pose and angle it offsets the grasp from.
-    env_cfg.events.expert_diversity = expert_diversity.sample_expert_diversity_cfg(ranges["expert_diversity"])
+    # The reach plans to the IK branch nearest the start joints, so a
+    # wrist-flipped start keeps its flipped wrist.
+    env_cfg.events.expert_diversity = expert_diversity.sample_expert_diversity_cfg(
+        ranges["expert_diversity"], wrist_branch_nearest=not args.no_wrist_flip
+    )
     # Fixed-length synchronized waves: no early termination, no HDF5 recorder.
     for name in ("success", "command_done"):
         if hasattr(env_cfg.terminations, name):
@@ -169,6 +196,8 @@ def configure(env_cfg) -> dict:
     for command in env_cfg.commands.pose_command.commands:
         if hasattr(command, "plan_batch_size"):
             command.plan_batch_size = batch
+        if hasattr(command, "wrist_flip_joints") and not args.no_wrist_flip:
+            command.wrist_flip_joints = expert_diversity.WRIST_FLIP_JOINTS
     return ranges
 
 
@@ -193,10 +222,13 @@ def main() -> None:
         # The whole Robotiq linkage, so episodes can start mid-grasp (reset_from_expert_bank).
         hand_ids, hand_names = robot.find_joints(GRIPPER_LINKAGE_JOINTS, preserve_order=True)
         command = env.command_manager.get_term("pose_command")
+        arm_ids_wrist = list(env_cfg.actions.arm_action.joint_names).index("dynaarm_wrist_flexion")
         horizon = int(env.max_episode_length)
         kept: dict[str, list[torch.Tensor]] = {}
         # Every episode's sampled variation and outcome, for the success breakdown.
-        sampled: dict[str, list[torch.Tensor]] = {"valve_dynamics": [], "expert_diversity": [], "ok": [], "progress": []}
+        sampled: dict[str, list[torch.Tensor]] = {
+            "valve_dynamics": [], "expert_diversity": [], "arm_q0": [], "turn_wrist": [], "ok": [], "progress": []
+        }
         stats = {"waves": 0, "episodes": 0, "successes": 0, "fallback": 0, "kept": 0, "wall_s": 0.0}
 
         for wave in range(args.max_waves):
@@ -275,6 +307,14 @@ def main() -> None:
                 kept.setdefault(key, []).append(value[ok].cpu())
             sampled["valve_dynamics"].append(init["valve_dynamics"].cpu())
             sampled["expert_diversity"].append(init["expert_diversity"].cpu())
+            sampled["arm_q0"].append(init["arm_q0"].cpu())
+            # Wrist flexion when the turn starts (NaN if it never did): its
+            # sign is the IK branch the expert ended up on.
+            arm_q, phase = torch.stack(steps["arm_q"], dim=1), torch.stack(steps["phase"], dim=1)
+            turning = phase >= 3
+            first = turning.float().argmax(dim=1)
+            wrist = arm_q[torch.arange(n_envs, device=dev), first, arm_ids_wrist]
+            sampled["turn_wrist"].append(torch.where(turning.any(dim=1), wrist, torch.nan).cpu())
             sampled["ok"].append(ok.cpu())
             sampled["progress"].append(best_progress.cpu())
             kept.setdefault("t_open", []).append(t_open[ok].cpu())
@@ -339,6 +379,33 @@ def main() -> None:
                 frac = (values[:, i] - lo) / max(hi - lo, 1e-9)
                 low, high = ok_all[frac < 1 / 3].mean(), ok_all[frac > 2 / 3].mean()
                 print(f"[BANK] kept by {name:12s}: lower third {low:.1%}, upper third {high:.1%}", flush=True)
+        # Arm start posture (nearest one, ignoring the wrist flip), wrist
+        # branch and stuck valves.
+        arm_q0 = torch.cat(sampled["arm_q0"])
+        roll1, pitch, roll2 = rl_env.ARM_WRIST_FLIP
+        flipped = arm_q0[:, roll1].abs() > math.pi / 2
+        unflipped = arm_q0.clone()
+        unflipped[flipped, roll1] -= torch.sign(unflipped[flipped, roll1]) * math.pi
+        unflipped[flipped, pitch] *= -1.0
+        unflipped[flipped, roll2] += math.pi
+        postures = torch.tensor(list(ranges["arm_postures"].values()))
+        nearest = torch.cdist(unflipped, postures).argmin(dim=1)
+        for i, name in enumerate(ranges["arm_postures"]):
+            sel = nearest == i
+            print(f"[BANK] kept from posture {name:10s}: {ok_all[sel].mean():.1%} of {int(sel.sum())}", flush=True)
+        wrist = torch.cat(sampled["turn_wrist"])
+        for label, sel in (("usual start", ~flipped), ("flipped start", flipped)):
+            turned = sel & ~wrist.isnan()
+            on_flip = (wrist[turned] > 0).float().mean() if turned.any() else torch.tensor(float("nan"))
+            print(
+                f"[BANK] {label:13s}: kept {ok_all[sel].mean():.1%} of {int(sel.sum())}, "
+                f"turned with wrist flexion > 0 in {on_flip:.1%}",
+                flush=True,
+            )
+        breakaway = torch.cat(sampled["valve_dynamics"])[:, VALVE_DYNAMICS.index("breakaway")]
+        stuck = breakaway > ranges["valve_dynamics"]["breakaway"][1]
+        for label, sel in (("stuck closed", stuck), ("not stuck", ~stuck)):
+            print(f"[BANK] kept {label:12s}: {ok_all[sel].mean():.1%} of {int(sel.sum())}", flush=True)
         env.close()
 
 
