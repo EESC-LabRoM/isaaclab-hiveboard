@@ -10,10 +10,10 @@
       0.1034
     ],
     "rot": [
-      0.4999999850988368,
-      0.5000000447034798,
-      0.4999999254941938,
-      -0.5000000447034798
+      0.7071068,
+      0.0,
+      0.7071068,
+      0.0
     ]
   },
   "commands": [
@@ -113,7 +113,7 @@
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.3
+        "duration_s": 0.7
       }
     },
     {
@@ -165,7 +165,7 @@
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.5
+        "duration_s": 0.7
       }
     }
   ]
