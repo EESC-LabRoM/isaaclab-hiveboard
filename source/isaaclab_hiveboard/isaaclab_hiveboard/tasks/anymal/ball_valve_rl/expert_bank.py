@@ -40,6 +40,18 @@ from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
+#: Every joint of the Robotiq linkage. The bank stores all of them so an
+#: episode can start mid-grasp without the solver snapping the linkage.
+GRIPPER_LINKAGE_JOINTS = [
+    "finger_joint",
+    "left_outer_finger_joint",
+    "left_inner_finger_joint",
+    "left_inner_finger_pad_joint",
+    "right_outer_knuckle_joint",
+    "right_outer_finger_joint",
+    "right_inner_finger_joint",
+    "right_inner_finger_pad_joint",
+]
 #: Pad force [N] above which a finger pad counts as touching the lever. The
 #: expert's pads read 0 N before the grasp and 8-14 N while turning.
 CONTACT_FORCE_N = 1.0
@@ -86,6 +98,11 @@ class ExpertBank:
             raise ValueError(f"{path} has no pad_force; rebuild it with scripts/rl/build_expert_bank.py")
         # Per-pad contact with the lever, (N, T, 2).
         self.contact = (bank["pad_force"].float() > CONTACT_FORCE_N).float()
+        if list(meta.get("gripper_joint_names", [])) != GRIPPER_LINKAGE_JOINTS:
+            raise ValueError(f"{path} has no gripper_joint_pos; rebuild it with scripts/rl/build_expert_bank.py")
+        # The whole Robotiq linkage, for starting episodes mid-grasp, (N, T, 8).
+        self.gripper_joint_pos = bank["gripper_joint_pos"].float()
+        self.dt = float(meta["dt"])
         self.idle_shift = grasp - self.grasp_step
         self.open_step = open_step
         self.valve_open_rad = valve_open_rad
@@ -99,6 +116,7 @@ class ExpertBank:
             "valve",
             "gripper_q",
             "contact",
+            "gripper_joint_pos",
             "idle_shift",
             "open_step",
             "arm_q0",
@@ -134,13 +152,21 @@ class ExpertBank:
 
 
 class reset_from_expert_bank(ManagerTermBase):
-    """Reset event: start each episode at a random bank trajectory's initial state.
+    """Reset event: start each episode on a random bank trajectory.
 
     Writes the valve root pose, the valve angle and the arm joints of the drawn
     trajectory (the scene's other joints keep the preceding default reset) and
     remembers the index, which the reference terms read. Replaces the valve
     pose, valve angle and arm reset randomization, which the bank already
     samples from the same distribution.
+
+    With probability ``mid_start_prob`` the episode starts at a random step of
+    the trajectory up to the expert's open step instead of its beginning
+    (reference state initialization): arm, whole gripper linkage and valve as
+    the expert had them, e.g. already gripping and turning. ``start_step``
+    holds that step; :func:`reference_step` adds it to the episode time, so
+    every time-indexed reference starts there too. Students trained from the
+    beginning only (v9-v11, PPO v1) never discovered closing the gripper.
     """
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
@@ -149,7 +175,9 @@ class reset_from_expert_bank(ManagerTermBase):
 
         self.bank = ExpertBank(cfg.params["path"], env.device, mdp.VALVE_OPEN_RAD)
         self.index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.start_step = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         robot: BaseArticulation = env.scene["robot"]
+        self._hand_ids = robot.find_joints(GRIPPER_LINKAGE_JOINTS, preserve_order=True)[0]
         self._arm_ids = robot.find_joints(list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)[0]
         # The joint the bank recorded as gripper_q (build_expert_bank.py).
         self._finger_id = robot.find_joints(env.cfg.actions.gripper_action.joint_names)[0][0]
@@ -159,14 +187,23 @@ class reset_from_expert_bank(ManagerTermBase):
         env.expert_bank_term = self
         print(f"[INFO] Expert bank: {self.bank.size} trajectories from {cfg.params['path']}")
 
-    def __call__(self, env: ManagerBasedEnv, env_ids: torch.Tensor | None, path: str) -> None:
+    def __call__(
+        self, env: ManagerBasedEnv, env_ids: torch.Tensor | None, path: str, mid_start_prob: float = 0.0
+    ) -> None:
         ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         draw = torch.randint(0, self.bank.size, (len(ids),), device=env.device)
         self.write_start_state(env, ids, draw)
+        if mid_start_prob > 0.0:
+            mid = torch.rand(len(ids), device=env.device) < mid_start_prob
+            if torch.any(mid):
+                last = self.bank.open_step[draw[mid]] - self.bank.idle_shift[draw[mid]]
+                step = (torch.rand(int(mid.sum()), device=env.device) * (last + 1).float()).long()
+                self.write_mid_state(env, ids[mid], draw[mid], step)
 
     def write_start_state(self, env: ManagerBasedEnv, ids: torch.Tensor, draw: torch.Tensor) -> None:
         """Put environments ``ids`` at the initial state of bank trajectories ``draw``."""
         self.index[ids] = draw
+        self.start_step[ids] = 0
         robot: BaseArticulation = env.scene["robot"]
         valve: BaseArticulation = env.scene["ball_valve"]
         pose = self.bank.valve_pose_env[draw].clone()
@@ -184,8 +221,44 @@ class reset_from_expert_bank(ManagerTermBase):
             velocity=torch.zeros(len(ids), len(self._arm_ids), device=env.device), joint_ids=self._arm_ids, env_ids=ids
         )
 
+    def write_mid_state(self, env: ManagerBasedEnv, ids: torch.Tensor, draw: torch.Tensor, step: torch.Tensor) -> None:
+        """Put environments ``ids`` at episode ``step`` of bank trajectories ``draw`` (after the start state)."""
+        bank = self.bank
+        self.start_step[ids] = step
+        b = bank._bank_step(draw, step)
+        prev, nxt = (b - 1).clamp(min=0), (b + 1).clamp(max=bank.q.shape[1] - 1)
+        span = ((nxt - prev).clamp(min=1) * bank.dt)[:, None]
+        robot: BaseArticulation = env.scene["robot"]
+        valve: BaseArticulation = env.scene["ball_valve"]
+        robot.write_joint_position_to_sim_index(position=bank.q[draw, b], joint_ids=self._arm_ids, env_ids=ids)
+        robot.write_joint_velocity_to_sim_index(
+            velocity=(bank.q[draw, nxt] - bank.q[draw, prev]) / span, joint_ids=self._arm_ids, env_ids=ids
+        )
+        robot.write_joint_position_to_sim_index(
+            position=bank.gripper_joint_pos[draw, b], joint_ids=self._hand_ids, env_ids=ids
+        )
+        robot.write_joint_velocity_to_sim_index(
+            velocity=torch.zeros(len(ids), len(self._hand_ids), device=env.device),
+            joint_ids=self._hand_ids,
+            env_ids=ids,
+        )
+        valve.write_joint_position_to_sim_index(
+            position=bank.valve[draw, b, None], joint_ids=self._valve_joint, env_ids=ids
+        )
+        valve.write_joint_velocity_to_sim_index(
+            velocity=(bank.valve[draw, nxt] - bank.valve[draw, prev])[:, None] / span,
+            joint_ids=self._valve_joint,
+            env_ids=ids,
+        )
+
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         pass
+
+
+def reference_step(env: ManagerBasedEnv) -> torch.Tensor:
+    """Step along the expert trajectory: the episode step plus where the episode started on it."""
+    term = _bank_term(env)
+    return env.episode_length_buf + term.start_step
 
 
 def _bank_term(env: ManagerBasedEnv) -> reset_from_expert_bank:
@@ -202,7 +275,7 @@ def expert_joint_reference(env: ManagerBasedRLEnv, command_name: str = "valve_tu
     module docstring). ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
-    idx, step = term.index, env.episode_length_buf
+    idx, step = term.index, reference_step(env)
     reach = term.bank.reach_reference(idx, step)
     turn = term.bank.turn_reference(idx, step)
     return torch.where((step >= term.bank.grasp_step[idx])[:, None], turn, reach)
@@ -226,7 +299,7 @@ def expert_valve_error(env: ManagerBasedRLEnv) -> torch.Tensor:
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
 
     term = _bank_term(env)
-    return (mdp.valve_angle(env) - term.bank.valve_reference(term.index, env.episode_length_buf)).unsqueeze(-1)
+    return (mdp.valve_angle(env) - term.bank.valve_reference(term.index, reference_step(env))).unsqueeze(-1)
 
 
 def track_expert_valve(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
@@ -239,9 +312,11 @@ def track_expert_valve(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     return torch.exp(-expert_valve_error(env)[:, 0].square() / std**2)
 
 
-def reset_from_expert_bank_cfg(path: str) -> EventTermCfg:
-    """Reset event drawing each episode's start from the bank at ``path``."""
-    return EventTermCfg(func=reset_from_expert_bank, mode="reset", params={"path": path})
+def reset_from_expert_bank_cfg(path: str, mid_start_prob: float = 0.0) -> EventTermCfg:
+    """Reset event drawing each episode's start from the bank at ``path`` (see :class:`reset_from_expert_bank`)."""
+    return EventTermCfg(
+        func=reset_from_expert_bank, mode="reset", params={"path": path, "mid_start_prob": mid_start_prob}
+    )
 
 
 def expert_gripper_reference(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
@@ -251,7 +326,7 @@ def expert_gripper_reference(env: ManagerBasedRLEnv, command_name: str = "valve_
     :class:`ExpertBank`). ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
-    closed = env.episode_length_buf >= term.bank.grasp_step[term.index]
+    closed = reference_step(env) >= term.bank.grasp_step[term.index]
     return closed.float().unsqueeze(-1)
 
 
@@ -266,7 +341,7 @@ def track_expert_gripper(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     term = _bank_term(env)
     robot: BaseArticulation = env.scene["robot"]
     finger = robot.data.joint_pos.torch[:, term._finger_id]
-    error = finger - term.bank.gripper_reference(term.index, env.episode_length_buf)
+    error = finger - term.bank.gripper_reference(term.index, reference_step(env))
     return torch.exp(-error.square() / std**2)
 
 
@@ -281,7 +356,7 @@ def track_expert_contact(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     term = _bank_term(env)
     policy = (mdp.pad_valve_force(env) > CONTACT_FORCE_N).float()
-    expert = term.bank.contact_reference(term.index, env.episode_length_buf)
+    expert = term.bank.contact_reference(term.index, reference_step(env))
     return (policy == expert).float().mean(dim=-1)
 
 

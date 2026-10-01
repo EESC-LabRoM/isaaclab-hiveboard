@@ -298,6 +298,10 @@ _ANYMAL_BALL_VALVE_RL_AGENTS = {
         "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_ppo_cfg:AnymalBallValveTeacherPPORunnerCfg"
     ),
     "default_agent": "rsl_rl",
+    # Deployable student trained with PPO directly, privileged critic (--agent <key>).
+    "rsl_rl_student_ppo_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_ppo_cfg:AnymalBallValveStudentPPORunnerCfg"
+    ),
     # Deployable student distilled from the teacher (--agent <key>).
     "rsl_rl_distillation_cfg_entry_point": (
         "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_distillation_cfg:AnymalBallValveStudentRunnerCfg"

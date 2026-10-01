@@ -47,3 +47,17 @@ class AnymalBallValveTeacherPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class AnymalBallValveStudentPPORunnerCfg(AnymalBallValveTeacherPPORunnerCfg):
+    """Deployable student trained with PPO directly (asymmetric actor-critic).
+
+    The actor reads only the deployable ``policy`` group; the critic keeps the
+    privileged ``teacher`` group. Same rewards and terminations as the
+    teacher, so there is no imitation step: distilling teacher v23 left the
+    students unable to copy its gripper-close decision (students v9-v11).
+    """
+
+    experiment_name = "anymal_ball_valve_student_ppo"
+    obs_groups = {"actor": ["policy"], "critic": ["teacher"]}

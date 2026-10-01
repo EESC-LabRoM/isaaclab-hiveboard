@@ -64,7 +64,7 @@ def make_sequential_reset():
                 self.order = torch.randperm(self.bank.size, generator=gen).to(env.device)
             self.cursor = 0
 
-        def __call__(self, env, env_ids, path):
+        def __call__(self, env, env_ids, path, mid_start_prob=0.0):
             ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
             picks = self.order[(self.cursor + torch.arange(len(ids), device=env.device)) % len(self.order)]
             self.cursor += len(ids)

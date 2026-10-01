@@ -148,7 +148,13 @@ rl-teacher num_envs="4096" *args:
 # RL student: distil the teacher checkpoint onto proprioception + registered valve pose
 rl-student teacher num_envs="4096" *args:
     uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} \
-        --agent rsl_rl_distillation_cfg_entry_point --checkpoint {{teacher}} {{args}}
+        --agent rsl_rl_distillation_cfg_entry_point --checkpoint {{teacher}} \
+        env.terminations.expert_drift=null env.terminations.expert_valve_lag=null {{args}}
+
+# RL student trained directly with PPO: deployable actor, privileged critic
+rl-student-ppo num_envs="4096" *args:
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} \
+        --agent rsl_rl_student_ppo_cfg_entry_point {{args}}
 
 # Replay expert-bank trajectories in simulation, shown in Viser (http://localhost:9080)
 rl-bank-replay *args:
