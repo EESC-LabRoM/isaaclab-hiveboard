@@ -141,6 +141,7 @@ def main() -> None:
     from isaaclab_hiveboard.imitation.expert import ScriptedExpert
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp as rl_mdp
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import HOLD, SUCCESS_TOLERANCE_RAD
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import GRIPPER_LINKAGE_JOINTS
 
     env_cfg, _ = resolve_task_config(TASK, "")
     _apply_command_setup(env_cfg, args)
@@ -152,6 +153,8 @@ def main() -> None:
         robot, valve = env.scene["robot"], env.scene["ball_valve"]
         arm_ids = robot.find_joints(env_cfg.actions.arm_action.joint_names, preserve_order=True)[0]
         grip_id = robot.find_joints(env_cfg.actions.gripper_action.joint_names)[0][0]
+        # The whole Robotiq linkage, so episodes can start mid-grasp (reset_from_expert_bank).
+        hand_ids, hand_names = robot.find_joints(GRIPPER_LINKAGE_JOINTS, preserve_order=True)
         command = env.command_manager.get_term("pose_command")
         horizon = int(env.max_episode_length)
         kept: dict[str, list[torch.Tensor]] = {}
@@ -179,6 +182,7 @@ def main() -> None:
                     "tcp_pose",
                     "phase",
                     "pad_force",
+                    "gripper_joint_pos",
                 )
             }
             opened_held = torch.zeros(n_envs, dtype=torch.bool, device=dev)
@@ -200,6 +204,7 @@ def main() -> None:
                     steps["phase"].append(command._current_command_idx.clone())
                     # Valve-filtered contact force on each finger pad [N].
                     steps["pad_force"].append(rl_mdp.pad_valve_force(env).clone())
+                    steps["gripper_joint_pos"].append(robot.data.joint_pos.torch[:, hand_ids].clone())
                     env.step(action)
                     held = rl_mdp.lever_held(env, HOLD["dist_threshold"], HOLD["ang_threshold"])
                     is_open = rl_mdp.valve_open_success(env, SUCCESS_TOLERANCE_RAD)
@@ -252,6 +257,7 @@ def main() -> None:
             "dt": env.step_dt,
             "horizon": horizon,
             "arm_joint_names": list(env_cfg.actions.arm_action.joint_names),
+            "gripper_joint_names": list(hand_names),
             "ranges": ranges,
             "success_rate": stats["successes"] / max(stats["episodes"], 1),
             "stats": stats,

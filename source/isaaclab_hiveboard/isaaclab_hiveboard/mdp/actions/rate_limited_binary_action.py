@@ -36,6 +36,8 @@ class RateLimitedBinaryJointPositionAction(BinaryJointPositionAction):
         per_env_step = getattr(env, "_physics_handles_decimation", False)
         self._dt = float(env.step_dt if per_env_step else env.physics_dt)
         self._target = self._open_command.expand(self.num_envs, -1).clone()
+        # Plain indices for reading measured joints (``_joint_ids`` may be a Warp array).
+        self._measured_ids = self._asset.find_joints(self._joint_names, preserve_order=True)[0]
 
     def apply_actions(self):
         goal = self._processed_actions
@@ -54,7 +56,10 @@ class RateLimitedBinaryJointPositionAction(BinaryJointPositionAction):
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids)
         ids = slice(None) if env_ids is None else env_ids
-        self._target[ids] = self._open_command
+        # Start from where the fingers are: open after a normal reset, closed
+        # when an episode starts mid-grasp. The action manager resets after
+        # the reset events, so the measured joints hold the reset state.
+        self._target[ids] = self._asset.data.joint_pos.torch[ids][:, self._measured_ids]
 
 
 def _speed(value: float | None) -> float:

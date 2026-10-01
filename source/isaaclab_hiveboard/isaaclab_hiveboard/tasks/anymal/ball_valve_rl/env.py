@@ -68,7 +68,7 @@ ARM_RANGE = (-0.1, 0.1)
 
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_contact.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_rsi.pt")
 
 
 @configclass
@@ -145,6 +145,11 @@ class ObservationsCfg:
         last_action = ObsTerm(func=base_mdp.last_action)
         # Operator input on the robot: how fast to turn the valve.
         turn_rate = ObsTerm(func=mdp.turn_rate_command, params={"command_name": "valve_turn"})
+        # The gripper's own "object detected" status (no force sensing):
+        # whether the grasp landed on the lever.
+        gripper_object = ObsTerm(func=mdp.gripper_object_detected, params={"asset_cfg": GRIPPER})
+        # Time since the task started (the teacher's references are timed).
+        episode_time = ObsTerm(func=mdp.episode_time)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -264,7 +269,9 @@ class EventCfg:
     # Replaces the three uniform resets above when an expert bank is used
     # (see AnymalBallValveRLEnvCfg.__post_init__): same distribution, but each
     # episode starts exactly where a successful expert trajectory started.
-    reset_from_bank = expert_bank.reset_from_expert_bank_cfg(EXPERT_BANK_PATH)
+    # Half the episodes start mid-trajectory, e.g. already gripping and turning,
+    # so gripping is experienced without having to be discovered first.
+    reset_from_bank = expert_bank.reset_from_expert_bank_cfg(EXPERT_BANK_PATH, mid_start_prob=0.5)
 
 
 @configclass
@@ -380,6 +387,12 @@ class AnymalBallValveRLEnvCfg_PLAY(AnymalBallValveRLEnvCfg):
         self.events.valve_joint_parameters = None
         self.events.valve_physics_material = None
         self.observations.policy.enable_corruption = False
+        # Evaluate whole tasks, from the start of each trajectory.
+        self.events.reset_from_bank.params["mid_start_prob"] = 0.0
+        # Episodes run to the end, as on the robot: the expert-reference
+        # terminations are a training device for the teacher.
+        self.terminations.expert_drift = None
+        self.terminations.expert_valve_lag = None
         # The cuRobo expert's turning speed; sweep with
         # env.commands.valve_turn.rate_range=[r,r].
         self.commands.valve_turn.rate_range = (0.3, 0.3)

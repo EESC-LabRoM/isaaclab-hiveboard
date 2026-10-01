@@ -53,7 +53,7 @@ def make_paired_reset():
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import reset_from_expert_bank
 
     class reset_paired(reset_from_expert_bank):
-        def __call__(self, env, env_ids, path):
+        def __call__(self, env, env_ids, path, mid_start_prob=0.0):
             ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
             gen = torch.Generator().manual_seed(args.seed)
             order = torch.randperm(self.bank.size, generator=gen).to(env.device)

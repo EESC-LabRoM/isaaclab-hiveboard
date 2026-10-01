@@ -260,6 +260,42 @@ def pad_valve_force(env: ManagerBasedEnv, sensor_names: tuple[str, ...] = ("fing
     return torch.stack(forces, dim=-1)
 
 
+def episode_time(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Time since the episode started, as a fraction of the episode length, ``(N, 1)`` (deployable).
+
+    The robot knows when it started the task. The teacher's references (when to
+    close, where the valve should be) are indexed by this time, so without it
+    the student has to guess the phase from 5 steps of history.
+    """
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import reference_step
+
+    # Counted from the start of the task, also when an episode starts mid-trajectory.
+    return (reference_step(env).float() / env.max_episode_length).unsqueeze(-1)
+
+
+def gripper_object_detected(
+    env: ManagerBasedEnv,
+    asset_cfg: SceneEntityCfg,
+    stopped_below: float = 0.688,
+    moved_above: float = 0.3,
+    max_speed: float = 0.05,
+) -> torch.Tensor:
+    """The gripper's "object detected" status, ``(N, 1)`` (deployable; no force sensing).
+
+    Like the Robotiq's gOBJ: commanded closed, and the fingers have come to
+    rest (``max_speed`` [rad/s]) short of the closed target, between
+    ``moved_above`` and ``stopped_below`` [rad]. Closing on empty air the
+    finger joint settles at the 0.70 rad target; on the lever it stops at
+    0.667-0.680 rad. ``asset_cfg`` selects the finger joint.
+    """
+    robot: BaseArticulation = env.scene[asset_cfg.name]
+    finger = robot.data.joint_pos.torch[:, asset_cfg.joint_ids[0]]
+    speed = robot.data.joint_vel.torch[:, asset_cfg.joint_ids[0]].abs()
+    closing = env.action_manager.get_term("gripper_action").raw_actions[:, 0] < 0.0
+    detected = closing & (speed < max_speed) & (finger > moved_above) & (finger < stopped_below)
+    return detected.float().unsqueeze(-1)
+
+
 class registered_valve_b(ManagerTermBase):
     """The valve as a one-off board registration reports it (deployable).
 
