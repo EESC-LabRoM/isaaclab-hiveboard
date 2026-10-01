@@ -36,16 +36,17 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab_tasks.core.cabinet import mdp as base_mdp
 from isaaclab_tasks.utils import PresetCfg
 
+from isaaclab.assets.articulation import ArticulationCfg
+
 from isaaclab_hiveboard.assets.anymal.bench import (
     ANYMAL_ARM_JOINT_NAMES,
-    ANYMAL_NEWTON_GRIPPER_CLOSE,
     ANYMAL_NEWTON_GRIPPER_OPEN,
     NEWTON_GRIPPER_JOINT_NAMES,
 )
 from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionCfg
-from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp
+from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_contact_stiffness
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.scene import BallValveSceneCfg
-from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import expert_bank, mdp
+from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import expert_bank, mdp, valve_dynamics
 
 ARM = SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)
 GRIPPER = SceneEntityCfg("robot", joint_names=list(NEWTON_GRIPPER_JOINT_NAMES), preserve_order=True)
@@ -59,16 +60,46 @@ HOLD = {"dist_threshold": 0.03, "ang_threshold": 0.35}
 
 # Reset distribution, shared with scripts/rl/build_expert_bank.py so the bank's
 # trajectories start from the same states the uniform resets would draw.
-VALVE_POSE_RANGE = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
-"""Valve root pose offset [m, rad]: board placement beyond the student's registration error."""
+VALVE_POSE_RANGE = {
+    "x": (-0.05, 0.05),
+    "y": (-0.06, 0.06),
+    "z": (-0.05, 0.05),
+    "roll": (-0.1, 0.1),
+    "pitch": (-0.1, 0.1),
+    "yaw": (-0.2, 0.2),
+}
+"""Valve root pose offset [m, rad]: board placement (including a tilted panel) beyond the student's
+registration error."""
 VALVE_ANGLE_RANGE = (-0.4, 0.0)
 """Initial valve angle offset [rad]: some episodes start part-open."""
 ARM_RANGE = (-0.1, 0.1)
 """Initial arm joint offset [rad]."""
 
+# Force-limited gripper, like the real 2F-140 (grip force set between 10 and
+# 125 N). The shared ANYmal config drives the finger to 0.7 rad with an
+# 80 N.m/rad PD, so on the lever (stopped at ~0.68 rad) it squeezed with
+# ~1.6 N.m, ~12 N per pad, and held only ~1 N.m of valve torque. Here the
+# fingers are commanded past any contact (and past the finger joint's 0.785
+# rad limit) and the drive's torque limit sets the squeeze, which then no
+# longer depends on where the fingers stop: ~5 N per pad per N.m.
+GRIPPER_CLOSE_RAD = 1.5
+"""Finger target when closed [rad], beyond the 0.785 rad joint limit."""
+GRIP_TORQUE_NM = 20.0
+"""Finger drive torque limit [N.m]; sets the grip force: ~100 N per pad on the lever."""
+# Stiff gripper-valve contacts (as for the small valve): at the default
+# MJWarp softness a 100 N squeeze sinks the pads millimetres into the lever.
+GRIPPER_VALVE_CONTACT = {"shape_regex": "/robotiq_2f_140/|/Valve/", "ke": 4.0e4, "kd": 400.0, "solimp": (0.95, 0.99, 0.001)}
+
+
+def force_limited_gripper(robot: ArticulationCfg, torque: float = GRIP_TORQUE_NM) -> ArticulationCfg:
+    """``robot`` with its finger drive's torque limited to ``torque`` [N.m] (see :data:`GRIP_TORQUE_NM`)."""
+    gripper = robot.actuators["gripper"].replace(effort_limit=torque)
+    return robot.replace(actuators={**robot.actuators, "gripper": gripper})
+
+
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_rsi.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_strong.pt")
 
 
 @configclass
@@ -116,9 +147,11 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=list(NEWTON_GRIPPER_JOINT_NAMES),
         open_command_expr=dict(zip(NEWTON_GRIPPER_JOINT_NAMES, ANYMAL_NEWTON_GRIPPER_OPEN)),
-        close_command_expr=dict(zip(NEWTON_GRIPPER_JOINT_NAMES, ANYMAL_NEWTON_GRIPPER_CLOSE)),
+        close_command_expr={NEWTON_GRIPPER_JOINT_NAMES[0]: GRIPPER_CLOSE_RAD},
         close_speed=2.0,
     )
+    # No actions: applies the valve's seat torque (valve_dynamics.py).
+    valve_load = valve_dynamics.ValveLoadActionCfg()
 
 
 @configclass
@@ -180,6 +213,8 @@ class ObservationsCfg:
         expert_gripper = ObsTerm(func=expert_bank.expert_gripper_reference, params={"command_name": "valve_turn"})
         # Appended last as well (teacher v17 warm-started from v16).
         expert_valve_error = ObsTerm(func=expert_bank.expert_valve_error, scale=5.0)
+        # How hard this episode's lever is to turn.
+        valve_dynamics = ObsTerm(func=valve_dynamics.valve_dynamics_obs)
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -215,17 +250,6 @@ class EventCfg:
             "num_buckets": 16,
         },
     )
-    valve_joint_parameters = EventTerm(
-        func=base_mdp.randomize_joint_parameters,
-        mode="startup",
-        params={
-            "asset_cfg": VALVE_JOINT,
-            "friction_distribution_params": (0.01, 0.10),
-            "armature_distribution_params": (0.001, 0.01),
-            "operation": "abs",
-            "distribution": "uniform",
-        },
-    )
     valve_physics_material = EventTerm(
         func=base_mdp.randomize_rigid_body_material,
         mode="startup",
@@ -239,10 +263,16 @@ class EventCfg:
         },
     )
 
+    # After the material events, which re-sync shape properties.
+    gripper_valve_contacts = EventTerm(func=set_contact_stiffness, mode="startup", params=dict(GRIPPER_VALVE_CONTACT))
+
     # Reset order matters: defaults first, then the randomized offsets. The
     # integrated arm action then starts from the resulting joints (it resets
     # after the events).
     reset_all = EventTerm(func=base_mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
+    # Friction, damping, return spring, seat breakaway and inertia of the
+    # lever, per episode; a bank reset below replaces them by its trajectory's.
+    valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg()
     reset_valve_root = EventTerm(
         func=base_mdp.reset_root_state_uniform,
         mode="reset",
@@ -328,7 +358,7 @@ class RewardsCfg:
     action_rate = RewTerm(func=base_mdp.action_rate_l2, weight=-0.5)
     action_magnitude = RewTerm(func=base_mdp.action_l2, weight=-0.02)
     arm_joint_vel = RewTerm(func=base_mdp.joint_vel_l2, weight=-1.0e-3, params={"asset_cfg": ARM})
-    pad_force = RewTerm(func=mdp.pad_force_excess, weight=-1.0e-3, params={"max_force": 60.0})
+    pad_force = RewTerm(func=mdp.pad_force_excess, weight=-1.0e-3, params={"max_force": 150.0})
     valve_overspeed = RewTerm(func=mdp.valve_rate_excess, weight=-1.0, params={"factor": 1.5})
 
 
@@ -370,6 +400,7 @@ class AnymalBallValveRLEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.body_name = "alavanca_pivot"
         self.viewer.eye = (-1.5, 1.5, 0.5)
         self.viewer.lookat = (0.0, 0.0, 0.0)
+        self.scene.robot = force_limited_gripper(self.scene.robot)
         # Bank resets replace the uniform ones; they come from the same ranges.
         self.events.reset_valve_root = None
         self.events.reset_valve_joint = None
@@ -384,7 +415,6 @@ class AnymalBallValveRLEnvCfg_PLAY(AnymalBallValveRLEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 16
         self.events.robot_physics_material = None
-        self.events.valve_joint_parameters = None
         self.events.valve_physics_material = None
         self.observations.policy.enable_corruption = False
         # Evaluate whole tasks, from the start of each trajectory.

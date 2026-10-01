@@ -49,8 +49,15 @@ class ScriptedExpert:
             )
         self._command = self._env.command_manager.get_term(command_name)
 
-        terms = tuple(self._env.action_manager.active_terms)
-        dims = tuple(int(dim) for dim in self._env.action_manager.action_term_dim)
+        # Terms without actions (e.g. one applying a valve's load) do not
+        # change the action layout.
+        layout = [
+            (term, int(dim))
+            for term, dim in zip(self._env.action_manager.active_terms, self._env.action_manager.action_term_dim)
+            if int(dim) > 0
+        ]
+        terms = tuple(term for term, _ in layout)
+        dims = tuple(dim for _, dim in layout)
         self._terms = terms
         self._action_dim = sum(dims)
 

@@ -8,16 +8,20 @@
 
 Runs the scripted cuRobo expert (``Isaac-HiveBoard-Anymal-BallValve-v0`` with
 its saved command setup) in many parallel environments, with the RL task's
-reset randomization (valve pose, initial valve angle, arm start), at the RL
-task's 20 Hz control rate. cuRobo plans all environments entering a segment on
-the same tick as one batch (``plan_batch_size``).
+reset randomization (valve pose, initial valve angle, arm start) and valve
+dynamics (``valve_dynamics.py``), at the RL task's 20 Hz control rate. Each
+episode also varies the expert itself (``expert_diversity.py``: turning speed,
+reach speed, grasp point and grasp angle around the lever). cuRobo plans all
+environments entering a segment on the same tick as one batch
+(``plan_batch_size``).
 
 Environments run in synchronized waves: every episode lasts the same fixed
 time and all reset together, so the planning batches stay large. A trajectory
 is kept when the valve reaches open while the lever is held at the expert grasp
 pose (the RL task's own success definition). The bank stores, per step, arm
 joints and the expert's joint targets, gripper command and position, valve
-angle, TCP pose and sequence phase, plus each episode's initial state::
+angle, TCP pose and sequence phase, plus each episode's initial state, valve
+dynamics and expert variation::
 
     uv run python scripts/rl/build_expert_bank.py --num_envs 512 --num_trajectories 5000
 """
@@ -39,6 +43,8 @@ from isaaclab.app import add_launcher_args, launch_simulation  # noqa: E402
 
 from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli  # noqa: E402
 
+from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import env as rl_env  # noqa: E402
+
 TASK = "Isaac-HiveBoard-Anymal-BallValve-v0"
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -49,6 +55,9 @@ parser.add_argument("--episode_length_s", type=float, default=13.0)
 parser.add_argument("--max_waves", type=int, default=50)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", default="logs/expert_bank/anymal_ball_valve_bank.pt")
+parser.add_argument("--nominal_valve", action="store_true", help="Fixed valve dynamics (no randomization).")
+parser.add_argument("--nominal_expert", action="store_true", help="The authored expert (no speed or grasp variation).")
+parser.add_argument("--nominal_pose", action="store_true", help="The previous, narrower valve placement range.")
 parser.add_argument("--setup", default=None)
 parser.add_argument("--no_setup", action="store_true")
 parser.add_argument(
@@ -60,9 +69,11 @@ add_launcher_args(parser)
 args, hydra_args = setup_preset_cli(parser)
 if not any(t.startswith(("physics=", "presets=")) for t in hydra_args):
     hydra_args.append("physics=newton_mjwarp")
-# Match the RL task's gripper ramp. A Hydra override survives the task parse;
-# editing the action cfg in place before gym.make does not.
+# Match the RL task's gripper ramp and its force-limited close (fingers
+# commanded past contact). A Hydra override survives the task parse; editing
+# the action cfg in place before gym.make does not.
 hydra_args.append("env.actions.gripper_action.close_speed=2.0")
+hydra_args.append(f"env.actions.gripper_action.close_command_expr.finger_joint={rl_env.GRIPPER_CLOSE_RAD}")
 args.visualizer = ["newton_gl"] if args.video else []
 args.task = TASK
 sys.argv = [sys.argv[0], *hydra_args]
@@ -71,7 +82,7 @@ sys.argv = [sys.argv[0], *hydra_args]
 def configure(env_cfg) -> dict:
     """Apply the RL task's randomization, rate and sizing to the scripted task."""
     from isaaclab_hiveboard.assets.anymal.bench import ANYMAL_ARM_JOINT_NAMES
-    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import env as rl_env
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import expert_diversity, valve_dynamics
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import AnymalBallValveRLEnvCfg
 
     from isaaclab.managers import EventTermCfg, SceneEntityCfg
@@ -86,6 +97,9 @@ def configure(env_cfg) -> dict:
     # expert does; it makes the recorded TCP poses and the hold check use the
     # RL task's convention.
     env_cfg.scene.ee_frame = rl.scene.ee_frame
+    # The RL task's force-limited gripper and stiff gripper-valve contacts.
+    env_cfg.scene.robot = rl.scene.robot
+    env_cfg.events.gripper_valve_contacts = rl.events.gripper_valve_contacts
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
     env_cfg.decimation = rl.decimation
@@ -99,7 +113,20 @@ def configure(env_cfg) -> dict:
         "valve_pose": dict(rl_env.VALVE_POSE_RANGE),
         "valve_angle": rl_env.VALVE_ANGLE_RANGE,
         "arm": rl_env.ARM_RANGE,
+        "valve_dynamics": dict(valve_dynamics.VALVE_DYNAMICS_RANGES),
+        "expert_diversity": dict(expert_diversity.EXPERT_DIVERSITY_RANGES),
     }
+    if args.nominal_valve:
+        ranges["valve_dynamics"] = {
+            "friction": (0.05, 0.05), "damping": (0.0, 0.0), "spring": (0.0, 0.0), "breakaway": (0.0, 0.0),
+            "armature": (0.005, 0.005),
+        }
+    if args.nominal_expert:
+        ranges["expert_diversity"] = {
+            "turn_rate": (0.3, 0.3), "reach_scale": (1.0, 1.0), "grasp_shift": (0.0, 0.0), "grasp_roll": (0.0, 0.0),
+        }
+    if args.nominal_pose:
+        ranges["valve_pose"] = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
     env_cfg.events.reset_valve_root.params["pose_range"] = dict(ranges["valve_pose"])
     env_cfg.events.reset_valve_joint.params["position_range"] = ranges["valve_angle"]
     env_cfg.events.reset_arm = EventTermCfg(
@@ -111,6 +138,14 @@ def configure(env_cfg) -> dict:
             "asset_cfg": SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True),
         },
     )
+    # The RL task's per-episode valve dynamics replace the scripted task's
+    # fixed-per-env ones; the trajectory records them for the RL reset.
+    env_cfg.events.valve_actuator_gains = None
+    env_cfg.events.valve_joint_parameters = None
+    env_cfg.events.valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg(ranges["valve_dynamics"])
+    env_cfg.actions.valve_load = valve_dynamics.ValveLoadActionCfg()
+    # Applied last, after the valve pose and angle it offsets the grasp from.
+    env_cfg.events.expert_diversity = expert_diversity.sample_expert_diversity_cfg(ranges["expert_diversity"])
     # Fixed-length synchronized waves: no early termination, no HDF5 recorder.
     for name in ("success", "command_done"):
         if hasattr(env_cfg.terminations, name):
@@ -142,6 +177,8 @@ def main() -> None:
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp as rl_mdp
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import HOLD, SUCCESS_TOLERANCE_RAD
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import GRIPPER_LINKAGE_JOINTS
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_diversity import EXPERT_DIVERSITY
+    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.valve_dynamics import VALVE_DYNAMICS
 
     env_cfg, _ = resolve_task_config(TASK, "")
     _apply_command_setup(env_cfg, args)
@@ -158,6 +195,8 @@ def main() -> None:
         command = env.command_manager.get_term("pose_command")
         horizon = int(env.max_episode_length)
         kept: dict[str, list[torch.Tensor]] = {}
+        # Every episode's sampled variation and outcome, for the success breakdown.
+        sampled: dict[str, list[torch.Tensor]] = {"valve_dynamics": [], "expert_diversity": [], "ok": [], "progress": []}
         stats = {"waves": 0, "episodes": 0, "successes": 0, "fallback": 0, "kept": 0, "wall_s": 0.0}
 
         for wave in range(args.max_waves):
@@ -170,6 +209,8 @@ def main() -> None:
                 "valve_pose_env": torch.cat(
                     (valve.data.root_pos_w.torch - env.scene.env_origins, valve.data.root_quat_w.torch), dim=-1
                 ).clone(),
+                "valve_dynamics": env.valve_dynamics_term.params.clone(),
+                "expert_diversity": env.expert_diversity_term.values.clone(),
             }
             steps = {
                 k: []
@@ -232,6 +273,10 @@ def main() -> None:
                 kept.setdefault(key, []).append(torch.stack(values, dim=1)[ok].cpu())
             for key, value in init.items():
                 kept.setdefault(key, []).append(value[ok].cpu())
+            sampled["valve_dynamics"].append(init["valve_dynamics"].cpu())
+            sampled["expert_diversity"].append(init["expert_diversity"].cpu())
+            sampled["ok"].append(ok.cpu())
+            sampled["progress"].append(best_progress.cpu())
             kept.setdefault("t_open", []).append(t_open[ok].cpu())
             kept.setdefault("expert_fallback", []).append(fallback[ok].cpu())
             total = stats["kept"]
@@ -258,12 +303,15 @@ def main() -> None:
             "horizon": horizon,
             "arm_joint_names": list(env_cfg.actions.arm_action.joint_names),
             "gripper_joint_names": list(hand_names),
+            "valve_dynamics": list(VALVE_DYNAMICS),
+            "expert_diversity": list(EXPERT_DIVERSITY),
             "ranges": ranges,
             "success_rate": stats["successes"] / max(stats["episodes"], 1),
             "stats": stats,
             "hold": dict(HOLD),
             "success_tolerance_rad": SUCCESS_TOLERANCE_RAD,
         }
+        bank["meta"]["sampled"] = {key: torch.cat(values) for key, values in sampled.items()}
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
         torch.save(bank, args.output)
         rate = stats["successes"] / max(stats["episodes"], 1)
@@ -279,6 +327,18 @@ def main() -> None:
         if len(bank["t_open"]):
             t = bank["t_open"]
             print(f"[BANK] time to open {t.mean():.2f} +/- {t.std():.2f}s", flush=True)
+        # Kept fraction in the lower and upper third of each sampled range: a
+        # low upper third means the expert fails there and the bank thins out.
+        ok_all = torch.cat(sampled["ok"]).float()
+        for group, names in (("valve_dynamics", VALVE_DYNAMICS), ("expert_diversity", EXPERT_DIVERSITY)):
+            values = torch.cat(sampled[group])
+            for i, name in enumerate(names):
+                if name not in ranges[group]:
+                    continue
+                lo, hi = ranges[group][name]
+                frac = (values[:, i] - lo) / max(hi - lo, 1e-9)
+                low, high = ok_all[frac < 1 / 3].mean(), ok_all[frac > 2 / 3].mean()
+                print(f"[BANK] kept by {name:12s}: lower third {low:.1%}, upper third {high:.1%}", flush=True)
         env.close()
 
 
