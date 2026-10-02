@@ -2420,11 +2420,16 @@ class _RotateFrameHandler(_BaseCmdHandler):
 
         v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
         final_pose_b = self.axis_pos_b[env_ids] + self.axial_vec[env_ids] + v_rot
+        final_pose_b += self._screw_offset(self.rot_axis_b[env_ids], angle)
 
         total_rotation = math_utils.quat_from_angle_axis(angle, self.rot_axis_b[env_ids])
         final_quat = math_utils.quat_mul(total_rotation, self.initial_quat_b[env_ids])
 
         return final_pose_b, final_quat
+
+    def _screw_offset(self, axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
+        pitch = float(getattr(self.cfg, "screw_pitch_m_per_revolution", 0.0))
+        return axis * (angle * pitch / (2.0 * math.pi))[:, None]
 
     def _rodrigues_rotate(self, v: torch.Tensor, axis: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         return (
@@ -2454,6 +2459,7 @@ class _RotateFrameHandler(_BaseCmdHandler):
         # rotate radius vector using Rodrigues' rotation formula
         v_rot = self._rodrigues_rotate(self.radius_vec[env_ids], self.rot_axis_b[env_ids], angle)
         target_pos_b = self.axis_pos_b[env_ids] + self.axial_vec[env_ids] + v_rot
+        target_pos_b += self._screw_offset(self.rot_axis_b[env_ids], angle)
 
         # Same signed angle-axis as the position orbit. Slerping to the
         # endpoint via quat_box_minus is ambiguous at ±180 deg and can spin
@@ -2665,6 +2671,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                 axis_pos_b
                 + self.axial_vec[env_ids].expand(num_waypoints, -1)
                 + self._rodrigues_rotate(radius_b, axis_b, angles)
+                + self._screw_offset(axis_b, angles)
             )
             delta_quat_b = math_utils.quat_from_angle_axis(angles, axis_b)
             tcp_quat_b = math_utils.quat_mul(
@@ -3836,6 +3843,8 @@ class CuroboPlannedRotateFrameCfg(RotateFrameCfg):
     """A cuRobo-retargeted arc variant of :class:`RotateFrameCfg`."""
 
     class_type = _CuroboPlannedRotateFrameHandler
+    screw_pitch_m_per_revolution: float = 0.0
+    """Signed axial travel per positive revolution [m]; zero gives a circular arc."""
     robot_joint_names: list[str] = MISSING  # type: ignore
     robot_curobo_yaml: str | None = None
     robot_urdf: str | None = None

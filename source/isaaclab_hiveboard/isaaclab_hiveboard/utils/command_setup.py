@@ -84,7 +84,7 @@ def validate_command(cmd) -> None:
             value = getattr(cmd, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
-    for name in ("angle_deg", "axial_distance"):
+    for name in ("angle_deg", "axial_distance", "screw_pitch_m_per_revolution"):
         if hasattr(cmd, name) and not math.isfinite(getattr(cmd, name)):
             raise ValueError(f"{name} must be finite")
     for name in ("chain_blend_s", "chain_max_joint_step", "chain_max_pose_error_m"):

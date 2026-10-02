@@ -141,6 +141,8 @@ class Segment:
             pos = h.axis_pos_b + h.axial_vec + h._rodrigues_rotate(h.radius_vec, h.rot_axis_b, angle)
             if isinstance(self.cfg, ScrewFrameCfg):
                 pos += h.rot_axis_b * (fraction * self.cfg.axial_distance)
+            elif isinstance(self.cfg, CuroboPlannedRotateFrameCfg):
+                pos += h._screw_offset(h.rot_axis_b, angle)
             quat = math_utils.quat_mul(math_utils.quat_from_angle_axis(angle, h.rot_axis_b), q0)
             return pos, quat
         reference = getattr(self.cfg, "reference_pos_env", None)
