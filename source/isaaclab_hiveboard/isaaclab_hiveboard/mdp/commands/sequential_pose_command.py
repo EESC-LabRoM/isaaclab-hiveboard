@@ -48,6 +48,13 @@ orientation: red +X is the TCP approach axis, blue +Z is jaw-up.
 WRIST_BRANCH_NEAREST = 2.0
 """``wrist_branch`` value picking the IK branch nearest the current joints (see ``_plan_pose_on_branch``)."""
 
+PHASES = ("approach", "engage", "grip", "actuate", "release", "retreat")
+"""Phases of a manipulation sequence in their usual order (see ``skills.py``).
+
+:attr:`SequentialPoseCommand.phase` reports them as indices into this tuple,
+``-1`` for an untagged segment and ``len(PHASES)`` once the sequence is done.
+"""
+
 
 def _xyzw_to_wxyz(q: torch.Tensor) -> torch.Tensor:
     """Reorder Isaac Lab (x, y, z, w) quaternions to cuRobo (w, x, y, z)."""
@@ -128,6 +135,20 @@ class SequentialPoseCommand(CommandTerm):
         self._valve_joint_idx: int | None = None
         self._initialize_valve_task()
 
+        # -- phase of each segment, plus one entry for the finished sequence
+        for cmd in self.cfg.commands:
+            if cmd.phase is not None and cmd.phase not in PHASES:
+                raise ValueError(f"Unknown phase {cmd.phase!r}; expected one of {PHASES}")
+        self._segment_phase = torch.tensor(
+            [PHASES.index(cmd.phase) if cmd.phase is not None else -1 for cmd in self.cfg.commands] + [len(PHASES)],
+            device=self.device,
+            dtype=torch.long,
+        )
+        # -- optional mechanism goal ending each segment
+        self._segment_until = [
+            _MechanismGoal(cmd.until, self) if cmd.until is not None else None for cmd in self.cfg.commands
+        ]
+
         # -- optional revolute/prismatic screw coupling
         self._screw_asset: BaseArticulation | None = None
         self._screw_revolute_idx: int | None = None
@@ -164,6 +185,15 @@ class SequentialPoseCommand(CommandTerm):
         if self._joint_command is not None:
             return self._joint_command
         return self._command
+
+    @property
+    def phase(self) -> torch.Tensor:
+        """Phase of each env's active segment, ``(num_envs,)``.
+
+        An index into :data:`PHASES`; ``-1`` for an untagged segment and
+        ``len(PHASES)`` once the sequence is done.
+        """
+        return self._segment_phase[self._current_command_idx]
 
     def _resample_command(self, env_ids: Sequence[int] | slice | None | torch.Tensor = None):
         """Resets the command sequence for the specified environments."""
@@ -499,6 +529,10 @@ class SequentialPoseCommand(CommandTerm):
             # check if the current command is done
             env_ids = torch.where(env_mask)[0]
             are_done = handler.is_done(env_ids)
+            if self._segment_until[i] is not None:
+                # Checked at any point of the segment: a cuRobo segment's own
+                # check only runs once its plan has run out.
+                are_done = are_done | self._segment_until[i].holds(env_ids)
             done_env_ids = env_ids[are_done]
 
             if len(done_env_ids) > 0:
@@ -3566,10 +3600,73 @@ class SequentialPoseCommandCfg(CommandTermCfg):
 
 
 @configclass
+class MechanismGoalCfg:
+    """A mechanism state that ends a segment: a valve turned open, a button pressed in.
+
+    Every condition that is set must hold. Unset conditions are ignored, and at
+    least one must be set.
+    """
+
+    asset_name: str | None = None
+    """Articulation holding the joint. None: the command's ``valve_asset_name``."""
+    joint_name: str | None = None
+    """Joint to check. None: the command's ``valve_joint_name``."""
+    low: float | None = None
+    """The joint is at or above this [rad or m]."""
+    high: float | None = None
+    """The joint is at or below this [rad or m]."""
+    goal_tolerance: float | None = None
+    """The joint is within this of the goal the command sampled for the episode
+    (``valve_joint_des``, open or closed) [rad or m]. Only for the command's own mechanism."""
+    settle_speed: float | None = None
+    """The joint moves slower than this [rad/s or m/s]: at rest, e.g. on its end stop."""
+
+
+class _MechanismGoal:
+    """Evaluates a :class:`MechanismGoalCfg` against the scene."""
+
+    def __init__(self, cfg: MechanismGoalCfg, command_term: SequentialPoseCommand):
+        self.cfg = cfg
+        self._term = command_term
+        if all(getattr(cfg, name) is None for name in ("low", "high", "goal_tolerance", "settle_speed")):
+            raise ValueError("MechanismGoalCfg needs at least one of low, high, goal_tolerance, settle_speed")
+        asset_name = cfg.asset_name or command_term.cfg.valve_asset_name
+        joint_name = cfg.joint_name or command_term.cfg.valve_joint_name
+        if asset_name is None:
+            raise ValueError("MechanismGoalCfg needs asset_name: the command has no valve_asset_name")
+        own = (asset_name, joint_name) == (command_term.cfg.valve_asset_name, command_term.cfg.valve_joint_name)
+        if cfg.goal_tolerance is not None and not own:
+            raise ValueError("MechanismGoalCfg.goal_tolerance only applies to the command's own valve joint")
+        self._asset: BaseArticulation = command_term._env.scene[asset_name]
+        joint_ids, _ = self._asset.find_joints(joint_name)
+        if len(joint_ids) != 1:
+            raise ValueError(f"Expected one joint '{joint_name}' in '{asset_name}', found {len(joint_ids)}")
+        self._joint = joint_ids[0]
+
+    def holds(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Whether the goal holds for ``env_ids``."""
+        q = self._asset.data.joint_pos.torch[env_ids, self._joint]
+        ok = torch.ones_like(q, dtype=torch.bool)
+        if self.cfg.low is not None:
+            ok &= q >= self.cfg.low
+        if self.cfg.high is not None:
+            ok &= q <= self.cfg.high
+        if self.cfg.goal_tolerance is not None:
+            ok &= (q - self._term.valve_joint_des[env_ids]).abs() <= self.cfg.goal_tolerance
+        if self.cfg.settle_speed is not None:
+            ok &= self._asset.data.joint_vel.torch[env_ids, self._joint].abs() <= self.cfg.settle_speed
+        return ok
+
+
+@configclass
 class BaseCmd:
     """Base configuration for frame pose command generators."""
 
     class_type: Type[_BaseCmdHandler] = MISSING  # type: ignore
+    phase: str | None = None
+    """Phase of the sequence this segment belongs to, one of :data:`PHASES` (see ``skills.py``). None: untagged."""
+    until: MechanismGoalCfg | None = None
+    """Also end the segment as soon as this mechanism goal holds, at any point of the segment. None: no goal."""
 
 
 @configclass

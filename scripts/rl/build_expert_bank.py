@@ -21,7 +21,7 @@ time and all reset together, so the planning batches stay large. A trajectory
 is kept when the valve reaches open while the lever is held at the expert grasp
 pose (the RL task's own success definition). The bank stores, per step, arm
 joints and the expert's joint targets, gripper command and position, valve
-angle, TCP pose and sequence phase, plus each episode's initial state, valve
+angle, TCP pose, sequence segment and its named phase (``PHASES``), plus each episode's initial state, valve
 dynamics and expert variation::
 
     uv run python scripts/rl/build_expert_bank.py --num_envs 512 --num_trajectories 5000
@@ -236,6 +236,7 @@ def configure(env_cfg) -> dict:
 
 def main() -> None:
     from isaaclab_hiveboard.imitation.expert import ScriptedExpert
+    from isaaclab_hiveboard.mdp.commands.sequential_pose_command import PHASES
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp as rl_mdp
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import HOLD, SUCCESS_TOLERANCE_RAD
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import GRIPPER_LINKAGE_JOINTS
@@ -288,6 +289,7 @@ def main() -> None:
                     "valve_angle",
                     "tcp_pose",
                     "phase",
+                    "phase_id",
                     "pad_force",
                     "gripper_joint_pos",
                 )
@@ -333,6 +335,7 @@ def main() -> None:
                     steps["valve_angle"].append(rl_mdp.valve_angle(env).clone())
                     steps["tcp_pose"].append(rl_mdp.tcp_pose_b(env).clone())
                     steps["phase"].append(command._current_command_idx.clone())
+                    steps["phase_id"].append(command.phase.clone())
                     # Valve-filtered contact force on each finger pad [N].
                     steps["pad_force"].append(rl_mdp.pad_valve_force(env).clone())
                     steps["gripper_joint_pos"].append(robot.data.joint_pos.torch[:, hand_ids].clone())
@@ -370,8 +373,8 @@ def main() -> None:
             sampled["valve_quat"].append(init["valve_pose_env"][:, 3:].cpu())
             # Wrist flexion when the turn starts (NaN if it never did): its
             # sign is the IK branch the expert ended up on.
-            arm_q, phase = torch.stack(steps["arm_q"], dim=1), torch.stack(steps["phase"], dim=1)
-            turning = phase >= 3
+            arm_q, phase = torch.stack(steps["arm_q"], dim=1), torch.stack(steps["phase_id"], dim=1)
+            turning = phase == PHASES.index("actuate")
             first = turning.float().argmax(dim=1)
             wrist = arm_q[torch.arange(n_envs, device=dev), first, arm_ids_wrist]
             sampled["turn_wrist"].append(torch.where(turning.any(dim=1), wrist, torch.nan).cpu())
@@ -420,6 +423,8 @@ def main() -> None:
             "horizon": horizon,
             "arm_joint_names": list(env_cfg.actions.arm_action.joint_names),
             "gripper_joint_names": list(hand_names),
+            # phase_id indexes these; -1 is an untagged segment, len(phases) the finished sequence.
+            "phases": list(PHASES),
             "valve_dynamics": list(VALVE_DYNAMICS),
             "expert_diversity": list(EXPERT_DIVERSITY),
             "ranges": ranges,

@@ -73,9 +73,18 @@ class ExpertBank:
         self.size = len(bank["arm_q"])
         q = bank["arm_q"].float()  # (N, T, 6)
         valve = bank["valve_angle"].float()  # (N, T)
-        closed = bank["gripper_cmd"] < 0
-        # Grasp step: first closed-gripper step. Open step: first step at open.
-        grasp = closed.float().argmax(dim=1)
+        # Grasp step: first step of the grip, or of the actuation when it grips
+        # by itself (the ball valve's turn closes the gripper). Banks without
+        # named phases: first closed-gripper step, the same step for the ball
+        # valve. Open step: first step at open.
+        if "phase_id" in bank:
+            phases = list(meta["phases"])
+            gripping = (bank["phase_id"] == phases.index("grip")) | (bank["phase_id"] == phases.index("actuate"))
+            if not bool(gripping.any(dim=1).all()):
+                raise ValueError(f"{path} has trajectories without a grip or actuate phase")
+            grasp = gripping.float().argmax(dim=1)
+        else:
+            grasp = (bank["gripper_cmd"] < 0).float().argmax(dim=1)
         open_step = (bank["t_open"] / meta["dt"]).round().long().clamp(max=q.shape[1] - 1)
         # Retreat step: when the arm has backed off and stopped (last step it moved).
         moving = (q[:, 1:] - q[:, :-1]).abs().amax(dim=-1) > IDLE_STEP_RAD

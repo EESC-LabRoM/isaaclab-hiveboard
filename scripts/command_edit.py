@@ -38,6 +38,7 @@ import numpy as np
 import torch
 from isaaclab_hiveboard.assets import ASSET_DIR, DYNAARM_EE_LINK, FRANKA_EE, SPOT_EE
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
+    PHASES,
     CuroboPlannedGoToFrameCfg,
     GoToFrameCfg,
     GripperCommand,
@@ -98,6 +99,7 @@ BUNDLED_ROBOT_MODELS = {
     DYNAARM_EE_LINK: "anymal/cumotion/dynaarm.yaml",
 }
 ENVIRONMENT_REFERENCE = "Environment (fixed)"
+UNTAGGED_PHASE = "(untagged)"
 INSERT_KINDS = ("Curobo GoTo", "Curobo Rotate", "Open gripper", "Close gripper")
 MOTION_FIELDS = (
     ("velocity", "Linear speed (m/s)", 0.001),
@@ -204,13 +206,14 @@ def _command_label(index: int, cfg) -> str:
     """Sequence dropdown entry, such as ``2: cuRobo GoTo → valve_handle``."""
     # A gripper command has no goal frame and reads better as its action.
     if isinstance(cfg, GripperCommand):
-        return f"{index}: {'Open gripper' if cfg.open_gripper else 'Close gripper'}"
-    kind = type(cfg).__name__.removesuffix("Cfg")
-    label = f"{index}: {COMMAND_LABELS.get(kind, kind)}"
-    # A goal fixed to the environment origin names no reference frame.
-    if cfg.target_frame_name:
-        label += f" → {cfg.target_frame_name}"
-    return label
+        label = f"{index}: {'Open gripper' if cfg.open_gripper else 'Close gripper'}"
+    else:
+        kind = type(cfg).__name__.removesuffix("Cfg")
+        label = f"{index}: {COMMAND_LABELS.get(kind, kind)}"
+        # A goal fixed to the environment origin names no reference frame.
+        if cfg.target_frame_name:
+            label += f" → {cfg.target_frame_name}"
+    return f"{label} [{cfg.phase}]" if cfg.phase else label
 
 
 def _frame_reference_options(sensors) -> dict[str, tuple[str, str]]:
@@ -613,6 +616,7 @@ class CommandEditor:
         self.panel = self.server.gui.add_folder("Selected command", order=3)
         cfg = self.commands[self.selected]
         with self.panel:
+            self._create_phase_field(cfg)
             # A gripper command holds its pose, so it has no goal to author.
             if isinstance(cfg, GripperCommand):
                 self._create_gripper_fields()
@@ -620,6 +624,16 @@ class CommandEditor:
                 self._create_pose_fields(cfg)
         self.scrub.value = self.fraction
         self.sync_gizmos()
+
+    def _create_phase_field(self, cfg) -> None:
+        """Phase of the sequence the command belongs to (``skills.py``)."""
+        options = [UNTAGGED_PHASE, *PHASES]
+        phase = self.server.gui.add_dropdown("Phase", options=options, initial_value=cfg.phase or UNTAGGED_PHASE)
+        phase.on_update(
+            self.events.on_change(
+                lambda value: self.edit("phase", None if value == UNTAGGED_PHASE else value), versioned=True
+            )
+        )
 
     def _create_gripper_fields(self) -> None:
         self._field("open_gripper", "Open gripper", boolean=True)

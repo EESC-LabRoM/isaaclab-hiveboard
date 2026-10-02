@@ -745,6 +745,39 @@ uv run python scripts/play.py \
   --setup logs/command_setup.json
 ```
 
+#### Phases and mechanism goals
+
+Each command can carry a `phase`: `approach`, `engage`, `grip`, `actuate`,
+`release` or `retreat` (pick it in the editor's **Phase** dropdown). Phases can be
+skipped or repeated: the ball valve's turn closes the gripper itself, a push needs
+no grip. `SequentialPoseCommand.phase` reports each env's current phase, and the
+RL expert bank records it per step (`phase_id`, names in `meta["phases"]`), so
+code that needs "the turn" or "the grasp" finds it by name, not by segment index.
+`isaaclab_hiveboard.mdp.commands.skills.SkillSet` builds phase-tagged cuRobo
+segments for a robot in Python configs:
+
+```python
+from isaaclab_hiveboard.mdp.commands.skills import MechanismGoalCfg, SkillSet
+from isaaclab_hiveboard.tasks.anymal.mechanism import ANYMAL_CUROBO
+
+anymal = SkillSet(**ANYMAL_CUROBO)
+commands = [
+    anymal.approach("approaching"),
+    anymal.engage("lever_pivot"),
+    anymal.turn(angle_deg=-90, until=MechanismGoalCfg(goal_tolerance=0.05, settle_speed=0.05)),
+    anymal.release(),
+    anymal.retreat("approaching", hold_current_orientation=True),
+]
+```
+
+`until` ends a segment as soon as a mechanism joint gets where it should, whichever
+comes first with the segment's own done check: inside `[low, high]`, within
+`goal_tolerance` of the episode's sampled valve goal, and/or slower than
+`settle_speed` (at rest, e.g. on its end stop). Asset and joint default to the
+command's `valve_asset_name`/`valve_joint_name`. Unlike the older
+`done_when_joint`/`valve_done_threshold_rad`, it is checked during the whole
+segment, not only once a cuRobo plan has run out.
+
 #### Which setup a task runs
 
 With no `--setup`, a task runs `configs/<task>.json` when that file exists.
