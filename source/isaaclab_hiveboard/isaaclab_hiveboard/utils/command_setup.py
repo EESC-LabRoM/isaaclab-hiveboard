@@ -24,7 +24,9 @@ from isaaclab_hiveboard.mdp.commands.sequential_pose_command import (
     CuroboPlannedGoToFrameCfg,
     CuroboPlannedRotateFrameCfg,
     GoToFrameCfg,
+    PHASES,
     GripperCommand,
+    MechanismGoalCfg,
     RotateFrameCfg,
     ScrewFrameCfg,
     SequentialPoseCommandCfg,
@@ -68,6 +70,10 @@ def validate_command(cmd) -> None:
     """Validate editable values before they reach a handler or an IK solver."""
     if type(cmd).__name__ not in COMMAND_TYPES:
         raise ValueError(f"Unsupported command: {type(cmd).__name__}")
+    if cmd.phase is not None and cmd.phase not in PHASES:
+        raise ValueError(f"phase must be one of {PHASES}")
+    if cmd.until is not None:
+        _validate_goal(cmd.until)
     for name in ("duration_s", "velocity", "angular_velocity"):
         if hasattr(cmd, name):
             value = getattr(cmd, name)
@@ -112,6 +118,28 @@ def validate_command(cmd) -> None:
             raise ValueError("A frame-relative command needs a frame sensor")
         if not isinstance(cmd.target_frame_name, str) or not cmd.target_frame_name:
             raise ValueError("A frame-relative command needs a target frame")
+
+
+_GOAL_FIELDS = {field.name for field in dataclasses.fields(MechanismGoalCfg)}
+
+
+def _validate_goal(goal) -> None:
+    if not isinstance(goal, MechanismGoalCfg):
+        raise ValueError("until must be a mechanism goal")
+    for name in ("asset_name", "joint_name"):
+        value = getattr(goal, name)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError(f"until.{name} must be a non-empty string")
+    numbers = {name: getattr(goal, name) for name in ("low", "high", "goal_tolerance", "settle_speed")}
+    if all(value is None for value in numbers.values()):
+        raise ValueError("until needs at least one of low, high, goal_tolerance, settle_speed")
+    for name, value in numbers.items():
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"until.{name} must be finite")
+        if name in ("goal_tolerance", "settle_speed") and value < 0:
+            raise ValueError(f"until.{name} must be non-negative")
 
 
 PLANNER_FIELDS = (
@@ -183,14 +211,14 @@ def as_direct_command(cmd):
 
 def encode_command(cmd) -> dict:
     validate_command(cmd)
-    return {
-        "type": type(cmd).__name__,
-        "parameters": {
-            field.name: copy.deepcopy(getattr(cmd, field.name))
-            for field in dataclasses.fields(cmd)
-            if field.name != "class_type"
-        },
+    params = {
+        field.name: copy.deepcopy(getattr(cmd, field.name))
+        for field in dataclasses.fields(cmd)
+        if field.name != "class_type"
     }
+    if cmd.until is not None:
+        params["until"] = {name: getattr(cmd.until, name) for name in sorted(_GOAL_FIELDS)}
+    return {"type": type(cmd).__name__, "parameters": params}
 
 
 def decode_command(data: dict):
@@ -203,7 +231,12 @@ def decode_command(data: dict):
     params = data["parameters"]
     if not isinstance(params, dict) or set(params) - allowed:
         raise ValueError(f"Unknown parameters for {cls.__name__}")
-    cmd = cls(**copy.deepcopy(params))
+    params = copy.deepcopy(params)
+    if params.get("until") is not None:
+        if not isinstance(params["until"], dict) or set(params["until"]) - _GOAL_FIELDS:
+            raise ValueError(f"Unknown mechanism goal parameters for {cls.__name__}")
+        params["until"] = MechanismGoalCfg(**params["until"])
+    cmd = cls(**params)
     validate_command(cmd)
     return cmd
 

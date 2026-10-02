@@ -57,6 +57,12 @@ def main() -> int:
     grip_q = bank["gripper_q"].float()
     phase = bank["phase"]
     n, horizon = grip_cmd.shape
+    # Segment index -> "index:phase" when the bank recorded named phases (build_expert_bank.py).
+    names = list(meta.get("phases", [])) + ["done"]
+    segment_name: dict[int, str] = {}
+    if "phase_id" in bank:
+        for seg, pid in torch.unique(torch.stack((phase, bank["phase_id"]), dim=-1).reshape(-1, 2), dim=0).tolist():
+            segment_name[seg] = f"{seg}:{names[pid] if pid >= 0 else 'untagged'}"
 
     # Step t is the action taken at t: target[t] - target[t-1] (the first step
     # is measured from the reset configuration).
@@ -116,11 +122,11 @@ def main() -> int:
     )
     print(f"  idle time per flagged trajectory: mean {per_traj_idle[per_traj_idle > 0].float().mean() * dt:.2f}s")
     print()
-    print("per phase (command index)   idle steps   runs   arm still moving   gripper moving")
+    print("per segment (index:phase)   idle steps   runs   arm still moving   gripper moving")
     for p in sorted(per_phase):
         s = per_phase[p]
         print(
-            f"  phase {p:<20d} {s['steps']:>10d} {s['runs']:>6d} "
+            f"  {segment_name.get(p, str(p)):<26s} {s['steps']:>10d} {s['runs']:>6d} "
             f"{100 * s['arm_moving'] / s['steps']:>17.0f}% {100 * s['grip_moving'] / s['steps']:>15.0f}%"
         )
     print()
@@ -128,7 +134,7 @@ def main() -> int:
     for total, i, start, length in sorted(worst, reverse=True)[: args.show]:
         print(
             f"  {i:>5d}: {total * dt:.2f}s idle; longest {length * dt:.2f}s at t={start * dt:.2f}s "
-            f"(phase {int(phase[i, start])}, open at {bank['t_open'][i]:.2f}s)"
+            f"(segment {segment_name.get(int(phase[i, start]), int(phase[i, start]))}, open at {bank['t_open'][i]:.2f}s)"
         )
     return 1
 
