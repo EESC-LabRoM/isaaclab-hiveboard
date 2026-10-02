@@ -7,7 +7,7 @@
 
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg, RslRlRndCfg
 
 TEACHER_HIDDEN_DIMS = [512, 256, 128]
 
@@ -61,3 +61,34 @@ class AnymalBallValveStudentPPORunnerCfg(AnymalBallValveTeacherPPORunnerCfg):
 
     experiment_name = "anymal_ball_valve_student_ppo"
     obs_groups = {"actor": ["policy"], "critic": ["teacher"]}
+
+
+@configclass
+class AnymalBallValveStudentPPORNDRunnerCfg(AnymalBallValveStudentPPORunnerCfg):
+    """The PPO student plus random network distillation (RND) curiosity.
+
+    RND pays an intrinsic reward for states its predictor network has not
+    learned yet, read from the privileged ``teacher`` group (training only;
+    the deployed actor still reads ``policy``). Normalized, it is weighted
+    ~10% of the task reward per step, held for 500 iterations, then faded to
+    0 by iteration 2000 so the final policy is trained on the task reward alone.
+    The schedule counts environment steps (``num_steps_per_env`` per iteration).
+    """
+
+    obs_groups = {"actor": ["policy"], "critic": ["teacher"], "rnd_state": ["teacher"]}
+
+    def __post_init__(self):
+        super().__post_init__()
+        steps = self.num_steps_per_env
+        self.algorithm.rnd_cfg = RslRlRndCfg(
+            weight=0.1,
+            weight_schedule=RslRlRndCfg.LinearWeightScheduleCfg(
+                final_value=0.0, initial_step=500 * steps, final_step=2000 * steps
+            ),
+            reward_normalization=True,
+            state_normalization=True,
+            learning_rate=1.0e-3,
+            num_outputs=16,
+            predictor_hidden_dims=[256, 256],
+            target_hidden_dims=[256, 256],
+        )

@@ -192,6 +192,8 @@ def main() -> None:
                 "grasped": torch.zeros(n_envs, dtype=torch.bool, device=dev),
                 "success": torch.zeros(n_envs, dtype=torch.bool, device=dev),
                 "opened_any": torch.zeros(n_envs, dtype=torch.bool, device=dev),
+                # Valve open with the arm let go and backed off, at the latest step.
+                "clear": torch.zeros(n_envs, dtype=torch.bool, device=dev),
                 "t_success": torch.full((n_envs,), float("nan"), device=dev),
                 "max_progress": torch.zeros(n_envs, device=dev),
                 "max_pad_force": torch.zeros(n_envs, device=dev),
@@ -232,6 +234,7 @@ def main() -> None:
                 stats["grasp_wrist"][first_hold] = robot.data.joint_pos.torch[first_hold, arm_ids[wrist_col]]
                 stats["grasped"] |= held
                 stats["opened_any"] |= opened
+                stats["clear"] = mdp.released_and_clear(uenv, task_env.SUCCESS_TOLERANCE_RAD)
                 new = opened & held & ~stats["success"]
                 stats["t_success"][new] = step_count[new] * dt
                 stats["success"] |= opened & held
@@ -298,6 +301,7 @@ def main() -> None:
                         {
                             "success": bool(stats["success"][i]),
                             "opened_any": bool(stats["opened_any"][i]),
+                            "released_clear_at_end": bool(stats["clear"][i]),
                             "time_to_success_s": float(stats["t_success"][i]),
                             "reached": bool(stats["reached"][i]),
                             "grasped": bool(stats["grasped"][i]),
@@ -356,6 +360,8 @@ def main() -> None:
             "grasped": sum(e["grasped"] for e in episodes) / n,
             "opened_held": successes / n,
             "opened_any": sum(e["opened_any"] for e in episodes) / n,
+            "released_clear_at_end": sum(e["released_clear_at_end"] for e in episodes) / n,
+            "complete": sum(e["success"] and e["released_clear_at_end"] for e in episodes) / n,
         },
         "mean_max_progress": sum(e["max_progress"] for e in episodes) / n,
         "max_pad_force_n": max(e["max_pad_force_n"] for e in episodes),
@@ -385,7 +391,9 @@ def main() -> None:
     print(
         f"stages       reached {stages['reached']:.1%} | grasped {stages['grasped']:.1%}"
         f" | opened held {stages['opened_held']:.1%} (any means {stages['opened_any']:.1%})"
+        f" | released & clear at end {stages['released_clear_at_end']:.1%}"
     )
+    print(f"complete     {stages['complete']:.1%} (opened while held, then let go and backed off with the valve open)")
     print(
         f"progress     mean max {summary['mean_max_progress']:.3f} | peak pad force {summary['max_pad_force_n']:.1f} N"
     )

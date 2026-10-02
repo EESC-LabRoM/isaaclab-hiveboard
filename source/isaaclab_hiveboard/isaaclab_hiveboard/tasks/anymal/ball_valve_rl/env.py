@@ -18,6 +18,7 @@ task in ``tasks/anymal/ball_valve``; what changes is the MDP:
   a short history. The student is distilled from the teacher on these.
 """
 
+import math
 import os
 
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
@@ -65,12 +66,13 @@ VALVE_POSE_RANGE = {
     "x": (-0.05, 0.05),
     "y": (-0.06, 0.06),
     "z": (-0.05, 0.05),
-    "roll": (-0.1, 0.1),
-    "pitch": (-0.1, 0.1),
-    "yaw": (-0.2, 0.2),
+    "roll": (-math.pi, math.pi),
+    "pitch": (-math.radians(15.0), math.radians(15.0)),
+    "yaw": (-math.radians(15.0), math.radians(15.0)),
 }
-"""Valve root pose offset [m, rad]: board placement (including a tilted panel) beyond the student's
-registration error."""
+"""Valve root pose offset [m, rad], in the valve's frame: board placement beyond the student's registration
+error. Roll turns the valve about its stem through a full turn, so the lever can close and open in any
+direction (sideways, up); pitch and yaw tilt the panel."""
 VALVE_ANGLE_RANGE = (-0.4, 0.0)
 """Initial valve angle offset [rad]: some episodes start part-open."""
 ARM_POSTURES = {
@@ -86,8 +88,12 @@ ARM_POSTURES = {
 lowered, swung to either side, and the wrist bent either way."""
 ARM_RANGE = (-0.1, 0.1)
 """Initial arm joint offset around the posture [rad]."""
-ARM_FLIP_PROB = 0.35
-"""Fraction of starts on a posture's wrist-flipped twin (forearm rolled half a turn, same hand pose)."""
+ARM_FLIP_PROB = 0.0
+"""Fraction of starts on a posture's wrist-flipped twin (forearm rolled half a turn, same hand pose).
+
+Off: the real arm starts near its home pose (forearm near 0). With the valve clocked through a full turn,
+half the flipped starts had to roll the forearm back by pi during the reach, which student v9 failed in a
+third of them (68% reached vs 93% from the usual starts)."""
 ARM_WRIST_FLIP = tuple(
     ANYMAL_ARM_JOINT_NAMES.index(name)
     for name in ("dynaarm_forearm_rotation", "dynaarm_wrist_flexion", "dynaarm_wrist_rotation")
@@ -118,7 +124,7 @@ def force_limited_gripper(robot: ArticulationCfg, torque: float = GRIP_TORQUE_NM
 
 # Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
-EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_branch.pt")
+EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_noflip.pt")
 
 
 @configclass
@@ -423,8 +429,9 @@ class AnymalBallValveRLEnvCfg(ManagerBasedRLEnvCfg):
         # 20 Hz policy. The slowest commanded turn (0.25 rad/s) takes 6.3 s; the
         # expert's slowest reaches (a far start posture, a wrist flip, a slow
         # reach speed) take ~5 s, and 99% of its trajectories open by 12.5 s.
+        # Letting go and backing off to the approach point takes ~1.5 s more.
         self.decimation = 10
-        self.episode_length_s = 14.0
+        self.episode_length_s = 17.0
         self.viewer.origin_type = "asset_body"
         self.viewer.asset_name = "ball_valve"
         self.viewer.body_name = "alavanca_pivot"

@@ -302,6 +302,10 @@ _ANYMAL_BALL_VALVE_RL_AGENTS = {
     "rsl_rl_student_ppo_cfg_entry_point": (
         "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_ppo_cfg:AnymalBallValveStudentPPORunnerCfg"
     ),
+    # The PPO student with RND curiosity (--agent <key>).
+    "rsl_rl_student_ppo_rnd_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_ppo_cfg:AnymalBallValveStudentPPORNDRunnerCfg"
+    ),
     # Deployable student distilled from the teacher (--agent <key>).
     "rsl_rl_distillation_cfg_entry_point": (
         "isaaclab_hiveboard.tasks.anymal.ball_valve_rl.agents.rsl_rl_distillation_cfg:AnymalBallValveStudentRunnerCfg"

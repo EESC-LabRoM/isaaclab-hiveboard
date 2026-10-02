@@ -77,6 +77,10 @@ class ExpertBank:
         # Grasp step: first closed-gripper step. Open step: first step at open.
         grasp = closed.float().argmax(dim=1)
         open_step = (bank["t_open"] / meta["dt"]).round().long().clamp(max=q.shape[1] - 1)
+        # Retreat step: when the arm has backed off and stopped (last step it moved).
+        moving = (q[:, 1:] - q[:, :-1]).abs().amax(dim=-1) > IDLE_STEP_RAD
+        last_move = q.shape[1] - 1 - moving.flip(dims=[1]).float().argmax(dim=1)
+        retreat_step = torch.maximum(last_move, open_step)
 
         # Reach: planned joints up to the grasp without the idle steps, then
         # held at the grasp configuration.
@@ -107,6 +111,7 @@ class ExpertBank:
         self.dt = float(meta["dt"])
         self.idle_shift = grasp - self.grasp_step
         self.open_step = open_step
+        self.retreat_step = retreat_step
         self.valve_open_rad = valve_open_rad
         self.arm_q0 = bank["arm_q0"].float()
         self.valve_angle0 = bank["valve_angle0"].float()
@@ -129,6 +134,7 @@ class ExpertBank:
             "gripper_joint_pos",
             "idle_shift",
             "open_step",
+            "retreat_step",
             "arm_q0",
             "valve_angle0",
             "valve_pose_env",
@@ -143,24 +149,29 @@ class ExpertBank:
         return self.reach[idx, step.clamp(max=self.reach.shape[1] - 1)]
 
     def _bank_step(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """The bank's own step for episode ``step``, held at the expert's open step."""
+        """The bank's own step for episode ``step``, held at the recording's last step.
+
+        Past the open step the expert lets go of the lever and backs the arm
+        off to the approach point, so the references after opening are that
+        release and retreat, then the arm standing clear.
+        """
         shifted = torch.where(step >= self.grasp_step[idx], step + self.idle_shift[idx], step)
-        return torch.minimum(shifted, self.open_step[idx])
+        return shifted.clamp(max=self.q.shape[1] - 1)
 
     def valve_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """Expert valve angle at episode ``step`` (held once open), ``(len(idx),)`` [rad]."""
+        """Expert valve angle at episode ``step``, ``(len(idx),)`` [rad]."""
         return self.valve[idx, self._bank_step(idx, step)]
 
     def gripper_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """Expert finger joint position at episode ``step`` (held once open), ``(len(idx),)`` [rad]."""
+        """Expert finger joint position at episode ``step``, ``(len(idx),)`` [rad]."""
         return self.gripper_q[idx, self._bank_step(idx, step)]
 
     def contact_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """Expert per-pad lever contact (1/0) at episode ``step`` (held once open), ``(len(idx), 2)``."""
+        """Expert per-pad lever contact (1/0) at episode ``step``, ``(len(idx), 2)``."""
         return self.contact[idx, self._bank_step(idx, step)]
 
     def turn_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
-        """Expert measured joints at episode ``step`` (held once open), ``(len(idx), 6)``."""
+        """Expert measured joints at episode ``step``, ``(len(idx), 6)``."""
         return self.q[idx, self._bank_step(idx, step)]
 
 
@@ -178,9 +189,10 @@ class reset_from_expert_bank(ManagerTermBase):
     feasible and the observed speed matches them.
 
     With probability ``mid_start_prob`` the episode starts at a random step of
-    the trajectory up to the expert's open step instead of its beginning
-    (reference state initialization): arm, whole gripper linkage and valve as
-    the expert had them, e.g. already gripping and turning. ``start_step``
+    the trajectory up to the end of the expert's retreat instead of its
+    beginning (reference state initialization): arm, whole gripper linkage and
+    valve as the expert had them, e.g. already gripping and turning, or
+    letting go. ``start_step``
     holds that step; :func:`reference_step` adds it to the episode time, so
     every time-indexed reference starts there too. Students trained from the
     beginning only (v9-v11, PPO v1) never discovered closing the gripper.
@@ -213,7 +225,7 @@ class reset_from_expert_bank(ManagerTermBase):
         if mid_start_prob > 0.0:
             mid = torch.rand(len(ids), device=env.device) < mid_start_prob
             if torch.any(mid):
-                last = self.bank.open_step[draw[mid]] - self.bank.idle_shift[draw[mid]]
+                last = self.bank.retreat_step[draw[mid]] - self.bank.idle_shift[draw[mid]]
                 step = (torch.rand(int(mid.sum()), device=env.device) * (last + 1).float()).long()
                 self.write_mid_state(env, ids[mid], draw[mid], step)
 
