@@ -336,6 +336,38 @@ gym.register(
     },
 )
 
+# The ball valve's agents (same networks and algorithms), logged under the small valve's names.
+_ANYMAL_SMALL_VALVE_RL_AGENTS = {
+    "rsl_rl_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.agents.rsl_rl_cfg:AnymalSmallValveTeacherPPORunnerCfg",
+    "default_agent": "rsl_rl",
+    "rsl_rl_student_ppo_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.agents.rsl_rl_cfg:AnymalSmallValveStudentPPORunnerCfg",
+    "rsl_rl_student_ppo_rnd_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.agents.rsl_rl_cfg:AnymalSmallValveStudentPPORNDRunnerCfg",
+    "rsl_rl_distillation_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.agents.rsl_rl_cfg:AnymalSmallValveStudentRunnerCfg",
+    "rsl_rl_distillation_recurrent_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.small_valve_rl.agents.rsl_rl_cfg:AnymalSmallValveStudentRecurrentRunnerCfg"
+    ),
+}
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-SmallValve-RL-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.env:AnymalSmallValveRLEnvCfg",
+        **_ANYMAL_SMALL_VALVE_RL_AGENTS,
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-SmallValve-RL-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.small_valve_rl.env:AnymalSmallValveRLEnvCfg_PLAY",
+        **_ANYMAL_SMALL_VALVE_RL_AGENTS,
+    },
+)
+
 gym.register(
     id="Isaac-HiveBoard-Anymal-CircuitBreaker-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

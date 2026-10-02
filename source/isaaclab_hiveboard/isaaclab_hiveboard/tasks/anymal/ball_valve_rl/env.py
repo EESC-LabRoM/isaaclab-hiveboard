@@ -48,7 +48,7 @@ from isaaclab_hiveboard.assets.anymal.bench import (
 from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionCfg
 from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_contact_stiffness
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.scene import BallValveSceneCfg
-from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import actuator_delay, expert_bank, mdp, valve_dynamics
+from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import actuator_delay, expert_bank, expert_diversity, mdp, valve_dynamics
 
 ARM = SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)
 GRIPPER = SceneEntityCfg("robot", joint_names=list(NEWTON_GRIPPER_JOINT_NAMES), preserve_order=True)
@@ -122,9 +122,24 @@ def force_limited_gripper(robot: ArticulationCfg, torque: float = GRIP_TORQUE_NM
     return robot.replace(actuators={**robot.actuators, "gripper": gripper})
 
 
-# Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py).
+# Precomputed cuRobo expert trajectories (scripts/rl/build_expert_bank.py),
+# recorded on the scripted task EXPERT_TASK.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
+EXPERT_TASK = "Isaac-HiveBoard-Anymal-BallValve-v0"
 EXPERT_BANK_PATH = os.path.join(REPO_ROOT, "logs", "expert_bank", "anymal_ball_valve_bank_5000_noflip.pt")
+BANK_PREFIX = "anymal_ball_valve"
+"""Default bank file name prefix (``logs/expert_bank/<prefix>_bank.pt``)."""
+# What the bank builder samples per episode besides the reset ranges above:
+# the valve dynamics (valve_dynamics.py) and the expert's own variation
+# (expert_diversity.py). The RL episodes restore them from the bank.
+VALVE_DYNAMICS_RANGES = valve_dynamics.VALVE_DYNAMICS_RANGES
+STUCK_PROB = valve_dynamics.STUCK_PROB
+STUCK_BREAKAWAY_RANGE = valve_dynamics.STUCK_BREAKAWAY_RANGE
+EXPERT_DIVERSITY_RANGES = expert_diversity.EXPERT_DIVERSITY_RANGES
+EXPERT_GRASP_AXES = expert_diversity.LEVER_GRASP_AXES
+EXPERT_OVERSHOOT = (expert_diversity.OVERSHOOT_RAD, expert_diversity.OVERSHOOT_RAD_PER_NM)
+EXPERT_GRIP_S = None
+"""Duration [s] the bank builder gives the expert's grip segments (None: the command setup's)."""
 
 
 @configclass
@@ -336,7 +351,7 @@ class EventCfg:
     # episode starts exactly where a successful expert trajectory started.
     # Half the episodes start mid-trajectory, e.g. already gripping and turning,
     # so gripping is experienced without having to be discovered first.
-    reset_from_bank = expert_bank.reset_from_expert_bank_cfg(EXPERT_BANK_PATH, mid_start_prob=0.5)
+    reset_from_bank = expert_bank.reset_from_expert_bank_cfg(EXPERT_BANK_PATH, mid_start_prob=0.5, expert_task=EXPERT_TASK)
 
 
 @configclass
@@ -417,6 +432,8 @@ class AnymalBallValveRLEnvCfg(ManagerBasedRLEnvCfg):
     """ANYmal + DynaArm opens the HiveBoard ball valve (closed -> -90 deg) with RL."""
 
     scene: BallValveSceneCfg = BallValveSceneCfg(num_envs=1024, env_spacing=3.0)  # type: ignore
+    # The valve every RL term acts on (mdp.ValveTaskCfg; defaults are the ball valve's).
+    valve_task: mdp.ValveTaskCfg = mdp.ValveTaskCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
@@ -453,16 +470,21 @@ class AnymalBallValveRLEnvCfg_PLAY(AnymalBallValveRLEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 16
-        self.events.robot_physics_material = None
-        self.events.valve_physics_material = None
-        self.observations.policy.enable_corruption = False
-        # Evaluate whole tasks, from the start of each trajectory.
-        self.events.reset_from_bank.params["mid_start_prob"] = 0.0
-        # Episodes run to the end, as on the robot: the expert-reference
-        # terminations are a training device for the teacher.
-        self.terminations.expert_drift = None
-        self.terminations.expert_valve_lag = None
-        # The cuRobo expert's turning speed; sweep with
-        # env.commands.valve_turn.rate_range=[r,r].
-        self.commands.valve_turn.rate_range = (0.3, 0.3)
+        configure_play(self)
+
+
+def configure_play(cfg: AnymalBallValveRLEnvCfg) -> None:
+    """Turn an RL valve task configuration into its evaluation variant (see :class:`AnymalBallValveRLEnvCfg_PLAY`)."""
+    cfg.scene.num_envs = 16
+    cfg.events.robot_physics_material = None
+    cfg.events.valve_physics_material = None
+    cfg.observations.policy.enable_corruption = False
+    # Evaluate whole tasks, from the start of each trajectory.
+    cfg.events.reset_from_bank.params["mid_start_prob"] = 0.0
+    # Episodes run to the end, as on the robot: the expert-reference
+    # terminations are a training device for the teacher.
+    cfg.terminations.expert_drift = None
+    cfg.terminations.expert_valve_lag = None
+    # The cuRobo expert's turning speed; sweep with
+    # env.commands.valve_turn.rate_range=[r,r].
+    cfg.commands.valve_turn.rate_range = (0.3, 0.3)

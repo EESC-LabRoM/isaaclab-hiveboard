@@ -21,6 +21,7 @@ time to open recorded in the bank.
 """
 
 import argparse
+import importlib
 import os
 import sys
 
@@ -64,7 +65,7 @@ def make_sequential_reset():
                 self.order = torch.randperm(self.bank.size, generator=gen).to(env.device)
             self.cursor = 0
 
-        def __call__(self, env, env_ids, path, mid_start_prob=0.0):
+        def __call__(self, env, env_ids, path, mid_start_prob=0.0, expert_task=None):
             ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
             picks = self.order[(self.cursor + torch.arange(len(ids), device=env.device)) % len(self.order)]
             self.cursor += len(ids)
@@ -75,7 +76,9 @@ def make_sequential_reset():
 
 def main() -> None:
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp as rl_mdp
-    from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.env import SUCCESS_TOLERANCE_RAD
+
+    task_env = importlib.import_module(gym.spec(args.task).kwargs["env_cfg_entry_point"].split(":")[0])
+    SUCCESS_TOLERANCE_RAD = task_env.SUCCESS_TOLERANCE_RAD
 
     env_cfg, _ = resolve_task_config(args.task, "")
     env_cfg.scene.num_envs = args.num_envs

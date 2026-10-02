@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Per-episode ball-valve dynamics: how hard the lever is to turn.
+"""Per-episode valve dynamics: how hard the lever (or handwheel) is to turn.
 
 Each reset samples five parameters per environment (:data:`VALVE_DYNAMICS`):
 
@@ -44,7 +44,7 @@ from isaaclab.assets import BaseArticulation
 from isaaclab.managers import ActionTerm, ActionTermCfg, EventTermCfg, ManagerTermBase
 from isaaclab.utils.configclass import configclass
 
-from .mdp import VALVE_CLOSED_RAD, VALVE_JOINT
+from .mdp import _opening_sign, valve_task
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -67,11 +67,17 @@ VALVE_DYNAMICS_RANGES = {
 #: Seat torque [N·m] of a valve stuck closed, and how often that happens.
 STUCK_BREAKAWAY_RANGE = (2.0, 5.0)
 STUCK_PROB = 0.25
-#: :func:`valve_dynamics_obs` scale: each parameter's largest sampled value.
-VALVE_DYNAMICS_SCALE = tuple(
-    max(VALVE_DYNAMICS_RANGES[name][1], STUCK_BREAKAWAY_RANGE[1] if name == "breakaway" else 0.0) or 1.0
-    for name in VALVE_DYNAMICS
-)
+
+
+def dynamics_scale(ranges: dict[str, tuple[float, float]], stuck_breakaway: tuple[float, float]) -> tuple[float, ...]:
+    """:func:`valve_dynamics_obs` scale: each parameter's largest sampled value (1 for a parameter fixed at 0)."""
+    return tuple(
+        max(ranges[name][1], stuck_breakaway[1] if name == "breakaway" else 0.0) or 1.0 for name in VALVE_DYNAMICS
+    )
+
+
+#: The ball valve's :func:`dynamics_scale`.
+VALVE_DYNAMICS_SCALE = dynamics_scale(VALVE_DYNAMICS_RANGES, STUCK_BREAKAWAY_RANGE)
 #: Opening [rad] over which the seat torque fades from ``breakaway`` to 0.
 BREAKAWAY_WIDTH_RAD = 0.15
 #: Opening [rad] up to which the spring may not overcome friction. A lever
@@ -82,17 +88,29 @@ BREAKAWAY_WIDTH_RAD = 0.15
 SPRING_STATIC_RAD = 0.4
 
 
-def closing_torque(angle: torch.Tensor, spring: torch.Tensor, breakaway: torch.Tensor) -> torch.Tensor:
-    """Spring plus seat torque [N·m] at valve ``angle`` [rad]; positive turns the lever toward closed."""
-    opening = (VALVE_CLOSED_RAD - angle).clamp(min=0.0)
-    return spring * opening + breakaway * (1.0 - opening / BREAKAWAY_WIDTH_RAD).clamp(min=0.0)
+def closing_torque(
+    angle: torch.Tensor,
+    spring: torch.Tensor,
+    breakaway: torch.Tensor,
+    closed_rad: float = 0.0,
+    opening_sign: float = -1.0,
+) -> torch.Tensor:
+    """Spring plus seat torque [N·m] at valve ``angle`` [rad], signed to turn the valve toward ``closed_rad``.
+
+    ``opening_sign`` is the direction of opening (-1: negative rotation opens, as on the HiveBoard valves).
+    """
+    opening = (opening_sign * (angle - closed_rad)).clamp(min=0.0)
+    magnitude = spring * opening + breakaway * (1.0 - opening / BREAKAWAY_WIDTH_RAD).clamp(min=0.0)
+    return -opening_sign * magnitude
 
 
 class randomize_valve_dynamics(ManagerTermBase):
     """Reset event: sample :data:`VALVE_DYNAMICS` per environment and write them to the valve.
 
-    ``params`` holds every environment's current values, ``(num_envs, 5)``;
-    :meth:`write` sets given values instead (the expert-bank reset uses it).
+    ``params`` holds every environment's current values, ``(num_envs, 5)``, and
+    ``scale`` each one's largest possible value; :meth:`write` sets given
+    values instead (the expert-bank reset uses it). The valve is the
+    environment's ``valve_task`` (``mdp.ValveTaskCfg``).
     The spring is capped so that it cannot overcome friction up to
     :data:`SPRING_STATIC_RAD` of opening. A stuck valve's lever is moved to
     closed, so this event runs after the valve joint's reset.
@@ -100,9 +118,22 @@ class randomize_valve_dynamics(ManagerTermBase):
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self.valve: BaseArticulation = env.scene[cfg.params.get("asset_name", "ball_valve")]
-        self.joint_ids = self.valve.find_joints(VALVE_JOINT)[0]
+        task = valve_task(env)
+        if not task.closed_end_stop:
+            ranges, stuck = cfg.params["ranges"], cfg.params.get("stuck_prob", 0.0)
+            if ranges["spring"][1] > 0.0 or ranges["breakaway"][1] > 0.0 or stuck > 0.0:
+                raise ValueError(
+                    f"'{task.asset_name}' has no end stop at closed: a spring or seat torque would spin it past"
+                    " closed. Set the spring and breakaway ranges and stuck_prob to 0."
+                )
+        self.valve: BaseArticulation = env.scene[task.asset_name]
+        self.joint_ids = self.valve.find_joints(task.joint_name)[0]
+        self.closed_rad = task.closed_rad
         self.params = torch.zeros(env.num_envs, len(VALVE_DYNAMICS), device=env.device)
+        self.scale = torch.tensor(
+            dynamics_scale(cfg.params["ranges"], cfg.params.get("stuck_breakaway", STUCK_BREAKAWAY_RANGE)),
+            device=env.device,
+        )
         # The seat-torque action and the observation terms find the values here.
         env.valve_dynamics_term = self
 
@@ -113,7 +144,6 @@ class randomize_valve_dynamics(ManagerTermBase):
         ranges: dict[str, tuple[float, float]],
         stuck_prob: float = 0.0,
         stuck_breakaway: tuple[float, float] = STUCK_BREAKAWAY_RANGE,
-        asset_name: str = "ball_valve",
     ) -> None:
         ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         values = torch.empty(len(ids), len(VALVE_DYNAMICS), device=env.device)
@@ -124,7 +154,7 @@ class randomize_valve_dynamics(ManagerTermBase):
         stuck = torch.rand(len(ids), device=env.device) < stuck_prob
         if stuck.any():
             values[stuck, 3] = torch.empty(int(stuck.sum()), device=env.device).uniform_(*stuck_breakaway)
-            closed = torch.full((int(stuck.sum()), 1), VALVE_CLOSED_RAD, device=env.device)
+            closed = torch.full((int(stuck.sum()), 1), self.closed_rad, device=env.device)
             self.valve.write_joint_position_to_sim_index(position=closed, joint_ids=self.joint_ids, env_ids=ids[stuck])
             self.valve.write_joint_velocity_to_sim_index(
                 velocity=torch.zeros_like(closed), joint_ids=self.joint_ids, env_ids=ids[stuck]
@@ -148,21 +178,22 @@ class randomize_valve_dynamics(ManagerTermBase):
 
 
 def randomize_valve_dynamics_cfg(
-    ranges: dict[str, tuple[float, float]] | None = None, stuck_prob: float = STUCK_PROB
+    ranges: dict[str, tuple[float, float]] | None = None,
+    stuck_prob: float = STUCK_PROB,
+    stuck_breakaway: tuple[float, float] = STUCK_BREAKAWAY_RANGE,
 ) -> EventTermCfg:
     """Reset event sampling the valve dynamics from ``ranges`` (default :data:`VALVE_DYNAMICS_RANGES`)."""
     return EventTermCfg(
         func=randomize_valve_dynamics,
         mode="reset",
-        params={"ranges": dict(ranges or VALVE_DYNAMICS_RANGES), "stuck_prob": stuck_prob},
+        params={"ranges": dict(ranges or VALVE_DYNAMICS_RANGES), "stuck_prob": stuck_prob, "stuck_breakaway": stuck_breakaway},
     )
 
 
 def valve_dynamics_obs(env: ManagerBasedEnv) -> torch.Tensor:
     """The episode's valve dynamics, each divided by its largest sampled value, ``(N, 5)`` (privileged)."""
     term = env.valve_dynamics_term
-    scale = term.params.new_tensor(VALVE_DYNAMICS_SCALE)
-    return term.params / scale
+    return term.params / term.scale
 
 
 class ValveLoadAction(ActionTerm):
@@ -176,7 +207,12 @@ class ValveLoadAction(ActionTerm):
 
     def __init__(self, cfg: ValveLoadActionCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self._joint_ids = self._asset.find_joints(VALVE_JOINT)[0]
+        task = valve_task(env)
+        if task.asset_name != cfg.asset_name:
+            raise ValueError(f"ValveLoadActionCfg.asset_name '{cfg.asset_name}' is not the valve '{task.asset_name}'.")
+        self._joint_ids = self._asset.find_joints(task.joint_name)[0]
+        self._closed_rad = task.closed_rad
+        self._opening_sign = _opening_sign(env)
         self._empty = torch.zeros(self.num_envs, 0, device=self.device)
 
     @property
@@ -199,7 +235,7 @@ class ValveLoadAction(ActionTerm):
         if term is None:
             return
         angle = self._asset.data.joint_pos.torch[:, self._joint_ids[0]]
-        torque = closing_torque(angle, term.params[:, 2], term.params[:, 3])
+        torque = closing_torque(angle, term.params[:, 2], term.params[:, 3], self._closed_rad, self._opening_sign)
         self._asset.set_joint_effort_target_index(target=torque[:, None], joint_ids=self._joint_ids)
 
 

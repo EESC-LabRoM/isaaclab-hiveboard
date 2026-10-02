@@ -28,10 +28,12 @@ branch within its limits). Which one the expert takes then follows from the
 start posture (some start flipped, see ``mdp.reset_joints_from_postures``),
 which the student observes; a randomly drawn branch would not be learnable.
 
-The grasp offset is applied in the grasp goal's frame, whose ``y`` axis runs
-along the lever (the goal sits 6 cm out along it from the valve axis). The
-approach goals before the grasp get the same offset expressed from their own
-frame, so the final approach keeps its direction relative to the grasp.
+The grasp offset is applied in the grasp goal's frame: the shift along
+``grasp_axes[0]`` and the roll about ``grasp_axes[1]``. On the ball valve both
+are the goal's ``y`` axis, which runs along the lever (the goal sits 6 cm out
+along it from the valve axis). The approach goals before the grasp get the
+same offset expressed from their own frame, so the final approach keeps its
+direction relative to the grasp.
 """
 
 from __future__ import annotations
@@ -62,20 +64,31 @@ OVERSHOOT_RAD = 0.03
 OVERSHOOT_RAD_PER_NM = 0.05
 #: Lever axis in the grasp goal's frame.
 LEVER_AXIS = (0.0, 1.0, 0.0)
+#: The ball valve's (shift, roll) axes of the grasp offset, in the grasp goal's frame: both along the lever.
+LEVER_GRASP_AXES = (LEVER_AXIS, LEVER_AXIS)
 #: The DynaArm's (roll, pitch, roll) wrist, for the wrist flip.
 WRIST_FLIP_JOINTS = ("dynaarm_forearm_rotation", "dynaarm_wrist_flexion", "dynaarm_wrist_rotation")
 
 
-def turn_overshoot(env: ManagerBasedEnv, env_ids: torch.Tensor) -> torch.Tensor:
-    """Arc overshoot [rad] for ``env_ids`` from the torque their valve needs at open (``valve_dynamics.py``)."""
+def turn_overshoot(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    overshoot: tuple[float, float] = (OVERSHOOT_RAD, OVERSHOOT_RAD_PER_NM),
+) -> torch.Tensor:
+    """Arc overshoot [rad] for ``env_ids`` from the torque their valve needs at open (``valve_dynamics.py``).
+
+    ``overshoot`` is (free valve [rad], per N·m at open [rad/(N·m)]).
+    """
     from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
 
+    base, per_nm = overshoot
     term = getattr(env, "valve_dynamics_term", None)
     if term is None:
-        return torch.full((len(env_ids),), OVERSHOOT_RAD, device=env.device)
+        return torch.full((len(env_ids),), base, device=env.device)
+    task = mdp.valve_task(env)
     friction, _, spring, _, _ = term.params[env_ids].unbind(dim=-1)
-    torque = friction + spring * abs(mdp.VALVE_OPEN_RAD - mdp.VALVE_CLOSED_RAD)
-    return OVERSHOOT_RAD + OVERSHOOT_RAD_PER_NM * torque
+    torque = friction + spring * abs(task.open_rad - task.closed_rad)
+    return base + per_nm * torque
 
 
 class sample_expert_diversity(ManagerTermBase):
@@ -137,6 +150,8 @@ class sample_expert_diversity(ManagerTermBase):
         ranges: dict[str, tuple[float, float]],
         wrist_branch_nearest: bool = False,
         command_name: str = "pose_command",
+        grasp_axes: tuple[tuple[float, float, float], tuple[float, float, float]] = LEVER_GRASP_AXES,
+        overshoot: tuple[float, float] = (OVERSHOOT_RAD, OVERSHOOT_RAD_PER_NM),
     ) -> None:
         if self._rotate is None:
             self._resolve(env, command_name)
@@ -146,7 +161,7 @@ class sample_expert_diversity(ManagerTermBase):
         for i, name in enumerate(EXPERT_DIVERSITY[:-1]):
             values[:, i].uniform_(*ranges[name])
         # The valve dynamics event runs first.
-        values[:, -1] = turn_overshoot(env, ids)
+        values[:, -1] = turn_overshoot(env, ids, overshoot)
         self.values[ids] = values
         turn_rate, reach_scale, shift, roll, overshoot = values.unbind(dim=-1)
 
@@ -163,9 +178,10 @@ class sample_expert_diversity(ManagerTermBase):
                 handler.wrist_branch[ids] = WRIST_BRANCH_NEAREST
                 handler.forearm_winding[ids] = 0.0
 
-        axis = torch.tensor(LEVER_AXIS, device=env.device).expand(n, 3)
-        grasp_pos = axis * shift[:, None]
-        grasp_quat = math_utils.quat_from_angle_axis(roll, axis)
+        shift_axis = torch.tensor(grasp_axes[0], device=env.device).expand(n, 3)
+        roll_axis = torch.tensor(grasp_axes[1], device=env.device).expand(n, 3)
+        grasp_pos = shift_axis * shift[:, None]
+        grasp_quat = math_utils.quat_from_angle_axis(roll, roll_axis)
         self._grasp.env_offset_pos[ids] = grasp_pos
         self._grasp.env_offset_rot[ids] = grasp_quat
         # Earlier goals move rigidly with the grasp: with K the earlier goal in
@@ -182,11 +198,23 @@ class sample_expert_diversity(ManagerTermBase):
 
 
 def sample_expert_diversity_cfg(
-    ranges: dict[str, tuple[float, float]] | None = None, wrist_branch_nearest: bool = False
+    ranges: dict[str, tuple[float, float]] | None = None,
+    wrist_branch_nearest: bool = False,
+    grasp_axes: tuple[tuple[float, float, float], tuple[float, float, float]] = LEVER_GRASP_AXES,
+    overshoot: tuple[float, float] = (OVERSHOOT_RAD, OVERSHOOT_RAD_PER_NM),
 ) -> EventTermCfg:
-    """Reset event sampling the expert's variations from ``ranges`` (default :data:`EXPERT_DIVERSITY_RANGES`)."""
+    """Reset event sampling the expert's variations from ``ranges`` (default :data:`EXPERT_DIVERSITY_RANGES`).
+
+    ``grasp_axes`` are the grasp offset's (shift, roll) axes in the grasp goal's frame; ``overshoot`` is
+    the arc's overshoot for a free valve [rad] and per N·m at open (:func:`turn_overshoot`).
+    """
     return EventTermCfg(
         func=sample_expert_diversity,
         mode="reset",
-        params={"ranges": dict(ranges or EXPERT_DIVERSITY_RANGES), "wrist_branch_nearest": wrist_branch_nearest},
+        params={
+            "ranges": dict(ranges or EXPERT_DIVERSITY_RANGES),
+            "wrist_branch_nearest": wrist_branch_nearest,
+            "grasp_axes": grasp_axes,
+            "overshoot": overshoot,
+        },
     )
