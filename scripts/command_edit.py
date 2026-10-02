@@ -111,7 +111,14 @@ MOTION_FIELDS = (
 # Editing any of these moves the authored goal away from a retargeted path.
 GOAL_FIELDS = frozenset({"target_offset_pos", "target_offset_rot", "target_position_env", "target_orientation_env"})
 # Editing any of these changes the geometry cuRobo planned against.
-REPLAN_FIELDS = GOAL_FIELDS | {"angle_deg", "max_ee_rotation_deg", "axis", "axial_distance", "use_valve_angle"}
+REPLAN_FIELDS = GOAL_FIELDS | {
+    "angle_deg",
+    "max_ee_rotation_deg",
+    "axis",
+    "axial_distance",
+    "screw_pitch_m_per_revolution",
+    "use_valve_angle",
+}
 PATH_COLOR = (100, 170, 240)
 SELECTED_PATH_COLOR = (255, 190, 50)
 ROTATION_AXIS_COLOR = (210, 80, 230)
@@ -650,6 +657,7 @@ class CommandEditor:
             )
         self._field("max_ee_rotation_deg", "Max EE rotation (deg)", minimum=0.0)
         self._field("axial_distance", "Screw travel (m)")
+        self._field("screw_pitch_m_per_revolution", "Thread pitch (m/revolution)")
         self._field("axis", "Axis in reference frame", vector=True)
         self._field("use_valve_angle", "Use remaining valve angle", boolean=True)
         self._create_motion_folder()

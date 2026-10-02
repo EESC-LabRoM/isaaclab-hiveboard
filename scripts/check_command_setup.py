@@ -643,6 +643,29 @@ class GeometryTests(unittest.TestCase):
             expected = torch.tensor([[0.0, 0, -math.sqrt(0.5), math.sqrt(0.5)]])
             torch.testing.assert_close(quat, expected, atol=1e-6, rtol=0)
 
+    def test_planned_thread_path_uses_signed_pitch_after_angle_clamping(self):
+        term = geometry_term()
+        initial = (torch.tensor([[1.0, 0, 0]]), torch.tensor([[0.0, 0, 0, 1]]))
+        for angle_deg in (-180.0, 180.0):
+            for pitch in (0.0, 0.0035):
+                cfg = CuroboPlannedRotateFrameCfg(
+                    frame_name="target_frame",
+                    target_frame_name="goal",
+                    robot_joint_names=["arm_sh0", "arm_el0"],
+                    axis=(0, 0, 1),
+                    angle_deg=angle_deg,
+                    use_valve_angle=False,
+                    max_ee_rotation_deg=120.0,
+                    screw_pitch_m_per_revolution=pitch,
+                )
+                segment = build_segments(term, [cfg], initial)[0]
+                signed_angle = math.copysign(2.0 * math.pi / 3.0, angle_deg)
+                for fraction in (0.0, 0.5, 1.0):
+                    angle = signed_angle * fraction
+                    expected = torch.tensor([[math.cos(angle), math.sin(angle), angle * pitch / (2.0 * math.pi)]])
+                    torch.testing.assert_close(segment.sample(fraction)[0], expected, atol=1e-6, rtol=0)
+                torch.testing.assert_close(segment.handler.get_target_in_base_frame(torch.tensor([0]))[0], expected)
+
     def test_valve_angle_switch_and_gripper_hold(self):
         term = geometry_term()
         term._valve_asset = object()

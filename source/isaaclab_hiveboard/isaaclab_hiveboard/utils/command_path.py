@@ -46,6 +46,7 @@ def active_command_path(handler, command: torch.Tensor, env_index: int = 0, samp
             handler.axis_pos_b[env_index]
             + handler.axial_vec[env_index]
             + handler._rodrigues_rotate(radius, axis, angle)
+            + handler._screw_offset(axis, angle)
         )
         if isinstance(handler.cfg, ScrewFrameCfg):
             pos = pos + axis * (fraction * handler.cfg.axial_distance)[:, None]
