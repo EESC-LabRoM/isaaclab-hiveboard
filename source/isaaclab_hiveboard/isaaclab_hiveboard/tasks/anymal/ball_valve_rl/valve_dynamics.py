@@ -57,7 +57,10 @@ VALVE_DYNAMICS = ("friction", "damping", "spring", "breakaway", "armature")
 VALVE_DYNAMICS_RANGES = {
     "friction": (0.05, 2.0),
     "damping": (0.0, 0.5),
-    "spring": (0.0, 1.0),
+    # Off: the policy lets go once the valve is open, and a released lever
+    # must stay open. MJWarp's friction is soft, so any spring torque left at
+    # open creeps the lever shut (~0.03 rad/s), whatever the friction.
+    "spring": (0.0, 0.0),
     "breakaway": (0.0, 2.0),
     "armature": (0.001, 0.02),
 }
@@ -66,7 +69,7 @@ STUCK_BREAKAWAY_RANGE = (2.0, 5.0)
 STUCK_PROB = 0.25
 #: :func:`valve_dynamics_obs` scale: each parameter's largest sampled value.
 VALVE_DYNAMICS_SCALE = tuple(
-    max(VALVE_DYNAMICS_RANGES[name][1], STUCK_BREAKAWAY_RANGE[1] if name == "breakaway" else 0.0)
+    max(VALVE_DYNAMICS_RANGES[name][1], STUCK_BREAKAWAY_RANGE[1] if name == "breakaway" else 0.0) or 1.0
     for name in VALVE_DYNAMICS
 )
 #: Opening [rad] over which the seat torque fades from ``breakaway`` to 0.

@@ -52,7 +52,7 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--num_envs", type=int, default=512)
 parser.add_argument("--num_trajectories", type=int, default=5000, help="Successful trajectories to keep.")
 parser.add_argument("--plan_batch_size", type=int, default=None, help="cuRobo batch (default: num_envs).")
-parser.add_argument("--episode_length_s", type=float, default=15.0, help="One second past the RL episode.")
+parser.add_argument("--episode_length_s", type=float, default=18.0, help="One second past the RL episode.")
 parser.add_argument("--max_waves", type=int, default=50)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", default="logs/expert_bank/anymal_ball_valve_bank.pt")
@@ -61,9 +61,20 @@ parser.add_argument("--nominal_expert", action="store_true", help="The authored 
 parser.add_argument("--nominal_pose", action="store_true", help="The previous, narrower valve placement range.")
 parser.add_argument("--nominal_arm", action="store_true", help="Start the arm around the home posture only.")
 parser.add_argument(
+    "--standard", action="store_true", help="Standard conditions: valve at its nominal pose and angle, arm at home."
+)
+parser.add_argument(
     "--no_wrist_flip", action="store_true", help="No wrist-flipped starts; the IK solver picks the branch."
 )
 parser.add_argument("--no_stuck", action="store_true", help="No valves stuck closed.")
+# Baseline evaluation of the expert itself under perturbations (nothing is saved).
+parser.add_argument("--eval_only", action="store_true", help="Report the expert's success rates, save no bank.")
+parser.add_argument("--arm_gain_scale", type=float, default=1.0, help="Scale on the arm PD stiffness and damping.")
+parser.add_argument("--arm_delay_s", type=float, default=0.0, help="Fixed arm command latency [s].")
+parser.add_argument(
+    "--reg_bias_pos", type=float, default=0.0, help="Registration error [m]: the valve moves this much after planning."
+)
+parser.add_argument("--reg_bias_rot", type=float, default=0.0, help="Registration error [rad] about each axis.")
 parser.add_argument("--setup", default=None)
 parser.add_argument("--no_setup", action="store_true")
 parser.add_argument(
@@ -107,9 +118,18 @@ def configure(env_cfg) -> dict:
     # The RL task's force-limited gripper and stiff gripper-valve contacts.
     # Its arm command latency is for the policy; the expert records without
     # (max_delay 0: no delay buffer).
-    env_cfg.scene.robot = actuator_delay.delayed_actuators(
-        rl.scene.robot, actuator_delay.ARM_ACTUATOR_GROUPS, 0.0, rl.sim.dt
+    robot = actuator_delay.delayed_actuators(
+        rl.scene.robot, actuator_delay.ARM_ACTUATOR_GROUPS, args.arm_delay_s, rl.sim.dt
     )
+    if args.arm_gain_scale != 1.0:
+        actuators = dict(robot.actuators)
+        for name in actuator_delay.ARM_ACTUATOR_GROUPS:
+            a = actuators[name]
+            actuators[name] = a.replace(stiffness=a.stiffness * args.arm_gain_scale, damping=a.damping * args.arm_gain_scale)
+        robot = robot.replace(actuators=actuators)
+    env_cfg.scene.robot = robot
+    if args.arm_delay_s > 0.0:
+        env_cfg.events.arm_delay = actuator_delay.randomize_actuator_delay_cfg((args.arm_delay_s, args.arm_delay_s))
     env_cfg.events.gripper_valve_contacts = rl.events.gripper_valve_contacts
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
@@ -142,6 +162,11 @@ def configure(env_cfg) -> dict:
         }
     if args.nominal_arm:
         ranges["arm_postures"] = {"home": rl_env.ARM_POSTURES["home"]}
+    if args.standard:
+        ranges["valve_pose"] = {k: (0.0, 0.0) for k in ("x", "y", "z", "roll", "pitch", "yaw")}
+        ranges["valve_angle"] = (0.0, 0.0)
+        ranges["arm_postures"] = {"home": rl_env.ARM_POSTURES["home"]}
+        ranges["arm"] = (0.0, 0.0)
     if args.nominal_pose:
         ranges["valve_pose"] = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
     env_cfg.events.reset_valve_root.params["pose_range"] = dict(ranges["valve_pose"])
@@ -193,6 +218,14 @@ def configure(env_cfg) -> dict:
             )
         ]
     batch = args.plan_batch_size or args.num_envs
+    # The retreat after the turn backs straight off to the approach point,
+    # keeping the hand's orientation: reorienting to the approach frame spun
+    # the hand up to 180 degrees next to the lever.
+    commands = env_cfg.commands.pose_command.commands
+    rotate = next(i for i, c in enumerate(commands) if "Rotate" in type(c).__name__)
+    for command in commands[rotate + 1 :]:
+        if hasattr(command, "hold_current_orientation"):
+            command.hold_current_orientation = True
     for command in env_cfg.commands.pose_command.commands:
         if hasattr(command, "plan_batch_size"):
             command.plan_batch_size = batch
@@ -227,7 +260,8 @@ def main() -> None:
         kept: dict[str, list[torch.Tensor]] = {}
         # Every episode's sampled variation and outcome, for the success breakdown.
         sampled: dict[str, list[torch.Tensor]] = {
-            "valve_dynamics": [], "expert_diversity": [], "arm_q0": [], "turn_wrist": [], "ok": [], "progress": []
+            "valve_dynamics": [], "expert_diversity": [], "arm_q0": [], "turn_wrist": [], "valve_quat": [], "ok": [],
+            "progress": [],
         }
         stats = {"waves": 0, "episodes": 0, "successes": 0, "fallback": 0, "kept": 0, "wall_s": 0.0}
 
@@ -267,6 +301,30 @@ def main() -> None:
             fallback = torch.zeros(n_envs, dtype=torch.bool, device=dev)
             with torch.inference_mode():
                 for t in range(horizon):
+                    if t == 3 and (args.reg_bias_pos > 0.0 or args.reg_bias_rot > 0.0):
+                        # Registration error: the expert has planned its reach, grasp and
+                        # turn on the valve as it was; the real one sits a little off.
+                        from isaaclab.utils import math as math_utils
+
+                        pose = torch.cat((valve.data.root_pos_w.torch, valve.data.root_quat_w.torch), dim=-1).clone()
+                        pose[:, :3] += (torch.rand(n_envs, 3, device=dev) * 2 - 1) * args.reg_bias_pos
+                        euler = (torch.rand(n_envs, 3, device=dev) * 2 - 1) * args.reg_bias_rot
+                        delta = math_utils.quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2])
+                        pose[:, 3:] = math_utils.quat_mul(delta, pose[:, 3:])
+                        valve.write_root_pose_to_sim_index(root_pose=pose)
+                        valve.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n_envs, 6, device=dev))
+                    if t == horizon - 1:
+                        # At the end (before the last step, which resets) the valve must
+                        # still be open, with the arm let go and backed off.
+                        clear = rl_mdp.released_and_clear(env, SUCCESS_TOLERANCE_RAD)
+                        end_dist, _ = rl_mdp.tcp_grasp_error(env)
+                        print(
+                            f"[BANK] wave {wave} end state: valve open "
+                            f"{rl_mdp.valve_open_success(env, SUCCESS_TOLERANCE_RAD).float().mean():.1%}, "
+                            f"no pad force {(rl_mdp.pad_valve_force(env).max(dim=-1).values < 1.0).float().mean():.1%}, "
+                            f"TCP-grasp distance p10/p50 {torch.quantile(end_dist, 0.1):.3f}/{end_dist.median():.3f} m",
+                            flush=True,
+                        )
                     action = expert.compute()
                     steps["arm_q"].append(robot.data.joint_pos.torch[:, arm_ids].clone())
                     steps["arm_target"].append(action[:, :-1].clone())
@@ -294,7 +352,8 @@ def main() -> None:
             # Keep only trajectories the expert ran as planned: a cuRobo
             # fallback (e.g. a chain that could not be planned as one motion)
             # is discarded even when it opened the valve.
-            ok = opened_held & ~fallback
+            ok = opened_held & ~fallback & clear
+            stats["not_clear"] = stats.get("not_clear", 0) + int((opened_held & ~fallback & ~clear).sum())
             stats["waves"] += 1
             stats["episodes"] += n_envs
             stats["successes"] += int(opened_held.sum())
@@ -308,6 +367,7 @@ def main() -> None:
             sampled["valve_dynamics"].append(init["valve_dynamics"].cpu())
             sampled["expert_diversity"].append(init["expert_diversity"].cpu())
             sampled["arm_q0"].append(init["arm_q0"].cpu())
+            sampled["valve_quat"].append(init["valve_pose_env"][:, 3:].cpu())
             # Wrist flexion when the turn starts (NaN if it never did): its
             # sign is the IK branch the expert ended up on.
             arm_q, phase = torch.stack(steps["arm_q"], dim=1), torch.stack(steps["phase"], dim=1)
@@ -330,12 +390,29 @@ def main() -> None:
             )
             print(
                 f"[BANK] wave {wave}: {int(opened_held.sum())}/{n_envs} opened while held, "
-                f"{int((opened_held & fallback).sum())} discarded for a fallback, in {wave_s:.1f}s; kept {total}",
+                f"{int((opened_held & fallback).sum())} discarded for a fallback, "
+                f"{int((opened_held & ~fallback & ~clear).sum())} not released and clear at the end, "
+                f"in {wave_s:.1f}s; kept {total}",
                 flush=True,
             )
+            complete = opened_held & clear
+            stats["complete"] = stats.get("complete", 0) + int(complete.sum())
+            stats["opened_held"] = stats.get("opened_held", 0) + int(opened_held.sum())
+            stats["opened_any"] = stats.get("opened_any", 0) + int(opened_any.sum())
             if total >= args.num_trajectories:
                 break
 
+        if args.eval_only:
+            n = stats["episodes"]
+            print(
+                f"[BASELINE] episodes {n} | complete {stats['complete'] / n:.1%} | opened held "
+                f"{stats['opened_held'] / n:.1%} | opened any {stats['opened_any'] / n:.1%} | cuRobo fallback used "
+                f"{stats['fallback'] / n:.1%} (gain x{args.arm_gain_scale}, delay {args.arm_delay_s}s, "
+                f"registration {args.reg_bias_pos} m / {args.reg_bias_rot} rad)",
+                flush=True,
+            )
+            env.close()
+            return
         bank = {key: torch.cat(values)[: args.num_trajectories] for key, values in kept.items()}
         bank["meta"] = {
             "task": TASK,
@@ -402,6 +479,18 @@ def main() -> None:
                 f"turned with wrist flexion > 0 in {on_flip:.1%}",
                 flush=True,
             )
+        # Valve orientation offset (roll about the stem, pitch, yaw) from the nominal one.
+        from isaaclab.utils import math as math_utils
+
+        nominal = torch.tensor(env_cfg.scene.ball_valve.init_state.rot).expand(len(ok_all), 4)
+        delta = math_utils.quat_mul(math_utils.quat_inv(nominal), torch.cat(sampled["valve_quat"]))
+        roll, pitch, yaw = math_utils.euler_xyz_from_quat(delta, wrap_to_2pi=False)
+        for lo in range(-180, 180, 45):
+            sel = (torch.rad2deg(roll) >= lo) & (torch.rad2deg(roll) < lo + 45)
+            print(f"[BANK] kept with roll {lo:+4d}..{lo + 45:+4d} deg: {ok_all[sel].mean():.1%} of {int(sel.sum())}", flush=True)
+        for name, angle in (("pitch", pitch), ("yaw", yaw)):
+            big = angle.abs() > math.radians(10.0)
+            print(f"[BANK] kept with |{name}| > 10 deg: {ok_all[big].mean():.1%} of {int(big.sum())}", flush=True)
         breakaway = torch.cat(sampled["valve_dynamics"])[:, VALVE_DYNAMICS.index("breakaway")]
         stuck = breakaway > ranges["valve_dynamics"]["breakaway"][1]
         for label, sel in (("stuck closed", stuck), ("not stuck", ~stuck)):

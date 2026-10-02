@@ -213,11 +213,21 @@ def _lever_frame_w(env: ManagerBasedEnv, frame_name: str = "lever_pivot") -> tup
 
 
 def grasp_target_w(env: ManagerBasedEnv) -> tuple[torch.Tensor, torch.Tensor]:
-    """Expert grasp TCP pose on the lever, in world frame [m], xyzw."""
+    """Expert grasp TCP pose on the lever, in world frame [m], xyzw.
+
+    The parallel-jaw grasp is symmetric under a half turn about the TCP's
+    approach axis (+X), and the expert takes whichever of the two keeps the
+    hand upright (``canonicalize_upward``), which depends on how the valve is
+    clocked. The target is the one nearer the TCP's current orientation.
+    """
     pos, quat = _lever_frame_w(env)
     off_pos = torch.tensor(GRASP_OFFSET_POS, device=env.device).expand_as(pos)
     off_quat = torch.tensor(GRASP_OFFSET_QUAT, device=env.device).expand_as(quat)
-    return math_utils.combine_frame_transforms(pos, quat, off_pos, off_quat)
+    goal_pos, goal_quat = math_utils.combine_frame_transforms(pos, quat, off_pos, off_quat)
+    flipped = math_utils.quat_mul(goal_quat, goal_quat.new_tensor([1.0, 0.0, 0.0, 0.0]).expand_as(goal_quat))
+    _, tcp_quat = tcp_w(env)
+    nearer = math_utils.quat_error_magnitude(tcp_quat, flipped) < math_utils.quat_error_magnitude(tcp_quat, goal_quat)
+    return goal_pos, torch.where(nearer[:, None], flipped, goal_quat)
 
 
 def tcp_w(env: ManagerBasedEnv) -> tuple[torch.Tensor, torch.Tensor]:
@@ -256,27 +266,42 @@ def _gripper_closed(env: ManagerBasedEnv) -> torch.Tensor:
 ##
 
 
-def _in_base(env: ManagerBasedEnv, pos_w: torch.Tensor, quat_w: torch.Tensor) -> torch.Tensor:
+def rot6d(quat: torch.Tensor) -> torch.Tensor:
+    """xyzw orientations as the first two columns of their rotation matrix, ``(N, 6)``.
+
+    Continuous over all orientations, unlike a quaternion with a fixed sign:
+    ``quat_unique`` flips it where ``w`` crosses zero, which the valve's
+    nominal 180-degree yaw sits on.
+    """
+    return math_utils.matrix_from_quat(quat)[..., :2].transpose(-1, -2).reshape(*quat.shape[:-1], 6)
+
+
+def _in_base_quat(env: ManagerBasedEnv, pos_w: torch.Tensor, quat_w: torch.Tensor, env_ids=slice(None)):
+    """A world pose of environments ``env_ids`` in their robot base frame, position and xyzw quaternion."""
     robot: BaseArticulation = env.scene["robot"]
-    pos, quat = math_utils.subtract_frame_transforms(
-        robot.data.root_pos_w.torch, robot.data.root_quat_w.torch, pos_w, quat_w
-    )
-    return torch.cat((pos, math_utils.quat_unique(quat)), dim=-1)
+    base_pos, base_quat = robot.data.root_pos_w.torch[env_ids], robot.data.root_quat_w.torch[env_ids]
+    return math_utils.subtract_frame_transforms(base_pos, base_quat, pos_w, quat_w)
+
+
+def _in_base(env: ManagerBasedEnv, pos_w: torch.Tensor, quat_w: torch.Tensor) -> torch.Tensor:
+    """A world pose in the robot base frame as position (3) and :func:`rot6d` orientation (6)."""
+    pos, quat = _in_base_quat(env, pos_w, quat_w)
+    return torch.cat((pos, rot6d(quat)), dim=-1)
 
 
 def tcp_pose_b(env: ManagerBasedEnv) -> torch.Tensor:
-    """TCP pose in the base frame from forward kinematics, shape ``(N, 7)``."""
+    """TCP pose in the base frame from forward kinematics, shape ``(N, 9)``."""
     return _in_base(env, *tcp_w(env))
 
 
 def valve_pose_b(env: ManagerBasedEnv) -> torch.Tensor:
-    """True valve root pose in the base frame (privileged), shape ``(N, 7)``."""
+    """True valve root pose in the base frame (privileged), shape ``(N, 9)``."""
     valve: BaseArticulation = env.scene["ball_valve"]
     return _in_base(env, valve.data.root_pos_w.torch, valve.data.root_quat_w.torch)
 
 
 def grasp_target_b(env: ManagerBasedEnv) -> torch.Tensor:
-    """Moving lever grasp target in the base frame (privileged), shape ``(N, 7)``."""
+    """Moving lever grasp target in the base frame (privileged), shape ``(N, 9)``."""
     return _in_base(env, *grasp_target_w(env))
 
 
@@ -376,13 +401,12 @@ class registered_valve_b(ManagerTermBase):
       [rad] of error. It is *not* updated afterwards: the student has to track
       the lever from its own proprioception once it holds it.
 
-    Returns position (3), unique xyzw quaternion (4) and initial progress (1).
+    Returns position (3), :func:`rot6d` orientation (6) and initial progress (1).
     """
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self._pose = torch.zeros(env.num_envs, 7, device=env.device)
-        self._pose[:, 6] = 1.0
+        self._pose = torch.zeros(env.num_envs, 9, device=env.device)
         self._progress = torch.zeros(env.num_envs, 1, device=env.device)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
@@ -397,12 +421,15 @@ class registered_valve_b(ManagerTermBase):
             return
         params = self.cfg.params
         n = len(ids)
-        pose = valve_pose_b(self._env)[ids]
+        valve: BaseArticulation = self._env.scene["ball_valve"]
+        pos, quat = _in_base_quat(
+            self._env, valve.data.root_pos_w.torch[ids], valve.data.root_quat_w.torch[ids], env_ids=ids
+        )
         bias_pos = (torch.rand(n, 3, device=self.device) * 2.0 - 1.0) * float(params.get("bias_pos", 0.0))
         euler = (torch.rand(n, 3, device=self.device) * 2.0 - 1.0) * float(params.get("bias_rot", 0.0))
         bias_quat = math_utils.quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2])
-        self._pose[ids, :3] = pose[:, :3] + bias_pos
-        self._pose[ids, 3:] = math_utils.quat_unique(math_utils.quat_mul(bias_quat, pose[:, 3:]))
+        self._pose[ids, :3] = pos + bias_pos
+        self._pose[ids, 3:] = rot6d(math_utils.quat_mul(bias_quat, quat))
         angle = valve_angle(self._env)[ids]
         angle = angle + (torch.rand(n, device=self.device) * 2.0 - 1.0) * float(params.get("angle_noise", 0.0))
         self._progress[ids, 0] = (angle - VALVE_CLOSED_RAD) / (VALVE_OPEN_RAD - VALVE_CLOSED_RAD)
@@ -494,6 +521,25 @@ def pad_force_excess(env: ManagerBasedRLEnv, max_force: float) -> torch.Tensor:
 def valve_open_success(env: ManagerBasedRLEnv, threshold_rad: float) -> torch.Tensor:
     """Success: the valve is within ``threshold_rad`` [rad] of fully open."""
     return valve_angle(env) <= VALVE_OPEN_RAD + threshold_rad
+
+
+def released_and_clear(
+    env: ManagerBasedEnv, threshold_rad: float, min_distance: float = 0.06, max_force: float = 1.0
+) -> torch.Tensor:
+    """The valve is open and the arm has let go and backed off.
+
+    Open within ``threshold_rad`` [rad], gripper commanded open, no pad force
+    above ``max_force`` [N] from the valve, and the TCP at least
+    ``min_distance`` [m] from the grasp point (the expert retreats ~10 cm to
+    its approach point).
+    """
+    dist, _ = tcp_grasp_error(env)
+    return (
+        valve_open_success(env, threshold_rad)
+        & (_gripper_closed(env) == 0.0)
+        & (pad_valve_force(env).max(dim=-1).values < max_force)
+        & (dist >= min_distance)
+    )
 
 
 def invalid_state(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, max_joint_vel: float = 50.0) -> torch.Tensor:

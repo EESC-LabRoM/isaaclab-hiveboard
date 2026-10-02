@@ -46,7 +46,8 @@ def delayed_actuators(robot: ArticulationCfg, groups: tuple[str, ...], max_delay
         if not isinstance(cfg, IdealPDActuatorCfg):
             raise TypeError(f"Actuator group '{name}' is a {type(cfg).__name__}, not an explicit PD actuator.")
         fields = cfg.to_dict()
-        fields.pop("class_type", None)
+        for key in ("class_type", "min_delay", "max_delay"):
+            fields.pop(key, None)
         actuators[name] = DelayedPDActuatorCfg(**fields, min_delay=0, max_delay=max_delay)
     return robot.replace(actuators=actuators)
 
