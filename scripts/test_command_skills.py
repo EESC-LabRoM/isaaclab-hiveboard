@@ -22,6 +22,7 @@ from isaaclab_hiveboard.utils.command_setup import decode_command, encode_comman
 
 _REPO = Path(__file__).resolve().parents[1]
 _BALL_VALVE_SETUP = _REPO / "configs/Isaac-HiveBoard-Anymal-BallValve-v0.json"
+_SMALL_VALVE_SETUP = _REPO / "configs/Isaac-HiveBoard-Anymal-SmallValve-v0.json"
 
 
 def test_skills_tag_their_phase_and_robot():
@@ -95,6 +96,13 @@ def test_ball_valve_setup_is_phase_tagged():
     # Phases never go backwards within one cycle.
     order = [PHASES.index(p) for p in phases]
     assert order == sorted(order)
+
+
+def test_small_valve_setup_is_phase_tagged():
+    commands, _ = validate_setup(load_setup(_SMALL_VALVE_SETUP))
+    assert [c.phase for c in commands] == ["approach", "engage", "grip", "actuate", "release", "retreat"]
+    # The approach runs into the engage without stopping.
+    assert commands[0].chain_with_next and not commands[1].chain_with_next
 
 
 @pytest.mark.parametrize("path", sorted((_REPO / "configs").glob("Isaac-HiveBoard-*.json")), ids=lambda p: p.stem)

@@ -666,6 +666,37 @@ The environment silences MJWarp's per-world `linesearch iterations limit
 reached` printf at startup: with thousands of worlds it prints hundreds of
 thousands of lines a minute and stalls training.
 
+### Small valve
+
+`Isaac-HiveBoard-Anymal-SmallValve-RL-v0` (and `-Play-v0`) is the same MDP
+on the small gate valve: the expert clamps the handwheel's hub with the TCP on
+the stem axis and turns it a quarter turn (0 → -90°) by rolling the wrist.
+`tasks/anymal/small_valve_rl/env.py` only swaps the scene and the valve: every
+RL term reads the valve from the environment's `valve_task`
+(`mdp.ValveTaskCfg`: asset, joint, closed/open angles, grasp frame and the
+expert's grasp offset in it), and the bank builder reads its ranges and
+expert settings from the RL task's env module. Differences from the ball
+valve:
+
+- The handwheel joint is continuous, with no end stop at closed. A seat torque
+  or spring toward closed spins it past closed (63 rad/s before the expert
+  arrived), so the valve dynamics are friction (0.02-1 N·m), damping and
+  inertia only, with no stuck valves (`closed_end_stop=False` refuses them).
+- The handwheel's spokes turn through a full turn about the stem (the valve
+  body's pitch); the grasp varies by ±5 mm along the stem and ±0.12 rad about
+  it (at ±0.25 rad the pads slipped and the expert kept only 19%).
+- The expert grips for 0.3 s before turning (`EXPERT_GRIP_S`; the saved
+  setup's 1.2 s is for the scripted task's slower close).
+
+The `rl-*` recipes take the valve from `RL_TOOL`:
+
+```bash
+RL_TOOL=SmallValve just rl-bank                    # 5000 cuRobo trajectories
+RL_TOOL=SmallValve just rl-student-ppo             # PPO student, privileged critic
+RL_TOOL=SmallValve just rl-eval logs/rsl_rl/anymal_small_valve_student_ppo/<run>/model_<it>.pt \
+  --agent rsl_rl_student_ppo_cfg_entry_point
+```
+
 ---
 
 ## 📁 Repository Structure

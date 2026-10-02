@@ -64,9 +64,11 @@ IDLE_STEP_RAD = 1.0e-3
 class ExpertBank:
     """Expert references precomputed per trajectory, on the simulation device."""
 
-    def __init__(self, path: str, device: str, valve_open_rad: float):
+    def __init__(self, path: str, device: str, valve_open_rad: float, task: str | None = None):
         bank = torch.load(path, map_location="cpu", weights_only=False)
         meta = bank["meta"]
+        if task is not None and meta.get("task") != task:
+            raise ValueError(f"{path} was recorded on {meta.get('task')}, not {task}")
         if list(meta["arm_joint_names"]) != list(ANYMAL_ARM_JOINT_NAMES):
             raise ValueError(f"Bank joint order {meta['arm_joint_names']} differs from {ANYMAL_ARM_JOINT_NAMES}")
         self.meta = meta
@@ -211,7 +213,8 @@ class reset_from_expert_bank(ManagerTermBase):
         super().__init__(cfg, env)
         from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
 
-        self.bank = ExpertBank(cfg.params["path"], env.device, mdp.VALVE_OPEN_RAD)
+        valve_task = mdp.valve_task(env)
+        self.bank = ExpertBank(cfg.params["path"], env.device, valve_task.open_rad, cfg.params.get("expert_task"))
         self.index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.start_step = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         robot: BaseArticulation = env.scene["robot"]
@@ -219,14 +222,19 @@ class reset_from_expert_bank(ManagerTermBase):
         self._arm_ids = robot.find_joints(list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)[0]
         # The joint the bank recorded as gripper_q (build_expert_bank.py).
         self._finger_id = robot.find_joints(env.cfg.actions.gripper_action.joint_names)[0][0]
-        valve: BaseArticulation = env.scene["ball_valve"]
-        self._valve_joint = valve.find_joints(mdp.VALVE_JOINT)[0]
+        self._valve_name = valve_task.asset_name
+        self._valve_joint = env.scene[self._valve_name].find_joints(valve_task.joint_name)[0]
         # Reference terms find the bank here.
         env.expert_bank_term = self
         print(f"[INFO] Expert bank: {self.bank.size} trajectories from {cfg.params['path']}")
 
     def __call__(
-        self, env: ManagerBasedEnv, env_ids: torch.Tensor | None, path: str, mid_start_prob: float = 0.0
+        self,
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor | None,
+        path: str,
+        mid_start_prob: float = 0.0,
+        expert_task: str | None = None,
     ) -> None:
         ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         draw = torch.randint(0, self.bank.size, (len(ids),), device=env.device)
@@ -243,7 +251,7 @@ class reset_from_expert_bank(ManagerTermBase):
         self.index[ids] = draw
         self.start_step[ids] = 0
         robot: BaseArticulation = env.scene["robot"]
-        valve: BaseArticulation = env.scene["ball_valve"]
+        valve: BaseArticulation = env.scene[self._valve_name]
         pose = self.bank.valve_pose_env[draw].clone()
         pose[:, :3] += env.scene.env_origins[ids]
         valve.write_root_pose_to_sim_index(root_pose=pose, env_ids=ids)
@@ -269,7 +277,7 @@ class reset_from_expert_bank(ManagerTermBase):
         prev, nxt = (b - 1).clamp(min=0), (b + 1).clamp(max=bank.q.shape[1] - 1)
         span = ((nxt - prev).clamp(min=1) * bank.dt)[:, None]
         robot: BaseArticulation = env.scene["robot"]
-        valve: BaseArticulation = env.scene["ball_valve"]
+        valve: BaseArticulation = env.scene[self._valve_name]
         robot.write_joint_position_to_sim_index(position=bank.q[draw, b], joint_ids=self._arm_ids, env_ids=ids)
         robot.write_joint_velocity_to_sim_index(
             velocity=(bank.q[draw, nxt] - bank.q[draw, prev]) / span, joint_ids=self._arm_ids, env_ids=ids
@@ -352,11 +360,15 @@ def track_expert_valve(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
     return torch.exp(-expert_valve_error(env)[:, 0].square() / std**2)
 
 
-def reset_from_expert_bank_cfg(path: str, mid_start_prob: float = 0.0) -> EventTermCfg:
-    """Reset event drawing each episode's start from the bank at ``path`` (see :class:`reset_from_expert_bank`)."""
-    return EventTermCfg(
-        func=reset_from_expert_bank, mode="reset", params={"path": path, "mid_start_prob": mid_start_prob}
-    )
+def reset_from_expert_bank_cfg(path: str, mid_start_prob: float = 0.0, expert_task: str | None = None) -> EventTermCfg:
+    """Reset event drawing each episode's start from the bank at ``path`` (see :class:`reset_from_expert_bank`).
+
+    ``expert_task``, when given, is the scripted task the bank must have been recorded on.
+    """
+    params = {"path": path, "mid_start_prob": mid_start_prob}
+    if expert_task is not None:
+        params["expert_task"] = expert_task
+    return EventTermCfg(func=reset_from_expert_bank, mode="reset", params=params)
 
 
 def expert_gripper_reference(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:

@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
 VALVE_JOINT = "RevoluteJoint"
-LEVER_BODY = "alavanca_pivot"
 # HiveBoard ball-valve limits are [-pi/2, 0]; negative rotation opens it.
 VALVE_CLOSED_RAD = 0.0
 VALVE_OPEN_RAD = -1.5707963267948966
@@ -49,6 +48,76 @@ VALVE_OPEN_RAD = -1.5707963267948966
 # the target follows the lever while it turns.
 GRASP_OFFSET_POS = (0.0, -0.0244, 0.0)
 GRASP_OFFSET_QUAT = (0.7071068, 0.0, 0.0, 0.7071068)
+
+
+@configclass
+class ValveTaskCfg:
+    """Which valve the RL terms act on, and where on it the expert grasps.
+
+    Set as ``valve_task`` on the environment configuration; every term in this
+    package reads it from there. The defaults are the ball valve's.
+    """
+
+    asset_name: str = "ball_valve"
+    """Scene articulation of the valve."""
+    joint_name: str = VALVE_JOINT
+    """The joint that is turned."""
+    closed_rad: float = VALVE_CLOSED_RAD
+    """Joint angle when closed [rad]."""
+    open_rad: float = VALVE_OPEN_RAD
+    """Joint angle when open [rad]."""
+    grasp_frame: str = "lever_pivot"
+    """``target_frame`` entry the grasp offset is relative to. It must be attached to the turning body
+    (the last element of its prim path), so the grasp target turns with the valve."""
+    grasp_offset_pos: tuple[float, float, float] = GRASP_OFFSET_POS
+    """Expert grasp TCP position in :attr:`grasp_frame` [m]."""
+    grasp_offset_quat: tuple[float, float, float, float] = GRASP_OFFSET_QUAT
+    """Expert grasp TCP orientation in :attr:`grasp_frame`, xyzw."""
+    closed_end_stop: bool = True
+    """Whether a joint limit stops the valve at :attr:`closed_rad`. Without one (a continuous handwheel), a
+    torque toward closed spins it past closed, so ``valve_dynamics`` refuses a seat torque or spring."""
+
+
+def valve_task(env: ManagerBasedEnv) -> ValveTaskCfg:
+    """The environment's :class:`ValveTaskCfg` (``env.cfg.valve_task``)."""
+    task = getattr(env.cfg, "valve_task", None)
+    if task is None:
+        raise RuntimeError("The RL valve terms need env.cfg.valve_task (a ValveTaskCfg).")
+    return task
+
+
+def valve_asset(env: ManagerBasedEnv) -> BaseArticulation:
+    """The valve articulation."""
+    return env.scene[valve_task(env).asset_name]
+
+
+def valve_joint_id(env: ManagerBasedEnv) -> int:
+    """Index of the turned joint in the valve articulation."""
+    task = valve_task(env)
+    return env.scene[task.asset_name].find_joints(task.joint_name)[0][0]
+
+
+def valve_rate(env: ManagerBasedEnv) -> torch.Tensor:
+    """Valve joint rate [rad/s], shape ``(num_envs,)``."""
+    return valve_asset(env).data.joint_vel.torch[:, valve_joint_id(env)]
+
+
+def _progress_of(env: ManagerBasedEnv, angle: torch.Tensor) -> torch.Tensor:
+    """Opening progress of ``angle`` [rad], unclamped: 0 closed, 1 open."""
+    task = valve_task(env)
+    return (angle - task.closed_rad) / (task.open_rad - task.closed_rad)
+
+
+def _opening_sign(env: ManagerBasedEnv) -> float:
+    """+1 if opening increases the joint angle, -1 if it decreases it."""
+    task = valve_task(env)
+    return 1.0 if task.open_rad > task.closed_rad else -1.0
+
+
+def _is_open(env: ManagerBasedEnv, angle: torch.Tensor, threshold_rad: float) -> torch.Tensor:
+    """True where ``angle`` is within ``threshold_rad`` [rad] of open, or past it."""
+    task = valve_task(env)
+    return _opening_sign(env) * (task.open_rad - angle) <= threshold_rad
 
 
 ##
@@ -206,10 +275,13 @@ def _body_frame_w(
     return math_utils.combine_frame_transforms(pos, quat, off_pos, off_rot)
 
 
-def _lever_frame_w(env: ManagerBasedEnv, frame_name: str = "lever_pivot") -> tuple[torch.Tensor, torch.Tensor]:
-    """A ``target_frame`` target (e.g. ``lever_pivot``) from the lever body and the scene's offset."""
-    frame_cfg = next(f for f in env.scene.cfg.target_frame.target_frames if f.name == frame_name)
-    return _body_frame_w(env, "ball_valve", LEVER_BODY, frame_cfg.offset.pos, frame_cfg.offset.rot)
+def _lever_frame_w(env: ManagerBasedEnv, frame_name: str | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """A ``target_frame`` target (default: the grasp frame, e.g. ``lever_pivot``) from its body and the scene's offset."""
+    frame_cfg = next(
+        f for f in env.scene.cfg.target_frame.target_frames if f.name == (frame_name or valve_task(env).grasp_frame)
+    )
+    body = frame_cfg.prim_path.rsplit("/", 1)[-1]
+    return _body_frame_w(env, valve_task(env).asset_name, body, frame_cfg.offset.pos, frame_cfg.offset.rot)
 
 
 def grasp_target_w(env: ManagerBasedEnv) -> tuple[torch.Tensor, torch.Tensor]:
@@ -221,8 +293,9 @@ def grasp_target_w(env: ManagerBasedEnv) -> tuple[torch.Tensor, torch.Tensor]:
     clocked. The target is the one nearer the TCP's current orientation.
     """
     pos, quat = _lever_frame_w(env)
-    off_pos = torch.tensor(GRASP_OFFSET_POS, device=env.device).expand_as(pos)
-    off_quat = torch.tensor(GRASP_OFFSET_QUAT, device=env.device).expand_as(quat)
+    task = valve_task(env)
+    off_pos = torch.tensor(task.grasp_offset_pos, device=env.device).expand_as(pos)
+    off_quat = torch.tensor(task.grasp_offset_quat, device=env.device).expand_as(quat)
     goal_pos, goal_quat = math_utils.combine_frame_transforms(pos, quat, off_pos, off_quat)
     flipped = math_utils.quat_mul(goal_quat, goal_quat.new_tensor([1.0, 0.0, 0.0, 0.0]).expand_as(goal_quat))
     _, tcp_quat = tcp_w(env)
@@ -244,16 +317,14 @@ def tcp_grasp_error(env: ManagerBasedEnv) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.norm(tcp_pos - goal_pos, dim=-1), math_utils.quat_error_magnitude(tcp_quat, goal_quat)
 
 
-def valve_angle(env: ManagerBasedEnv, valve_name: str = "ball_valve") -> torch.Tensor:
+def valve_angle(env: ManagerBasedEnv) -> torch.Tensor:
     """Valve joint angle [rad], shape ``(num_envs,)``."""
-    valve: BaseArticulation = env.scene[valve_name]
-    return valve.data.joint_pos.torch[:, valve.find_joints(VALVE_JOINT)[0][0]]
+    return valve_asset(env).data.joint_pos.torch[:, valve_joint_id(env)]
 
 
 def valve_progress(env: ManagerBasedEnv) -> torch.Tensor:
     """Opening progress in [0, 1]: 0 closed, 1 fully open."""
-    q = valve_angle(env)
-    return ((q - VALVE_CLOSED_RAD) / (VALVE_OPEN_RAD - VALVE_CLOSED_RAD)).clamp(0.0, 1.0)
+    return _progress_of(env, valve_angle(env)).clamp(0.0, 1.0)
 
 
 def _gripper_closed(env: ManagerBasedEnv) -> torch.Tensor:
@@ -296,7 +367,7 @@ def tcp_pose_b(env: ManagerBasedEnv) -> torch.Tensor:
 
 def valve_pose_b(env: ManagerBasedEnv) -> torch.Tensor:
     """True valve root pose in the base frame (privileged), shape ``(N, 9)``."""
-    valve: BaseArticulation = env.scene["ball_valve"]
+    valve = valve_asset(env)
     return _in_base(env, valve.data.root_pos_w.torch, valve.data.root_quat_w.torch)
 
 
@@ -312,9 +383,7 @@ def tcp_to_grasp_b(env: ManagerBasedEnv) -> torch.Tensor:
 
 def valve_state(env: ManagerBasedEnv) -> torch.Tensor:
     """Opening progress and joint rate [rad/s] (privileged), shape ``(N, 2)``."""
-    valve: BaseArticulation = env.scene["ball_valve"]
-    rate = valve.data.joint_vel.torch[:, valve.find_joints(VALVE_JOINT)[0][0]]
-    return torch.stack((valve_progress(env), rate), dim=-1)
+    return torch.stack((valve_progress(env), valve_rate(env)), dim=-1)
 
 
 def pad_valve_force(env: ManagerBasedEnv, sensor_names: tuple[str, ...] = ("finger_contact", "jaw_contact")):
@@ -421,7 +490,7 @@ class registered_valve_b(ManagerTermBase):
             return
         params = self.cfg.params
         n = len(ids)
-        valve: BaseArticulation = self._env.scene["ball_valve"]
+        valve = valve_asset(self._env)
         pos, quat = _in_base_quat(
             self._env, valve.data.root_pos_w.torch[ids], valve.data.root_quat_w.torch[ids], env_ids=ids
         )
@@ -432,7 +501,7 @@ class registered_valve_b(ManagerTermBase):
         self._pose[ids, 3:] = rot6d(math_utils.quat_mul(bias_quat, quat))
         angle = valve_angle(self._env)[ids]
         angle = angle + (torch.rand(n, device=self.device) * 2.0 - 1.0) * float(params.get("angle_noise", 0.0))
-        self._progress[ids, 0] = (angle - VALVE_CLOSED_RAD) / (VALVE_OPEN_RAD - VALVE_CLOSED_RAD)
+        self._progress[ids, 0] = _progress_of(self._env, angle)
 
     def __call__(
         self,
@@ -503,9 +572,7 @@ def valve_unheld_motion(env: ManagerBasedRLEnv, dist_threshold: float, ang_thres
     Teacher v2 struck the lever on its approach, flinging it half open at
     ~11 rad/s before grasping. Any valve motion before the grasp is an impact.
     """
-    valve: BaseArticulation = env.scene["ball_valve"]
-    rate = valve.data.joint_vel.torch[:, valve.find_joints(VALVE_JOINT)[0][0]]
-    return rate.square() * (~lever_held(env, dist_threshold, ang_threshold)).float()
+    return valve_rate(env).square() * (~lever_held(env, dist_threshold, ang_threshold)).float()
 
 
 def pad_force_excess(env: ManagerBasedRLEnv, max_force: float) -> torch.Tensor:
@@ -520,7 +587,7 @@ def pad_force_excess(env: ManagerBasedRLEnv, max_force: float) -> torch.Tensor:
 
 def valve_open_success(env: ManagerBasedRLEnv, threshold_rad: float) -> torch.Tensor:
     """Success: the valve is within ``threshold_rad`` [rad] of fully open."""
-    return valve_angle(env) <= VALVE_OPEN_RAD + threshold_rad
+    return _is_open(env, valve_angle(env), threshold_rad)
 
 
 def released_and_clear(
@@ -545,7 +612,7 @@ def released_and_clear(
 def invalid_state(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, max_joint_vel: float = 50.0) -> torch.Tensor:
     """Terminate on non-finite state or runaway joint rates [rad/s] (solver blow-ups)."""
     robot: BaseArticulation = env.scene["robot"]
-    valve: BaseArticulation = env.scene["ball_valve"]
+    valve = valve_asset(env)
     arm_vel = robot.data.joint_vel.torch[:, asset_cfg.joint_ids]
     vel = torch.cat((arm_vel, valve.data.joint_vel.torch), dim=-1)
     nonfinite = (~torch.isfinite(robot.data.joint_pos.torch)).any(dim=-1) | (~torch.isfinite(vel)).any(dim=-1)
@@ -586,13 +653,13 @@ class ValveTurnRateCommand(CommandTerm):
 
     @property
     def command(self) -> torch.Tensor:
-        ref_progress = (self.ref_angle - VALVE_CLOSED_RAD) / (VALVE_OPEN_RAD - VALVE_CLOSED_RAD)
+        ref_progress = _progress_of(self._env, self.ref_angle)
         return torch.stack((self.rate, ref_progress), dim=-1)
 
     @property
     def reference_done(self) -> torch.Tensor:
         """True once the reference has reached fully open."""
-        return self.ref_angle <= VALVE_OPEN_RAD + 1.0e-6
+        return _is_open(self._env, self.ref_angle, 1.0e-6)
 
     def _update_metrics(self):
         self.metrics["tracking_error_rad"] = (valve_angle(self._env) - self.ref_angle).abs()
@@ -619,9 +686,14 @@ class ValveTurnRateCommand(CommandTerm):
         self.engaged_time += self._env.step_dt * self.engaged.float()
         # The reference starts once the gripper has had time to close.
         moving = self.engaged_time > self.cfg.engage_delay_s
-        # Negative rotation opens the HiveBoard valve.
-        self.ref_angle -= self.rate * self._env.step_dt * moving.float()
-        self.ref_angle.clamp_(min=VALVE_OPEN_RAD)
+        task = valve_task(self._env)
+        sign = _opening_sign(self._env)
+        self.ref_angle += sign * self.rate * self._env.step_dt * moving.float()
+        # Clamped at open (negative rotation opens the HiveBoard valves).
+        if sign < 0:
+            self.ref_angle.clamp_(min=task.open_rad)
+        else:
+            self.ref_angle.clamp_(max=task.open_rad)
 
 
 @configclass
@@ -680,17 +752,15 @@ def valve_opened_on_schedule(
     Opening ahead of the reference earns nothing extra, so there is no reward
     for turning faster than commanded.
     """
-    opened = valve_angle(env) <= VALVE_OPEN_RAD + threshold_rad
+    opened = _is_open(env, valve_angle(env), threshold_rad)
     on_schedule = _turn_command(env, command_name).reference_done
     return (opened & on_schedule & lever_held(env, dist_threshold, ang_threshold)).float()
 
 
 def valve_rate_excess(env: ManagerBasedRLEnv, factor: float, command_name: str = "valve_turn") -> torch.Tensor:
     """Squared valve rate [rad/s] above ``factor`` times the commanded rate."""
-    valve: BaseArticulation = env.scene["ball_valve"]
-    rate = valve.data.joint_vel.torch[:, valve.find_joints(VALVE_JOINT)[0][0]]
     limit = factor * _turn_command(env, command_name).rate
-    return (rate.abs() - limit).clamp(min=0.0).square()
+    return (valve_rate(env).abs() - limit).clamp(min=0.0).square()
 
 
 def valve_rate_deviation(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
@@ -701,7 +771,4 @@ def valve_rate_deviation(env: ManagerBasedRLEnv, command_name: str = "valve_turn
     this asks for a steady turn at the commanded speed.
     """
     term = _turn_command(env, command_name)
-    valve: BaseArticulation = env.scene["ball_valve"]
-    rate = valve.data.joint_vel.torch[:, valve.find_joints(VALVE_JOINT)[0][0]]
-    # Opening is negative rotation.
-    return (rate + term.rate).square() * term.turning.float()
+    return (valve_rate(env) - _opening_sign(env) * term.rate).square() * term.turning.float()

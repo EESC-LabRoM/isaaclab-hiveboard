@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Evaluate an RSL-RL teacher or student checkpoint on the ANYmal ball valve.
+"""Evaluate an RSL-RL teacher or student checkpoint on an ANYmal RL valve task (``--task``).
 
 Runs ``--episodes`` full episodes, spread over ``--num_envs`` parallel
 environments, and reports the metrics the benchmark papers use (NIST task
@@ -31,6 +31,7 @@ Hydra overrides go after the flags, e.g. a registration-error sweep:
 """
 
 import argparse
+import importlib
 import json
 import math
 import os
@@ -170,8 +171,10 @@ def main() -> None:
         runner.load(os.path.abspath(args.checkpoint))
         policy = runner.get_inference_policy(device=env.unwrapped.device)
 
-        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import env as task_env
         from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        # The task's env module: its hold gate and success tolerance.
+        task_env = importlib.import_module(gym.spec(args.task).kwargs["env_cfg_entry_point"].split(":")[0])
 
         uenv = env.unwrapped
         n_envs, dev, dt = uenv.num_envs, uenv.device, uenv.step_dt

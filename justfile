@@ -141,34 +141,42 @@ il-dagger dataset rounds="5" *args:
 il-eval *args:
     uv run python scripts/imitation/eval_policy.py {{args}}
 
+# Valve of the rl-* recipes: BallValve (default) or SmallValve, e.g. `RL_TOOL=SmallValve just rl-teacher`
+rl_tool := env("RL_TOOL", "BallValve")
+
+# Build the cuRobo expert bank the RL task resets from and tracks
+rl-bank num_envs="512" num_trajectories="5000" *args:
+    uv run python scripts/rl/build_expert_bank.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-v0 \
+        --num_envs {{num_envs}} --num_trajectories {{num_trajectories}} {{args}}
+
 # RL teacher: PPO on privileged state (ANYmal ball valve by default)
 rl-teacher num_envs="4096" *args:
-    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} {{args}}
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-v0 --num_envs {{num_envs}} {{args}}
 
 # RL student: distil the teacher checkpoint onto proprioception + registered valve pose
 rl-student teacher num_envs="4096" *args:
-    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} \
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-v0 --num_envs {{num_envs}} \
         --agent rsl_rl_distillation_cfg_entry_point --checkpoint {{teacher}} \
         env.terminations.expert_drift=null env.terminations.expert_valve_lag=null {{args}}
 
 # RL student trained directly with PPO: deployable actor, privileged critic
 rl-student-ppo num_envs="4096" *args:
-    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-BallValve-RL-v0 --num_envs {{num_envs}} \
+    uv run python scripts/rl/train.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-v0 --num_envs {{num_envs}} \
         --agent rsl_rl_student_ppo_cfg_entry_point {{args}}
 
 # Replay expert-bank trajectories in simulation, shown in Viser (http://localhost:9080)
 rl-bank-replay *args:
-    uv run python scripts/rl/replay_expert_bank.py {{args}}
+    uv run python scripts/rl/replay_expert_bank.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-Play-v0 {{args}}
 
 # Success rate / reliability / stage metrics of a teacher or student checkpoint
 rl-eval checkpoint *args:
-    uv run python scripts/rl/evaluate.py --checkpoint {{checkpoint}} {{args}}
+    uv run python scripts/rl/evaluate.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-Play-v0 --checkpoint {{checkpoint}} {{args}}
 
 # Watch a checkpoint in the Newton viewer and export it (TorchScript + ONNX)
 rl-play checkpoint *args:
-    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-BallValve-RL-Play-v0 --checkpoint {{checkpoint}} --viz newton {{args}}
+    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-Play-v0 --checkpoint {{checkpoint}} --viz newton {{args}}
 
 # Record one 12 s episode of a checkpoint to <run>/videos/play/ (student: --agent rsl_rl_distillation_cfg_entry_point)
 rl-video checkpoint *args:
-    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-BallValve-RL-Play-v0 --checkpoint {{checkpoint}} \
+    uv run python scripts/rl/play.py --task Isaac-HiveBoard-Anymal-{{rl_tool}}-RL-Play-v0 --checkpoint {{checkpoint}} \
         --num_envs 1 --video --video_length 240 --viz newton {{args}}
