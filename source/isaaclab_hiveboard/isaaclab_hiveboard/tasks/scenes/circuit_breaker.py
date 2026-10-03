@@ -22,6 +22,13 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import CIRCUIT_BREAKER_USD, HONEYCOMB_USD
 
+#: End-stop damping [N·m·s/rad] for ``mdp.events.set_joint_limit_damping``.
+#: Newton's default 10 left the light lever's stops near-elastic: flicked into
+#: a stop at 6-15 rad/s it sprang back 50-60 deg, often to the other stop. 100
+#: settles it on the stop (<2 deg overshoot) for armature 0.0005-0.002; 400
+#: left it creeping ~1 deg past.
+BREAKER_LIMIT_KD = 100.0
+
 
 @configclass
 class CircuitBreakerSceneCfg(InteractiveSceneCfg):

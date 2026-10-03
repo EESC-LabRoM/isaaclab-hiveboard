@@ -65,11 +65,19 @@ parser.add_argument("--output", default=None, help="JSON output path (default: n
 parser.add_argument(
     "--trace", action="store_true", help="Print environment 0 step by step for its first episode, and what ended it."
 )
+parser.add_argument(
+    "--video",
+    default=None,
+    help="Record environment 0 to this directory (Newton viewer), close up on the mechanism; each of its episodes"
+    " is listed with its start time in the video. Use --num_envs 1 to film every episode.",
+)
 add_launcher_args(parser)
 args, hydra_args = setup_preset_cli(parser)
 if not any(t.startswith(("physics=", "presets=")) for t in hydra_args):
     hydra_args.append("physics=newton_mjwarp")
-if args.visualizer is None and not getattr(args, "visualizer_explicit", False):
+if args.video:
+    args.visualizer = ["newton_gl"]
+elif args.visualizer is None and not getattr(args, "visualizer_explicit", False):
     args.visualizer = []
 sys.argv = [sys.argv[0], *hydra_args]
 
@@ -162,6 +170,19 @@ def main() -> None:
     env_cfg, agent_cfg = resolve_task_config(args.task, args.agent)
     env_cfg.scene.num_envs = min(args.num_envs, args.episodes)
     env_cfg.seed = args.seed
+    if args.video:
+        from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+
+        # Side view of the mechanism (which sits ~1 m ahead of the robot) and the hand, in env-0 coordinates.
+        env_cfg.viewer.origin_type = "env"
+        env_cfg.viewer.env_index = 0
+        env_cfg.viewer.eye = (0.8, 0.5, 0.8)
+        env_cfg.viewer.lookat = (0.95, 0.0, 0.65)
+        steps = int(math.ceil(env_cfg.episode_length_s / (env_cfg.sim.dt * env_cfg.decimation)))
+        episodes0 = math.ceil(args.episodes / env_cfg.scene.num_envs) + 1
+        env_cfg.video_recorders = [
+            VideoRecorderCfg(output_dir=os.path.abspath(args.video), video_length=steps * episodes0, video_interval=0)
+        ]
 
     with launch_simulation(env_cfg, args):
         agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())
@@ -197,6 +218,11 @@ def main() -> None:
                 "opened_any": torch.zeros(n_envs, dtype=torch.bool, device=dev),
                 # Valve open with the arm let go and backed off, at the latest step.
                 "clear": torch.zeros(n_envs, dtype=torch.bool, device=dev),
+                # The latest step's progress, TCP distance from the grasp target [m] and pad force [N], for why
+                # an episode did not end released and clear.
+                "end_progress": torch.zeros(n_envs, device=dev),
+                "end_tcp_dist": torch.zeros(n_envs, device=dev),
+                "end_pad_force": torch.zeros(n_envs, device=dev),
                 "t_success": torch.full((n_envs,), float("nan"), device=dev),
                 "max_progress": torch.zeros(n_envs, device=dev),
                 "max_pad_force": torch.zeros(n_envs, device=dev),
@@ -221,6 +247,8 @@ def main() -> None:
             }
 
         stats, step_count = fresh(), torch.zeros(n_envs, device=dev)
+        env0_episodes: list[dict] = []
+        env0_start = total_steps = 0
         episodes: list[dict] = []
         obs = env.get_observations()
         trace_done = False
@@ -238,9 +266,14 @@ def main() -> None:
                 stats["grasped"] |= held
                 stats["opened_any"] |= opened
                 stats["clear"] = mdp.released_and_clear(uenv, task_env.SUCCESS_TOLERANCE_RAD)
-                new = opened & held & ~stats["success"]
+                stats["end_progress"] = progress.clone()
+                stats["end_tcp_dist"] = dist.clone()
+                stats["end_pad_force"] = mdp.pad_valve_force(uenv).max(dim=-1).values
+                # Held now, or for a pushed lever touched before (it runs ahead of the hand).
+                credited = opened & mdp.opening_credited(uenv, held, stats["grasped"])
+                new = credited & ~stats["success"]
                 stats["t_success"][new] = step_count[new] * dt
-                stats["success"] |= opened & held
+                stats["success"] |= credited
                 stats["max_progress"] = torch.maximum(stats["max_progress"], progress)
                 # Achieved turning rate: mean |dq/dt| while held and mid-turn.
                 turning = held & (progress > 0.05) & (progress < 0.95)
@@ -291,6 +324,7 @@ def main() -> None:
                 obs, _, dones, extras = env.step(policy(obs))
                 policy.reset(dones)
                 step_count += 1
+                total_steps += 1
                 invalid = uenv.termination_manager.get_term("invalid")
                 if args.trace and not trace_done and bool(dones[0]):
                     manager = uenv.termination_manager
@@ -300,11 +334,27 @@ def main() -> None:
                 for i in dones.nonzero(as_tuple=False).flatten().tolist():
                     if len(episodes) >= args.episodes:
                         break
+                    if i == 0:
+                        # Environment 0's episodes, by their span in the video (one frame per env step).
+                        env0_episodes.append(
+                            {
+                                "start_s": env0_start * dt,
+                                "end_s": total_steps * dt,
+                                "success": bool(stats["success"][0]),
+                                "complete": bool(stats["success"][0] and stats["clear"][0]),
+                                "end_progress": float(stats["end_progress"][0]),
+                                "end_tcp_dist_m": float(stats["end_tcp_dist"][0]),
+                            }
+                        )
+                        env0_start = total_steps
                     episodes.append(
                         {
                             "success": bool(stats["success"][i]),
                             "opened_any": bool(stats["opened_any"][i]),
                             "released_clear_at_end": bool(stats["clear"][i]),
+                            "end_progress": float(stats["end_progress"][i]),
+                            "end_tcp_dist_m": float(stats["end_tcp_dist"][i]),
+                            "end_pad_force_n": float(stats["end_pad_force"][i]),
                             "time_to_success_s": float(stats["t_success"][i]),
                             "reached": bool(stats["reached"][i]),
                             "grasped": bool(stats["grasped"][i]),
@@ -379,6 +429,8 @@ def main() -> None:
         "per_joint": per_joint,
         "per_episode": episodes,
     }
+    if args.video:
+        summary["video"] = {"dir": os.path.abspath(args.video), "env0_episodes": env0_episodes}
     output = args.output or os.path.join(
         os.path.dirname(os.path.abspath(args.checkpoint)),
         f"eval_{os.path.splitext(os.path.basename(args.checkpoint))[0]}.json",
@@ -386,6 +438,14 @@ def main() -> None:
     with open(output, "w") as f:
         json.dump(summary, f, indent=2)
 
+    if args.video:
+        print(f"\nvideo of environment 0 in {os.path.abspath(args.video)}:")
+        for k, e in enumerate(env0_episodes):
+            outcome = "complete" if e["complete"] else ("switched/opened, not clear" if e["success"] else "FAILED")
+            print(
+                f"  episode {k}: {e['start_s']:6.1f}-{e['end_s']:6.1f} s  {outcome}"
+                f" (end progress {e['end_progress']:.2f}, TCP {e['end_tcp_dist_m']:.3f} m from the target)"
+            )
     print(f"\n=== {args.task} | {os.path.basename(args.checkpoint)} ({args.agent}) ===")
     print(f"success      {successes}/{n} = {successes / n:.1%}  (95% Wilson [{lo:.1%}, {hi:.1%}])")
     print(f"reliability  >= {summary['reliability_lower_bound_95']:.1%} at 95% confidence (Clopper-Pearson)")

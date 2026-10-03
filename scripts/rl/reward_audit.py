@@ -84,6 +84,8 @@ def main() -> None:
         names = rewards.active_terms
         terminations = env.termination_manager
 
+        # A pushing expert closes its hand during the reach; a grasping one keeps it open until the grasp.
+        push = bool(env.cfg.valve_task.push)
         env.reset()
         behaviour = torch.arange(n, device=dev) // (n // len(BEHAVIOURS))
         behaviour.clamp_(max=len(BEHAVIOURS) - 1)
@@ -100,7 +102,8 @@ def main() -> None:
                 b = bank._bank_step(i, t)
                 reaching = t < bank.grasp_step[i]
                 target = torch.where(reaching[:, None], bank.reach_reference(i, t), arm_target[i, b])
-                grip = torch.where(reaching, torch.ones_like(gripper_cmd[i, b]), gripper_cmd[i, b])
+                reach_grip = gripper_cmd[i, b] if push else torch.ones_like(gripper_cmd[i, b])
+                grip = torch.where(reaching, reach_grip, gripper_cmd[i, b])
                 grasp_step = bank.grasp_step[i]
                 holding = ((behaviour == 1) & (t >= grasp_step + int(round(args.hold_after_s / dt)))) | (
                     (behaviour >= 2) & (b >= bank.open_step[i])

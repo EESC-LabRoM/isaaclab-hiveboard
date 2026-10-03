@@ -399,6 +399,45 @@ gym.register(
     },
 )
 
+_ANYMAL_CIRCUIT_BREAKER_RL_AGENTS = {
+    "rsl_rl_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.agents.rsl_rl_cfg:AnymalCircuitBreakerTeacherPPORunnerCfg"
+    ),
+    "default_agent": "rsl_rl",
+    "rsl_rl_student_ppo_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.agents.rsl_rl_cfg:AnymalCircuitBreakerStudentPPORunnerCfg"
+    ),
+    "rsl_rl_student_ppo_rnd_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.agents.rsl_rl_cfg:AnymalCircuitBreakerStudentPPORNDRunnerCfg"
+    ),
+    "rsl_rl_distillation_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.agents.rsl_rl_cfg:AnymalCircuitBreakerStudentRunnerCfg"
+    ),
+    "rsl_rl_distillation_recurrent_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.agents.rsl_rl_cfg:AnymalCircuitBreakerStudentRecurrentRunnerCfg"
+    ),
+}
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.env:AnymalCircuitBreakerRLEnvCfg",
+        **_ANYMAL_CIRCUIT_BREAKER_RL_AGENTS,
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-CircuitBreaker-RL-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.circuit_breaker_rl.env:AnymalCircuitBreakerRLEnvCfg_PLAY",
+        **_ANYMAL_CIRCUIT_BREAKER_RL_AGENTS,
+    },
+)
+
 gym.register(
     id="Isaac-HiveBoard-Anymal-CircuitBreaker-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

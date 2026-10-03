@@ -88,6 +88,11 @@ class ValveTaskCfg:
     """Count the valve as held when the gripper is closed with both pads touching it (over
     ``expert_bank.CONTACT_FORCE_N``), instead of at the expert grasp pose. For a part that is regrasped and
     turned through several grasps (a nut), where the hand turns away from the fixed grasp pose."""
+    push: bool = False
+    """The expert pushes the lever over with its closed hand instead of grasping it (a circuit breaker's
+    toggle). The lever counts as held while either pad touches it; reaching open counts once a pad has
+    touched it earlier in the episode, since a pushed lever runs ahead of the hand to its stop
+    (:func:`opening_credited`); and letting go needs no open gripper (:func:`released_and_clear`)."""
 
 
 def valve_task(env: ManagerBasedEnv) -> ValveTaskCfg:
@@ -578,13 +583,15 @@ def lever_held(env: ManagerBasedEnv, dist_threshold: float, ang_threshold: float
     lever at the wrong orientation is a fist pushing the lever, which the
     first teacher run learned to do (0.99 s opening, 0% grasps). With
     :attr:`ValveTaskCfg.hold_by_contact` both pads must touch the valve instead
-    (the thresholds are then unused).
+    (the thresholds are then unused). With :attr:`ValveTaskCfg.push`, either pad touching it.
     """
     task = valve_task(env)
-    if task.hold_by_contact:
+    if task.hold_by_contact or task.push:
         from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import CONTACT_FORCE_N
 
         touching = pad_valve_force(env) > CONTACT_FORCE_N
+        if task.push:
+            return touching.any(dim=-1)
         return touching.all(dim=-1) & _gripper_closed(env).bool()
     dist, ang = tcp_grasp_error(env)
     return (dist < dist_threshold) & (ang < ang_threshold) & _gripper_closed(env).bool()
@@ -644,15 +651,23 @@ def released_and_clear(
     Open within ``threshold_rad`` [rad], gripper commanded open, no pad force
     above ``max_force`` [N] from the valve, and the TCP at least
     ``min_distance`` [m] from the grasp point (the expert retreats ~10 cm to
-    its approach point).
+    its approach point). A pushed lever (:attr:`ValveTaskCfg.push`) is let go of with the hand still
+    closed.
     """
     dist, _ = tcp_grasp_error(env)
+    let_go = torch.ones_like(dist, dtype=torch.bool) if valve_task(env).push else _gripper_closed(env) == 0.0
     return (
         valve_open_success(env, threshold_rad)
-        & (_gripper_closed(env) == 0.0)
+        & let_go
         & (pad_valve_force(env).max(dim=-1).values < max_force)
         & (dist >= min_distance)
     )
+
+
+def opening_credited(env: ManagerBasedEnv, held: torch.Tensor, ever_held: torch.Tensor) -> torch.Tensor:
+    """Whether reaching open now counts as the task's: the valve is held now (:func:`lever_held`) or, for a
+    pushed lever (:attr:`ValveTaskCfg.push`), was touched earlier in the episode (``ever_held``)."""
+    return ever_held if valve_task(env).push else held
 
 
 def invalid_state(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, max_joint_vel: float = 50.0) -> torch.Tensor:

@@ -1622,3 +1622,46 @@ def set_contact_stiffness(
         f"on {len(sel)} shapes matching {shape_regex!r}",
         flush=True,
     )
+
+
+def set_joint_limit_damping(
+    env: ManagerBasedEnv,
+    env_ids: Sequence[int] | torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    kd: float,
+) -> None:
+    """Set the Newton joint-limit damping ``kd`` [N·m·s/rad] of ``asset_cfg``'s joints.
+
+    MJWarp scales Newton's force-space limit ``(ke, kd)`` by the joint's inverse
+    inertia, so on a light joint the default ``kd`` 10 gives a damping ratio
+    well below one and the end stop throws the joint back. Isaac Lab has no
+    property for it; this writes ``model.joint_limit_kd``, which the solver
+    keeps when later events change the joint's armature or friction.
+    """
+    del env_ids
+    import re
+
+    try:
+        from isaaclab_newton.physics import NewtonManager as SimulationManager
+        from newton import ModelFlags
+    except ImportError as err:
+        print(f"[WARN] set_joint_limit_damping: Newton not available ({err}).")
+        return
+
+    asset = env.scene[asset_cfg.name]
+    names = asset.find_joints(asset_cfg.joint_names)[1]
+    model = SimulationManager.get_model()
+    pattern = re.compile(rf"{asset.cfg.prim_path}/.*/({'|'.join(map(re.escape, names))})$")
+    sel = [i for i, label in enumerate(model.joint_label) if pattern.match(str(label))]
+    if not sel:
+        print(f"[WARN] set_joint_limit_damping: no joint matched {pattern.pattern!r}.", flush=True)
+        return
+    dofs = model.joint_qd_start.numpy()[sel]
+    values = model.joint_limit_kd.numpy()
+    values[dofs] = kd
+    model.joint_limit_kd.assign(values)
+    SimulationManager.add_model_change(ModelFlags.JOINT_DOF_PROPERTIES)
+    solver = getattr(SimulationManager, "_solver", None)
+    if solver is not None:
+        solver.notify_model_changed(ModelFlags.JOINT_DOF_PROPERTIES)
+    print(f"[INFO] joint limit kd={kd:g} on {len(sel)} {asset_cfg.name} joints {names}", flush=True)

@@ -23,7 +23,10 @@ _CUROBO = {
 
 @configclass
 class FramePoseCommandsCfg:
-    """Approach the circuit breaker lever, flip the switch, then retreat."""
+    """Approach the circuit breaker lever, push it up with a closed fist, then retreat.
+
+    Segments carry their phase (``PHASES``): the RL expert bank keys its references on them.
+    """
 
     pose_command: SequentialPoseCommandCfg = SequentialPoseCommandCfg(
         asset_name="robot",
@@ -46,6 +49,7 @@ class FramePoseCommandsCfg:
                 distance_threshold=0.03,
                 target_frame_name="approaching",
                 velocity=0.25,
+                phase="approach",
                 **_CUROBO,
             ),
             CuroboPlannedGoToFrameCfg(
@@ -54,28 +58,32 @@ class FramePoseCommandsCfg:
                 distance_threshold=0.02,
                 target_frame_name="lever_pivot_below",
                 velocity=0.15,
+                phase="engage",
                 **_CUROBO,
             ),
-            GripperCommand(open_gripper=False, duration_s=0.3),
+            # The hand is a closed fist from the start; this only lets it settle.
+            GripperCommand(open_gripper=False, duration_s=0.3, phase="grip"),
             CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=False,
                 distance_threshold=0.02,
                 target_frame_name="lever_pivot_above",
                 velocity=0.15,
+                phase="actuate",
                 **_CUROBO,
             ),
-            GripperCommand(open_gripper=False, duration_s=0.375),
-            GripperCommand(open_gripper=False, duration_s=0.375),
+            GripperCommand(open_gripper=False, duration_s=0.375, phase="actuate"),
+            GripperCommand(open_gripper=False, duration_s=0.375, phase="actuate"),
             CuroboPlannedGoToFrameCfg(
                 frame_name="target_frame",
                 gripper_open=False,
                 distance_threshold=0.03,
                 target_frame_name="approaching",
                 velocity=0.25,
+                phase="retreat",
                 **_CUROBO,
             ),
-            GripperCommand(open_gripper=True, duration_s=0.75),
+            GripperCommand(open_gripper=True, duration_s=0.75, phase="release"),
         ],
         body_offset=as_command_offset(ANYMAL_EE),
     )

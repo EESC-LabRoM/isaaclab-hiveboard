@@ -369,18 +369,22 @@ def reset_from_expert_bank_cfg(path: str, mid_start_prob: float = 0.0, expert_ta
 
 
 def expert_gripper_reference(
-    env: ManagerBasedRLEnv, command_name: str = "valve_turn", follow_release: bool = False
+    env: ManagerBasedRLEnv, command_name: str = "valve_turn", follow_release: bool = False, follow_reach: bool = False
 ) -> torch.Tensor:
     """1 where the expert's gripper is closed, ``(N, 1)`` (privileged observation).
 
     Closed from the expert's grasp step on the reach timeline (see
     :class:`ExpertBank`). With ``follow_release`` it follows the expert's
     gripper command after that step, so it opens again where the expert lets
-    go (a regrasping expert, or the release before the retreat).
+    go (a regrasping expert, or the release before the retreat). With
+    ``follow_reach`` it follows the command during the reach as well, for an
+    expert that closes its hand on the way (a fist that pushes a lever).
     ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
     step = reference_step(env)
+    if follow_reach:
+        return term.bank.gripper_closed_reference(term.index, step).float().unsqueeze(-1)
     closed = step >= term.bank.grasp_step[term.index]
     if follow_release:
         closed &= term.bank.gripper_closed_reference(term.index, step)

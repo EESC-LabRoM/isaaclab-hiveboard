@@ -79,6 +79,9 @@ parser.add_argument(
     "--reg_bias_pos", type=float, default=0.0, help="Registration error [m]: the valve moves this much after planning."
 )
 parser.add_argument("--reg_bias_rot", type=float, default=0.0, help="Registration error [rad] about each axis.")
+parser.add_argument(
+    "--dump_all", default=None, help="Also save every episode's steps and outcome (kept or not) to this file."
+)
 parser.add_argument("--setup", default=None)
 parser.add_argument("--no_setup", action="store_true")
 parser.add_argument(
@@ -183,8 +186,8 @@ def configure(env_cfg) -> dict:
     if args.nominal_pose:
         ranges["valve_pose"] = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
     # The scripted tasks name the valve's events differently (reset_valve_root,
-    # the small mechanisms' reset_object_root), and the small mechanisms do
-    # not reset the joint:
+    # the small mechanisms' reset_object_root, the circuit breaker's
+    # reset_breaker_root), and the small mechanisms do not reset the joint:
     # find them by what they do to the valve.
     valve_events = {
         name: term
@@ -270,11 +273,13 @@ def configure(env_cfg) -> dict:
     # sent episodes reset part-open (past valve_min_delta_rad) to closed.
     env_cfg.commands.pose_command.open_task_prob = 1.0
     batch = args.plan_batch_size or args.num_envs
-    # The retreat after the (last) turn backs straight off to the approach
-    # point, keeping the hand's orientation: reorienting to the approach frame
-    # spun the hand up to 180 degrees next to the lever.
+    # The retreat after the (last) turn or push backs straight off to the
+    # approach point, keeping the hand's orientation: reorienting to the
+    # approach frame spun the hand up to 180 degrees next to the lever.
     commands = env_cfg.commands.pose_command.commands
-    rotate = max(i for i, c in enumerate(commands) if "Rotate" in type(c).__name__)
+    rotate = max(
+        i for i, c in enumerate(commands) if "Rotate" in type(c).__name__ or getattr(c, "phase", None) == "actuate"
+    )
     for command in commands[rotate + 1 :]:
         if hasattr(command, "hold_current_orientation"):
             command.hold_current_orientation = True
@@ -424,7 +429,8 @@ def main() -> None:
                     best_progress = torch.maximum(best_progress, rl_mdp.valve_progress(env))
                     dist, ang = rl_mdp.tcp_grasp_error(env)
                     min_grasp_err = torch.minimum(min_grasp_err, torch.stack((dist, ang), dim=-1))
-                    now_open = is_open & held & ~opened_held
+                    # A pushed lever runs ahead of the hand: touched before is enough.
+                    now_open = is_open & rl_mdp.opening_credited(env, held, ever_held) & ~opened_held
                     t_open[now_open] = (t + 1) * env.step_dt
                     opened_held |= now_open
                     fallback |= command.expert_fallback()
@@ -433,6 +439,12 @@ def main() -> None:
             # fallback (e.g. a chain that could not be planned as one motion)
             # is discarded even when it opened the valve.
             ok = opened_held & ~fallback & clear
+            # The RL task's latest acceptable open time, e.g. dropping a push that stalled for seconds under a
+            # lever creeping to its stop.
+            max_open_s = getattr(rl_env, "EXPERT_MAX_OPEN_S", None)
+            slow = torch.zeros_like(ok) if max_open_s is None else ok & (t_open > max_open_s)
+            ok &= ~slow
+            stats["slow"] = stats.get("slow", 0) + int(slow.sum())
             stats["not_clear"] = stats.get("not_clear", 0) + int((opened_held & ~fallback & ~clear).sum())
             stats["waves"] += 1
             stats["episodes"] += n_envs
@@ -440,6 +452,11 @@ def main() -> None:
             stats["fallback"] += int((opened_held & fallback).sum())
             stats["kept"] += int(ok.sum())
             stats["wall_s"] += wave_s
+            if args.dump_all:
+                dump = {key: torch.stack(values, dim=1).cpu() for key, values in steps.items()}
+                dump.update({key: value.cpu() for key, value in init.items()})
+                dump.update(ok=ok.cpu(), opened_held=opened_held.cpu(), clear=clear.cpu(), t_open=t_open.cpu())
+                torch.save(dump, args.dump_all.replace(".pt", f"_wave{wave}.pt"))
             for key, values in steps.items():
                 kept.setdefault(key, []).append(torch.stack(values, dim=1)[ok].cpu())
             for key, value in init.items():
@@ -484,6 +501,7 @@ def main() -> None:
                 f"[BANK] wave {wave}: {int(opened_held.sum())}/{n_envs} opened while held, "
                 f"{int((opened_held & fallback).sum())} discarded for a fallback, "
                 f"{int((opened_held & ~fallback & ~clear).sum())} not released and clear at the end, "
+                f"{int(slow.sum())} opened too late, "
                 f"in {wave_s:.1f}s; kept {total}",
                 flush=True,
             )

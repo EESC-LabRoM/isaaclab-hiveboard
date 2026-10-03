@@ -749,6 +749,59 @@ exactly one 120° turn short: when a turn slips, the deployable policy cannot
 tell, since it follows the expert's clock (`episode_time`) and its 5-step
 history cannot count turns.
 
+### Circuit breaker
+
+`Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0` (and `-Play-v0`) flips the
+circuit breaker's toggle up, from its down stop to its up stop
+(`RevoluteJoint` +30° → -30°), with the same MDP. The lever is too small to
+pinch (2.3 cm long, 4 cm wide; the 2F-140 bottoms out ~24 mm apart), so the
+expert pushes it: a closed fist comes in under the lever and pushes straight
+up past the pivot, holds the lever at its stop for 0.3 s, backs off up and
+out, then returns to the approach point (~7 s). `tasks/anymal/circuit_breaker_rl/env.py`
+sets the breaker's `ValveTaskCfg`; what a push needs beyond a grasp:
+
+- `ValveTaskCfg.push`: the lever counts as held while either pad touches it,
+  and reaching the up stop counts once a pad has touched it earlier in the
+  episode (`mdp.opening_credited`): a pushed lever runs ahead of the hand to
+  its stop. Letting go needs no open gripper (the fist stays closed).
+- The expert's actuation is the go-to segment tagged `actuate`, not a rotate:
+  `expert_diversity` varies its hand speed (0.1-0.2 m/s, in the `turn_rate`
+  slot) and moves its goals with the grasp offset (±1 cm across the lever, ±0.3
+  rad of fist roll); the bank builder finds the breaker's reset events by what
+  they do (`reset_breaker_*`).
+- The bank builder's `configure_expert` hook fixes the scripted sequence for
+  RL: the lever starts at its down stop (the scripted task starts it half way),
+  every goal is 2 cm higher (the push started too low and stopped short), the
+  push runs 1 cm deeper (from the stop the authored push slipped off the
+  lever's tip half way up; 0.5 cm let more levers bounce off the stop), ends on the lever's angle (the fist is then stuck
+  under the raised lever, short of its goal), holds it up for 0.3 s (released
+  at once, 14% bounced back off the stop), and retreats up and out before
+  coming down (a retreat that moved down near the lever pushed it back in 7-34%
+  of the episodes). The grip wait and the final release are dropped.
+- Lever dynamics are the scripted task's friction (0.01-0.1 N·m) plus a light
+  detent (≤ 0.1 N·m) and armature ≤ 0.002 kg·m². The push loads the DynaArm's
+  soft wrist (~1 cm of give per 10 N at the fingertips), so stiffer levers
+  (detents to 0.5 N·m, stuck toggles to 1.5 N·m) were flipped in only 27% of
+  the expert's episodes.
+- The end stops are damped (`breaker_end_stops`, limit `kd` 100 N·m·s/rad, in
+  every breaker task: ANYmal, Spot and Franka). With Newton's default `kd` 10 the light lever's stops
+  were near-elastic in MJWarp: flicked into a stop at 6-15 rad/s it sprang back
+  50-60°, often to the other stop. Damped, the expert left the lever up in
+  95.3% of its episodes instead of 88.3%, and a student trained on the bouncy
+  stops completed 99.8% instead of 93.0%.
+- Success is the lever within 0.1 rad of its up stop: the HiveBoard lever has
+  no toggle spring to snap it home.
+- The flick (up to ~3 rad/s) is not penalized (`valve_overspeed` off), and the
+  teacher's expert-gripper reference follows the expert's command from the
+  start (`follow_reach`).
+
+```bash
+RL_TOOL=CircuitBreaker just rl-bank 512 5000
+RL_TOOL=CircuitBreaker just rl-student-ppo            # PPO student, privileged critic
+RL_TOOL=CircuitBreaker just rl-eval logs/rsl_rl/anymal_circuit_breaker_student_ppo/<run>/model_<it>.pt \
+  --agent rsl_rl_student_ppo_cfg_entry_point
+```
+
 ---
 
 ## 📁 Repository Structure

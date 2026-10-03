@@ -1,4 +1,4 @@
-"""RL valve tasks: the ball-valve, small-valve and M30-thread configurations and the valve terms' conventions.
+"""RL valve tasks: the ball-valve, small-valve, M30-thread and circuit-breaker configurations and the valve terms' conventions.
 
 Config-only checks (no simulation)::
 
@@ -21,6 +21,7 @@ _TASKS = {
     "Isaac-HiveBoard-Anymal-BallValve-RL-v0": ("ball_valve", "Isaac-HiveBoard-Anymal-BallValve-v0"),
     "Isaac-HiveBoard-Anymal-SmallValve-RL-v0": ("small_valve", "Isaac-HiveBoard-Anymal-SmallValve-v0"),
     "Isaac-HiveBoard-Anymal-M30Thread-RL-v0": ("thread", "Isaac-HiveBoard-Anymal-M30Thread-v0"),
+    "Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0": ("circuit_breaker", "Isaac-HiveBoard-Anymal-CircuitBreaker-v0"),
 }
 
 
@@ -93,3 +94,39 @@ def test_m30_thread_runs_the_nut_down_two_turns():
     assert module.SUCCESS_TOLERANCE_RAD * task.coupled_ratio == pytest.approx(0.001)
     assert cfg.observations.teacher.expert_gripper.params["follow_release"]
 
+
+def test_circuit_breaker_pushes_the_lever_up_from_its_down_stop():
+    module, cfg = _cfg("Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0")
+    task = cfg.valve_task
+    assert task.push and task.closed_end_stop and not task.hold_by_contact
+    # Down (+30 deg) to up (-30 deg), the joint's limits.
+    assert task.closed_rad == pytest.approx(math.pi / 6) and task.open_rad == pytest.approx(-math.pi / 6)
+    assert cfg.scene.circuit_breaker.init_state.joint_pos["RevoluteJoint"] == pytest.approx(task.closed_rad)
+    # The fist closes during the reach, and the flick's speed is not penalized.
+    assert cfg.observations.teacher.expert_gripper.params["follow_reach"]
+    assert cfg.rewards.valve_overspeed is None
+    # No spring: a released lever stays up.
+    assert module.VALVE_DYNAMICS_RANGES["spring"] == (0.0, 0.0)
+    # The end stops are damped, so a flicked lever does not bounce back down.
+    from isaaclab_hiveboard.tasks.scenes.circuit_breaker import BREAKER_LIMIT_KD
+
+    assert cfg.events.breaker_end_stops.params["kd"] == BREAKER_LIMIT_KD
+
+
+def test_circuit_breaker_expert_pushes_without_idling():
+    from isaaclab_hiveboard.mdp.commands.sequential_pose_command import GripperCommand
+
+    module, _ = _cfg("Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0")
+    m, c = gym.spec(module.EXPERT_TASK).kwargs["env_cfg_entry_point"].split(":")
+    expert = getattr(importlib.import_module(m), c)()
+    module.configure_expert(expert)
+    commands = expert.commands.pose_command.commands
+    # The only gripper segment left is the press that holds the lever up; the fist stays closed throughout.
+    assert [cmd.phase for cmd in commands] == ["approach", "engage", "actuate", "actuate", "retreat", "retreat"]
+    assert [type(cmd) is GripperCommand for cmd in commands] == [False, False, False, True, False, False]
+    assert all(not getattr(cmd, "gripper_open", False) and not getattr(cmd, "open_gripper", False) for cmd in commands)
+    # The push ends on the lever's angle near its up stop.
+    push = commands[2]
+    assert push.done_when_joint[:2] == ("circuit_breaker", "RevoluteJoint")
+    assert push.done_when_joint[3] == pytest.approx(module.LEVER_UP_RAD + module.PUSH_DONE_RAD)
+    assert expert.scene.circuit_breaker.init_state.joint_pos["RevoluteJoint"] == pytest.approx(module.LEVER_DOWN_RAD)

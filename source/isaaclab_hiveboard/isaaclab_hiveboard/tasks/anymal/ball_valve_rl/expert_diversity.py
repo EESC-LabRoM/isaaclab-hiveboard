@@ -9,7 +9,8 @@ A reset event (:class:`sample_expert_diversity`) samples, per environment,
 the values in :data:`EXPERT_DIVERSITY` and writes them into the
 ``pose_command`` handlers before they plan:
 
-* ``turn_rate`` - the valve arc's angular speed [rad/s];
+* ``turn_rate`` - the valve arc's angular speed [rad/s] (a pushing expert's
+  hand speed along the push [m/s]);
 * ``reach_scale`` - a factor on the approach and grasp segments' speeds;
 * ``grasp_shift`` - where along the lever the TCP grasps [m];
 * ``grasp_roll`` - the grasp's rotation about the lever's long axis [rad],
@@ -118,17 +119,30 @@ class sample_expert_diversity(ManagerTermBase):
 
         handlers = env.command_manager.get_term(command_name)._command_handlers
         rotates = [i for i, h in enumerate(handlers) if isinstance(h, _RotateFrameHandler)]
+        # An expert that pushes (a circuit breaker's lever) has no rotate: its
+        # actuation is the go-to segments tagged "actuate", and turn_rate is
+        # their hand speed [m/s].
+        pushes = [] if rotates else [
+            i for i, h in enumerate(handlers) if isinstance(h, _GoToFrameHandler) and h.cfg.phase == "actuate"
+        ]
+        if not rotates and not pushes:
+            raise ValueError("Expert diversity needs a rotate segment or a go-to segment tagged 'actuate'.")
+        actuate = rotates or pushes
         self._rotate = [handlers[i] for i in rotates]
-        self._reach = [h for h in handlers[: rotates[0]] if isinstance(h, _GoToFrameHandler)]
+        self._push = [handlers[i] for i in pushes]
+        self._reach = [h for h in handlers[: actuate[0]] if isinstance(h, _GoToFrameHandler)]
         self._grasp = self._reach[-1]
-        self._retreat = [h for h in handlers[rotates[-1] + 1 :] if isinstance(h, _CuroboPlannedGoToFrameHandler)]
+        self._retreat = [h for h in handlers[actuate[-1] + 1 :] if isinstance(h, _CuroboPlannedGoToFrameHandler)]
         # Each earlier goal in the grasp goal's frame, K, from the frames'
         # authored offsets. Reading the frame transformer here would latch its
         # pre-reset poses for this step, and the command would then plan to
-        # where the lever was in the previous episode.
+        # where the lever was in the previous episode. A push's goals move with
+        # the grasp (its start) too, so the push keeps its direction.
         grasp = self._goal_in_body(self._grasp, env.device)
+        self._moved_with_grasp = self._reach[:-1] + self._push
         self._approach_in_grasp = [
-            math_utils.subtract_frame_transforms(*grasp, *self._goal_in_body(h, env.device)) for h in self._reach[:-1]
+            math_utils.subtract_frame_transforms(*grasp, *self._goal_in_body(h, env.device))
+            for h in self._moved_with_grasp
         ]
 
     @staticmethod
@@ -170,6 +184,8 @@ class sample_expert_diversity(ManagerTermBase):
         for rotate in self._rotate:
             rotate.speed_scale[ids] = turn_rate / rotate.cfg.angular_velocity
             rotate.angle_extra_rad[ids] = overshoot
+        for push in self._push:
+            push.speed_scale[ids] = turn_rate / push.cfg.velocity
         for handler in self._reach:
             handler.speed_scale[ids] = reach_scale
         if wrist_branch_nearest:
@@ -189,7 +205,7 @@ class sample_expert_diversity(ManagerTermBase):
         self._grasp.env_offset_rot[ids] = grasp_quat
         # Earlier goals move rigidly with the grasp: with K the earlier goal in
         # the grasp goal's frame, its offset is K^-1 * E * K.
-        for handler, (k_pos, k_quat) in zip(self._reach[:-1], self._approach_in_grasp):
+        for handler, (k_pos, k_quat) in zip(self._moved_with_grasp, self._approach_in_grasp):
             k_pos, k_quat = k_pos.expand(n, 3), k_quat.expand(n, 4)
             moved = math_utils.combine_frame_transforms(grasp_pos, grasp_quat, k_pos, k_quat)
             handler.env_offset_pos[ids], handler.env_offset_rot[ids] = math_utils.subtract_frame_transforms(

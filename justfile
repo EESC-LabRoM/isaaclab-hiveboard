@@ -141,7 +141,7 @@ il-dagger dataset rounds="5" *args:
 il-eval *args:
     uv run python scripts/imitation/eval_policy.py {{args}}
 
-# Part of the rl-* recipes: BallValve (default), SmallValve or M30Thread, e.g. `RL_TOOL=SmallValve just rl-teacher`
+# Part of the rl-* recipes: BallValve (default), SmallValve, M30Thread or CircuitBreaker, e.g. `RL_TOOL=SmallValve just rl-teacher`
 rl_tool := env("RL_TOOL", "BallValve")
 
 # Build the cuRobo expert bank the RL task resets from and tracks

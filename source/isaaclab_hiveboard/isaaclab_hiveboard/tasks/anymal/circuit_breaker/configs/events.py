@@ -10,7 +10,8 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.core.cabinet import mdp
 
-from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp
+from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_joint_limit_damping
+from isaaclab_hiveboard.tasks.scenes.circuit_breaker import BREAKER_LIMIT_KD
 
 PI = math.pi
 
@@ -28,6 +29,14 @@ class CircuitBreakerEventCfg:
         func=apply_articulation_gravcomp,
         mode="startup",
         params={"asset_cfg": SceneEntityCfg("circuit_breaker"), "gravcomp": 1.0},
+    )
+    breaker_end_stops = EventTerm(
+        func=set_joint_limit_damping,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("circuit_breaker", joint_names=["RevoluteJoint"]),
+            "kd": BREAKER_LIMIT_KD,
+        },
     )
 
     robot_physics_material = EventTerm(
