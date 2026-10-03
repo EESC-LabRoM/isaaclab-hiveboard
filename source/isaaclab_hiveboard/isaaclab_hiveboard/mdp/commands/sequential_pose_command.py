@@ -2654,7 +2654,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
             if self._command_term._offset_pos is None or self._command_term._offset_rot is None:
                 raise ValueError("CuroboPlannedRotateFrameCfg requires pose_command.body_offset")
             final_angle = self.angle_rad_tensor[env_ids][0]
-            step_angle = self.cfg.angular_velocity * self._dt
+            step_angle = self.cfg.angular_velocity * float(self.speed_scale[env_ids][0]) * self._dt
             num_steps = max(1, int(math.ceil(abs(float(final_angle.item())) / step_angle)))
             num_waypoints = num_steps + 1
             angles = torch.linspace(
@@ -2818,7 +2818,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
 
             # Per-env arc: same angle step as _plan_env, padded to the longest.
             final_angle = self.angle_rad_tensor[pad_env_ids]
-            step_angle = self.cfg.angular_velocity * self._dt
+            step_angle = self.cfg.angular_velocity * self.speed_scale[pad_env_ids] * self._dt
             num_waypoints = (torch.ceil(final_angle.abs() / step_angle).clamp(min=1) + 1).long()
             horizon = int(num_waypoints.max())
             frac = torch.arange(horizon, device=self._device, dtype=torch.float32)[None] / (
@@ -2832,6 +2832,7 @@ class _CuroboPlannedRotateFrameHandler(_CuroboPlannedGoToFrameHandler, _RotateFr
                 self.axis_pos_b[flat_ids]
                 + self.axial_vec[flat_ids]
                 + self._rodrigues_rotate(self.radius_vec[flat_ids], axis_b, flat_angles)
+                + self._screw_offset(axis_b, flat_angles)
             )
             tcp_quat_b = math_utils.quat_mul(
                 math_utils.quat_from_angle_axis(flat_angles, axis_b), self.initial_quat_b[flat_ids]

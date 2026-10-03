@@ -16,7 +16,9 @@ expert does?" without training::
 
 Behaviours (split evenly over the environments, same trajectories each):
 
-* ``expert``: the bank's joint targets and gripper commands.
+* ``expert``: the bank's joint targets and gripper commands, on the
+  references' timeline: the idle-free reach (``ExpertBank.reach``), then the
+  bank's own steps shifted by the idle steps it dropped.
 * ``hold``: the expert until ``--hold_after_s`` past its grasp, then the arm
   holds its target with the gripper closed (grasp, never turn).
 * ``expert_keep``: the expert until the bank's open time, then holding the
@@ -75,9 +77,7 @@ def main() -> None:
         raw = torch.load(env_cfg.events.reset_from_bank.params["path"], map_location="cpu", weights_only=False)
         arm_target = raw["arm_target"].float().to(dev)
         gripper_cmd = raw["gripper_cmd"].float().to(dev)
-        horizon = arm_target.shape[1]
-        grasp_step = (gripper_cmd < 0).float().argmax(dim=1)
-        open_step = (raw["t_open"].float().to(dev) / dt).round().long()
+        bank = term.bank
         arm = env.action_manager.get_term("arm_action")
         scale = float(env.cfg.actions.arm_action.scale)
         rewards = env.reward_manager
@@ -95,19 +95,22 @@ def main() -> None:
         steps_alive = torch.zeros(n, device=dev)
         with torch.inference_mode():
             for _ in range(int(env.max_episode_length)):
-                t = env.episode_length_buf.clamp(max=horizon - 1)
                 i = term.index
-                target = arm_target[i, t]
-                grip = gripper_cmd[i, t]
-                holding = ((behaviour == 1) & (t >= grasp_step[i] + int(round(args.hold_after_s / dt)))) | (
-                    (behaviour >= 2) & (t >= open_step[i])
+                t = env.episode_length_buf + term.start_step
+                b = bank._bank_step(i, t)
+                reaching = t < bank.grasp_step[i]
+                target = torch.where(reaching[:, None], bank.reach_reference(i, t), arm_target[i, b])
+                grip = torch.where(reaching, torch.ones_like(gripper_cmd[i, b]), gripper_cmd[i, b])
+                grasp_step = bank.grasp_step[i]
+                holding = ((behaviour == 1) & (t >= grasp_step + int(round(args.hold_after_s / dt)))) | (
+                    (behaviour >= 2) & (b >= bank.open_step[i])
                 )
                 target = torch.where(holding[:, None], arm._target, target)
                 grip = torch.where(holding, torch.full_like(grip, -1.0), grip)
-                flicker = (behaviour == 3) & (t >= grasp_step[i]) & ((t - grasp_step[i]) % 7 == 6)
+                flicker = (behaviour == 3) & (t >= grasp_step) & ((t - grasp_step) % 7 == 6)
                 grip = torch.where(flicker, torch.ones_like(grip), grip)
                 delta = ((target - arm._target) / scale).clamp(-1.0, 1.0)
-                phase = (t >= grasp_step[i]).long()
+                phase = (t >= grasp_step).long()
                 env.step(torch.cat((delta, grip[:, None]), dim=-1))
                 step = rewards._step_reward * dt
                 live = alive.clone()

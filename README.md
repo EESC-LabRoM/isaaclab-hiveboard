@@ -697,6 +697,58 @@ RL_TOOL=SmallValve just rl-eval logs/rsl_rl/anymal_small_valve_student_ppo/<run>
   --agent rsl_rl_student_ppo_cfg_entry_point
 ```
 
+### M30 thread
+
+`Isaac-HiveBoard-Anymal-M30Thread-RL-v0` (and `-Play-v0`) runs the M30 nut
+down its last two turns until seated (`RevoluteJoint` 0 → -4π,
+`PrismaticJoint` 7 mm → 0), with the same MDP. The cuRobo expert regrasps
+every 120°: grasp, turn, let go, back off 3 cm, grasp again, six times, then
+backs off to the approach point (~50 s). `tasks/anymal/m30_thread_rl/env.py`
+sets the part's `ValveTaskCfg`; what the screw needs beyond a valve:
+
+- The nut's travel follows its angle through the thread's mimic constraint.
+  `ValveTaskCfg.coupled_joint_name` makes every reset (bank start, mid-trajectory
+  start, the bank builder's) write both joints, and the RL task registers the
+  same mimic constraint and zeroes the travel drive, as the scripted task does.
+- The hand turns away from the fixed grasp pose with the nut, so the nut counts
+  as held while the gripper is closed with both pads touching it
+  (`hold_by_contact`).
+- The teacher's expert-gripper reference follows the expert's command after the
+  first grasp (`expert_gripper_reference(follow_release=True)`): it opens and
+  closes with every regrasp.
+- The command setup's phases are tagged, and the bank builder ends a spare
+  grasp at once when the nut is already within 0.1 rad of seated
+  (`configure_expert`), so the expert lets go and backs off after its last turn.
+- Success is seated within the protocol's 1 mm (1.8 rad of turn).
+- The board turns through a full roll about the thread and tilts ±15°; the
+  nut starts on its flats (the grasp goal is fixed to the board).
+- The fast cuRobo reach (forearm targets up to 2.6 rad/s, past the action's
+  2 rad/s) and the regrasp lag need wider expert-reference terminations: 0.5 rad
+  for the joints and the nut angle.
+
+The bank builder's GPU memory grows ~9 GB per 512-environment wave on this
+task (cuRobo plans many small batches once the turn rates desynchronize the
+environments), so a 46 GB GPU fits four waves. Build the bank in halves and
+merge them:
+
+```bash
+for s in 0 1; do RL_TOOL=M30Thread just rl-bank 512 2000 --seed $s \
+  --output logs/expert_bank/anymal_m30_thread_bank_2000_s$s.pt; done   # ~25 min each
+uv run python scripts/rl/merge_expert_banks.py logs/expert_bank/anymal_m30_thread_bank_2000_s{0,1}.pt \
+  --output logs/expert_bank/anymal_m30_thread_bank_4000.pt
+RL_TOOL=M30Thread just rl-student-ppo                 # PPO student, privileged critic
+RL_TOOL=M30Thread just rl-eval logs/rsl_rl/anymal_m30_thread_student_ppo/<run>/model_<it>.pt \
+  --agent rsl_rl_student_ppo_cfg_entry_point
+```
+
+Student PPO v1 (4096 envs, 3000 iterations, ~4.6 h on an L40S), 256 Play
+episodes per checkpoint: it 600 93.0% seated / 87.1% complete, **it 1600 93.4% /
+93.0%** (pad squeeze p99 201 N), it 2000 91.4% / 91.4%, it 2999 74.6% / 73.4%
+(late regression, pad peaks up to 1.4 kN). 13 of it 1600's 17 failures stop
+exactly one 120° turn short: when a turn slips, the deployable policy cannot
+tell, since it follows the expert's clock (`episode_time`) and its 5-step
+history cannot count turns.
+
 ---
 
 ## 📁 Repository Structure

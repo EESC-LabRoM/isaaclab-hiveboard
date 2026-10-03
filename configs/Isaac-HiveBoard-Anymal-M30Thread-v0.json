@@ -60,7 +60,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "approach"
       }
     },
     {
@@ -106,14 +107,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -158,14 +161,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -211,7 +216,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -257,14 +263,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -309,14 +317,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -362,7 +372,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -408,14 +419,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -460,14 +473,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -513,7 +528,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -559,14 +575,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -611,14 +629,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -664,7 +684,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -710,14 +731,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -762,14 +785,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -815,7 +840,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -861,14 +887,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -913,14 +941,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -966,7 +996,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -1012,14 +1043,16 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "engage"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": false,
-        "duration_s": 0.9
+        "duration_s": 0.9,
+        "phase": "grip"
       }
     },
     {
@@ -1064,14 +1097,16 @@
         "num_ik_seeds": 4,
         "interpolation_buffer_size": 128,
         "max_joint_step": 0.15,
-        "on_infeasible_arc": "densify"
+        "on_infeasible_arc": "densify",
+        "phase": "actuate"
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
         "open_gripper": true,
-        "duration_s": 0.4
+        "duration_s": 0.4,
+        "phase": "release"
       }
     },
     {
@@ -1117,7 +1152,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     },
     {
@@ -1163,7 +1199,8 @@
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "phase": "retreat"
       }
     }
   ]

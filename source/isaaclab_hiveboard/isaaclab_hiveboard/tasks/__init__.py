@@ -368,6 +368,37 @@ gym.register(
     },
 )
 
+_ANYMAL_M30_THREAD_RL_AGENTS = {
+    "rsl_rl_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.agents.rsl_rl_cfg:AnymalM30ThreadTeacherPPORunnerCfg",
+    "default_agent": "rsl_rl",
+    "rsl_rl_student_ppo_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.agents.rsl_rl_cfg:AnymalM30ThreadStudentPPORunnerCfg",
+    "rsl_rl_student_ppo_rnd_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.agents.rsl_rl_cfg:AnymalM30ThreadStudentPPORNDRunnerCfg",
+    "rsl_rl_distillation_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.agents.rsl_rl_cfg:AnymalM30ThreadStudentRunnerCfg",
+    "rsl_rl_distillation_recurrent_cfg_entry_point": (
+        "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.agents.rsl_rl_cfg:AnymalM30ThreadStudentRecurrentRunnerCfg"
+    ),
+}
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M30Thread-RL-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.env:AnymalM30ThreadRLEnvCfg",
+        **_ANYMAL_M30_THREAD_RL_AGENTS,
+    },
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-M30Thread-RL-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.m30_thread_rl.env:AnymalM30ThreadRLEnvCfg_PLAY",
+        **_ANYMAL_M30_THREAD_RL_AGENTS,
+    },
+)
+
 gym.register(
     id="Isaac-HiveBoard-Anymal-CircuitBreaker-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

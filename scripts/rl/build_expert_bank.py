@@ -54,7 +54,9 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=512)
 parser.add_argument("--num_trajectories", type=int, default=5000, help="Successful trajectories to keep.")
 parser.add_argument("--plan_batch_size", type=int, default=None, help="cuRobo batch (default: num_envs).")
-parser.add_argument("--episode_length_s", type=float, default=18.0, help="One second past the RL episode.")
+parser.add_argument(
+    "--episode_length_s", type=float, default=None, help="Default: one second past the RL task's episode."
+)
 parser.add_argument("--max_waves", type=int, default=50)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", default=None, help="Default: logs/expert_bank/<the RL task's BANK_PREFIX>_bank.pt.")
@@ -143,6 +145,8 @@ def configure(env_cfg) -> dict:
     env_cfg.scene.num_envs = args.num_envs
     env_cfg.seed = args.seed
     env_cfg.decimation = rl.decimation
+    if args.episode_length_s is None:
+        args.episode_length_s = rl.episode_length_s + 1.0
     env_cfg.episode_length_s = args.episode_length_s
     physics = env_cfg.sim.physics
     if hasattr(physics, "solver_cfg"):
@@ -178,12 +182,40 @@ def configure(env_cfg) -> dict:
         ranges["arm"] = (0.0, 0.0)
     if args.nominal_pose:
         ranges["valve_pose"] = {"x": (-0.03, 0.03), "y": (-0.04, 0.04), "z": (-0.03, 0.03), "yaw": (-0.1, 0.1)}
-    env_cfg.events.reset_valve_root.params["pose_range"] = dict(ranges["valve_pose"])
+    # The scripted tasks name the valve's events differently (reset_valve_root,
+    # the small mechanisms' reset_object_root), and the small mechanisms do
+    # not reset the joint:
+    # find them by what they do to the valve.
+    valve_events = {
+        name: term
+        for name, term in vars(env_cfg.events).items()
+        if isinstance(term, EventTermCfg)
+        and getattr(term.params.get("asset_cfg"), "name", None) == valve_name
+    }
+
+    def valve_event(func_name: str) -> str | None:
+        return next((name for name, term in valve_events.items() if term.func.__name__ == func_name), None)
+
+    root_reset = valve_events[valve_event("reset_root_state_uniform")]
+    root_reset.params["pose_range"] = dict(ranges["valve_pose"])
+    joint_reset = valve_event("reset_joints_by_offset")
+    if joint_reset is not None and joint_reset != "reset_valve_joint":
+        env_cfg.events.reset_valve_joint = valve_events[joint_reset]
+        setattr(env_cfg.events, joint_reset, None)
+    if getattr(env_cfg.events, "reset_valve_joint", None) is None:
+        from isaaclab.envs import mdp as base_mdp
+
+        env_cfg.events.reset_valve_joint = EventTermCfg(
+            func=base_mdp.reset_joints_by_offset, mode="reset", params={"velocity_range": (0.0, 0.0)}
+        )
     env_cfg.events.reset_valve_joint.params["position_range"] = ranges["valve_angle"]
     # Only the turned joint (the small valve's reset also lists its stem's prismatic joint).
     env_cfg.events.reset_valve_joint.params["asset_cfg"] = SceneEntityCfg(
         valve_name, joint_names=[rl.valve_task.joint_name]
     )
+    if rl.valve_task.coupled_joint_name is not None:
+        # A nut's travel follows its angle (the thread's mimic constraint).
+        env_cfg.events.sync_coupled_joint = EventTermCfg(func=rl_mdp.sync_coupled_joint, mode="reset")
     env_cfg.events.reset_arm = EventTermCfg(
         func=rl_mdp.reset_joints_from_postures,
         mode="reset",
@@ -198,8 +230,8 @@ def configure(env_cfg) -> dict:
     # The RL task's per-episode valve dynamics replace the scripted task's
     # fixed-per-env ones; the trajectory records them for the RL reset. After
     # the valve joint reset: a stuck valve reseats the lever.
-    for name in ("valve_actuator_gains", "valve_joint_parameters"):
-        if hasattr(env_cfg.events, name):
+    for name, term in valve_events.items():
+        if term.func.__name__ in ("randomize_actuator_gains", "randomize_joint_parameters"):
             setattr(env_cfg.events, name, None)
     env_cfg.events.valve_dynamics = valve_dynamics.randomize_valve_dynamics_cfg(
         ranges["valve_dynamics"], stuck_prob=ranges["stuck_prob"], stuck_breakaway=ranges["stuck_breakaway"]
@@ -238,11 +270,11 @@ def configure(env_cfg) -> dict:
     # sent episodes reset part-open (past valve_min_delta_rad) to closed.
     env_cfg.commands.pose_command.open_task_prob = 1.0
     batch = args.plan_batch_size or args.num_envs
-    # The retreat after the turn backs straight off to the approach point,
-    # keeping the hand's orientation: reorienting to the approach frame spun
-    # the hand up to 180 degrees next to the lever.
+    # The retreat after the (last) turn backs straight off to the approach
+    # point, keeping the hand's orientation: reorienting to the approach frame
+    # spun the hand up to 180 degrees next to the lever.
     commands = env_cfg.commands.pose_command.commands
-    rotate = next(i for i, c in enumerate(commands) if "Rotate" in type(c).__name__)
+    rotate = max(i for i, c in enumerate(commands) if "Rotate" in type(c).__name__)
     for command in commands[rotate + 1 :]:
         if hasattr(command, "hold_current_orientation"):
             command.hold_current_orientation = True
@@ -253,6 +285,9 @@ def configure(env_cfg) -> dict:
             command.plan_batch_size = batch
         if hasattr(command, "wrist_flip_joints") and not args.no_wrist_flip:
             command.wrist_flip_joints = expert_diversity.WRIST_FLIP_JOINTS
+    # Task-specific changes to the expert, e.g. skipping a regrasp once the part is done.
+    if hasattr(rl_env, "configure_expert"):
+        rl_env.configure_expert(env_cfg)
     return ranges
 
 

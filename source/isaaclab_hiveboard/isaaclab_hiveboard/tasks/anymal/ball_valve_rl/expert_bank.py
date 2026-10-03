@@ -111,6 +111,8 @@ class ExpertBank:
         self.q = q
         self.valve = valve
         self.gripper_q = bank["gripper_q"].float()
+        # The expert's gripper command, closed where negative (a regrasping expert opens and closes again).
+        self.gripper_closed = bank["gripper_cmd"] < 0
         if "pad_force" not in bank:
             raise ValueError(f"{path} has no pad_force; rebuild it with scripts/rl/build_expert_bank.py")
         # Per-pad contact with the lever, (N, T, 2).
@@ -141,6 +143,7 @@ class ExpertBank:
             "q",
             "valve",
             "gripper_q",
+            "gripper_closed",
             "contact",
             "gripper_joint_pos",
             "idle_shift",
@@ -176,6 +179,10 @@ class ExpertBank:
     def gripper_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert finger joint position at episode ``step``, ``(len(idx),)`` [rad]."""
         return self.gripper_q[idx, self._bank_step(idx, step)]
+
+    def gripper_closed_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        """Whether the expert commands its gripper closed at episode ``step``, ``(len(idx),)``."""
+        return self.gripper_closed[idx, self._bank_step(idx, step)]
 
     def contact_reference(self, idx: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
         """Expert per-pad lever contact (1/0) at episode ``step``, ``(len(idx), 2)``."""
@@ -223,7 +230,6 @@ class reset_from_expert_bank(ManagerTermBase):
         # The joint the bank recorded as gripper_q (build_expert_bank.py).
         self._finger_id = robot.find_joints(env.cfg.actions.gripper_action.joint_names)[0][0]
         self._valve_name = valve_task.asset_name
-        self._valve_joint = env.scene[self._valve_name].find_joints(valve_task.joint_name)[0]
         # Reference terms find the bank here.
         env.expert_bank_term = self
         print(f"[INFO] Expert bank: {self.bank.size} trajectories from {cfg.params['path']}")
@@ -256,12 +262,9 @@ class reset_from_expert_bank(ManagerTermBase):
         pose[:, :3] += env.scene.env_origins[ids]
         valve.write_root_pose_to_sim_index(root_pose=pose, env_ids=ids)
         valve.write_root_velocity_to_sim_index(root_velocity=torch.zeros(len(ids), 6, device=env.device), env_ids=ids)
-        valve.write_joint_position_to_sim_index(
-            position=self.bank.valve_angle0[draw, None], joint_ids=self._valve_joint, env_ids=ids
-        )
-        valve.write_joint_velocity_to_sim_index(
-            velocity=torch.zeros(len(ids), 1, device=env.device), joint_ids=self._valve_joint, env_ids=ids
-        )
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        mdp.write_valve_angle(env, ids, self.bank.valve_angle0[draw])
         if self.bank.valve_dynamics is not None:
             env.valve_dynamics_term.write(ids, self.bank.valve_dynamics[draw])
         robot.write_joint_position_to_sim_index(position=self.bank.arm_q0[draw], joint_ids=self._arm_ids, env_ids=ids)
@@ -277,7 +280,6 @@ class reset_from_expert_bank(ManagerTermBase):
         prev, nxt = (b - 1).clamp(min=0), (b + 1).clamp(max=bank.q.shape[1] - 1)
         span = ((nxt - prev).clamp(min=1) * bank.dt)[:, None]
         robot: BaseArticulation = env.scene["robot"]
-        valve: BaseArticulation = env.scene[self._valve_name]
         robot.write_joint_position_to_sim_index(position=bank.q[draw, b], joint_ids=self._arm_ids, env_ids=ids)
         robot.write_joint_velocity_to_sim_index(
             velocity=(bank.q[draw, nxt] - bank.q[draw, prev]) / span, joint_ids=self._arm_ids, env_ids=ids
@@ -290,14 +292,9 @@ class reset_from_expert_bank(ManagerTermBase):
             joint_ids=self._hand_ids,
             env_ids=ids,
         )
-        valve.write_joint_position_to_sim_index(
-            position=bank.valve[draw, b, None], joint_ids=self._valve_joint, env_ids=ids
-        )
-        valve.write_joint_velocity_to_sim_index(
-            velocity=(bank.valve[draw, nxt] - bank.valve[draw, prev])[:, None] / span,
-            joint_ids=self._valve_joint,
-            env_ids=ids,
-        )
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import mdp
+
+        mdp.write_valve_angle(env, ids, bank.valve[draw, b], (bank.valve[draw, nxt] - bank.valve[draw, prev]) / span[:, 0])
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         pass
@@ -371,14 +368,22 @@ def reset_from_expert_bank_cfg(path: str, mid_start_prob: float = 0.0, expert_ta
     return EventTermCfg(func=reset_from_expert_bank, mode="reset", params=params)
 
 
-def expert_gripper_reference(env: ManagerBasedRLEnv, command_name: str = "valve_turn") -> torch.Tensor:
+def expert_gripper_reference(
+    env: ManagerBasedRLEnv, command_name: str = "valve_turn", follow_release: bool = False
+) -> torch.Tensor:
     """1 where the expert's gripper is closed, ``(N, 1)`` (privileged observation).
 
     Closed from the expert's grasp step on the reach timeline (see
-    :class:`ExpertBank`). ``command_name`` is kept for the callers' signature.
+    :class:`ExpertBank`). With ``follow_release`` it follows the expert's
+    gripper command after that step, so it opens again where the expert lets
+    go (a regrasping expert, or the release before the retreat).
+    ``command_name`` is kept for the callers' signature.
     """
     term = _bank_term(env)
-    closed = reference_step(env) >= term.bank.grasp_step[term.index]
+    step = reference_step(env)
+    closed = step >= term.bank.grasp_step[term.index]
+    if follow_release:
+        closed &= term.bank.gripper_closed_reference(term.index, step)
     return closed.float().unsqueeze(-1)
 
 

@@ -95,9 +95,11 @@ class sample_expert_diversity(ManagerTermBase):
     """Reset event: sample :data:`EXPERT_DIVERSITY` per environment and apply it to the scripted expert.
 
     The ``pose_command`` handlers are found on the first call (the command
-    manager is built after the event manager): the rotate segment, the
-    go-to segments before it (the reach), the last of those (the grasp) and
-    the cuRobo go-to segments after it (the retreat).
+    manager is built after the event manager): the rotate segments (one per
+    grasp when the expert regrasps), the go-to segments before the first one
+    (the reach), the last of those (the first grasp) and the cuRobo go-to
+    segments after the last rotate (the retreat). Only the first grasp is
+    offset; a regrasping expert's later grasps keep their authored goals.
     ``values`` holds every environment's current sample, ``(num_envs, 5)``.
     """
 
@@ -115,11 +117,11 @@ class sample_expert_diversity(ManagerTermBase):
         )
 
         handlers = env.command_manager.get_term(command_name)._command_handlers
-        rotate = next(i for i, h in enumerate(handlers) if isinstance(h, _RotateFrameHandler))
-        self._rotate = handlers[rotate]
-        self._reach = [h for h in handlers[:rotate] if isinstance(h, _GoToFrameHandler)]
+        rotates = [i for i, h in enumerate(handlers) if isinstance(h, _RotateFrameHandler)]
+        self._rotate = [handlers[i] for i in rotates]
+        self._reach = [h for h in handlers[: rotates[0]] if isinstance(h, _GoToFrameHandler)]
         self._grasp = self._reach[-1]
-        self._retreat = [h for h in handlers[rotate + 1 :] if isinstance(h, _CuroboPlannedGoToFrameHandler)]
+        self._retreat = [h for h in handlers[rotates[-1] + 1 :] if isinstance(h, _CuroboPlannedGoToFrameHandler)]
         # Each earlier goal in the grasp goal's frame, K, from the frames'
         # authored offsets. Reading the frame transformer here would latch its
         # pre-reset poses for this step, and the command would then plan to
@@ -165,8 +167,9 @@ class sample_expert_diversity(ManagerTermBase):
         self.values[ids] = values
         turn_rate, reach_scale, shift, roll, overshoot = values.unbind(dim=-1)
 
-        self._rotate.speed_scale[ids] = turn_rate / self._rotate.cfg.angular_velocity
-        self._rotate.angle_extra_rad[ids] = overshoot
+        for rotate in self._rotate:
+            rotate.speed_scale[ids] = turn_rate / rotate.cfg.angular_velocity
+            rotate.angle_extra_rad[ids] = overshoot
         for handler in self._reach:
             handler.speed_scale[ids] = reach_scale
         if wrist_branch_nearest:

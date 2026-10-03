@@ -1,4 +1,4 @@
-"""RL valve tasks: the ball- and small-valve configurations and the valve terms' conventions.
+"""RL valve tasks: the ball-valve, small-valve and M30-thread configurations and the valve terms' conventions.
 
 Config-only checks (no simulation)::
 
@@ -20,6 +20,7 @@ from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import valve_dynamics
 _TASKS = {
     "Isaac-HiveBoard-Anymal-BallValve-RL-v0": ("ball_valve", "Isaac-HiveBoard-Anymal-BallValve-v0"),
     "Isaac-HiveBoard-Anymal-SmallValve-RL-v0": ("small_valve", "Isaac-HiveBoard-Anymal-SmallValve-v0"),
+    "Isaac-HiveBoard-Anymal-M30Thread-RL-v0": ("thread", "Isaac-HiveBoard-Anymal-M30Thread-v0"),
 }
 
 
@@ -43,7 +44,7 @@ def test_every_valve_reference_names_the_task_valve(task, play):
     # The grasp frame exists in the scene and sits on a body of the valve.
     frames = {f.name: f for f in cfg.scene.target_frame.target_frames}
     assert cfg.valve_task.grasp_frame in frames
-    assert frames[cfg.valve_task.grasp_frame].prim_path.startswith("{ENV_REGEX_NS}/Valve/")
+    assert frames[cfg.valve_task.grasp_frame].prim_path.startswith(getattr(cfg.scene, asset).prim_path + "/")
     # The bank builder's settings.
     for name in ("VALVE_POSE_RANGE", "VALVE_ANGLE_RANGE", "ARM_POSTURES", "VALVE_DYNAMICS_RANGES",
                  "EXPERT_DIVERSITY_RANGES", "EXPERT_GRASP_AXES", "EXPERT_OVERSHOOT", "EXPERT_GRIP_S", "BANK_PREFIX"):
@@ -76,3 +77,19 @@ def test_closing_torque_turns_toward_closed(closed, opening_sign):
 def test_small_valve_turns_a_quarter_turn_open_negative():
     _, cfg = _cfg("Isaac-HiveBoard-Anymal-SmallValve-RL-v0")
     assert cfg.valve_task.open_rad == pytest.approx(-math.pi / 2) and cfg.valve_task.closed_rad == 0.0
+
+
+def test_m30_thread_runs_the_nut_down_two_turns():
+    module, cfg = _cfg("Isaac-HiveBoard-Anymal-M30Thread-RL-v0")
+    task = cfg.valve_task
+    assert task.open_rad == pytest.approx(-4.0 * math.pi) and task.closed_rad == 0.0
+    # The nut's travel is 7 mm at the start and 0 when seated.
+    assert task.coupled_offset == pytest.approx(0.007)
+    assert task.coupled_offset + task.coupled_ratio * task.open_rad == pytest.approx(0.0, abs=1e-9)
+    assert task.hold_by_contact and not task.closed_end_stop
+    # The thread's mimic constraint moves the nut, not a drive anchored at the start.
+    assert cfg.scene.thread.actuators["advance"].stiffness == 0.0
+    # Seated within the protocol's 1 mm.
+    assert module.SUCCESS_TOLERANCE_RAD * task.coupled_ratio == pytest.approx(0.001)
+    assert cfg.observations.teacher.expert_gripper.params["follow_release"]
+

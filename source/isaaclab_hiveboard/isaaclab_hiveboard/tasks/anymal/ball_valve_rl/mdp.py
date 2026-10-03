@@ -76,6 +76,18 @@ class ValveTaskCfg:
     closed_end_stop: bool = True
     """Whether a joint limit stops the valve at :attr:`closed_rad`. Without one (a continuous handwheel), a
     torque toward closed spins it past closed, so ``valve_dynamics`` refuses a seat torque or spring."""
+    coupled_joint_name: str | None = None
+    """A joint of the same articulation that follows the turned one, e.g. a nut's travel along its thread
+    (``coupled = coupled_offset + coupled_ratio * angle``, held by a mimic constraint). Resets that write the
+    angle write it too, so the constraint is never violated at the start of an episode."""
+    coupled_ratio: float = 0.0
+    """Coupled joint travel per radian of the turned joint [m/rad]."""
+    coupled_offset: float = 0.0
+    """Coupled joint position at angle 0 [m]."""
+    hold_by_contact: bool = False
+    """Count the valve as held when the gripper is closed with both pads touching it (over
+    ``expert_bank.CONTACT_FORCE_N``), instead of at the expert grasp pose. For a part that is regrasped and
+    turned through several grasps (a nut), where the hand turns away from the fixed grasp pose."""
 
 
 def valve_task(env: ManagerBasedEnv) -> ValveTaskCfg:
@@ -95,6 +107,32 @@ def valve_joint_id(env: ManagerBasedEnv) -> int:
     """Index of the turned joint in the valve articulation."""
     task = valve_task(env)
     return env.scene[task.asset_name].find_joints(task.joint_name)[0][0]
+
+
+def write_valve_angle(
+    env: ManagerBasedEnv, env_ids: torch.Tensor, angle: torch.Tensor, rate: torch.Tensor | None = None
+) -> None:
+    """Write the turned joint's ``angle`` [rad] and ``rate`` [rad/s] (default 0), each ``(len(env_ids),)``,
+    for environments ``env_ids``, and the coupled joint's matching state (:attr:`ValveTaskCfg.coupled_joint_name`).
+    """
+    task = valve_task(env)
+    valve = valve_asset(env)
+    rate = torch.zeros_like(angle) if rate is None else rate
+    joints = [valve_joint_id(env)]
+    pos, vel = angle[:, None], rate[:, None]
+    if task.coupled_joint_name is not None:
+        joints.append(valve.find_joints(task.coupled_joint_name)[0][0])
+        pos = torch.cat((pos, task.coupled_offset + task.coupled_ratio * pos), dim=-1)
+        vel = torch.cat((vel, task.coupled_ratio * vel), dim=-1)
+    valve.write_joint_position_to_sim_index(position=pos.contiguous(), joint_ids=joints, env_ids=env_ids)
+    valve.write_joint_velocity_to_sim_index(velocity=vel.contiguous(), joint_ids=joints, env_ids=env_ids)
+
+
+def sync_coupled_joint(env: ManagerBasedEnv, env_ids: torch.Tensor | None) -> None:
+    """Reset event: put the coupled joint where the turned joint's angle says (after a reset of that angle)."""
+    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+    if valve_task(env).coupled_joint_name is not None:
+        write_valve_angle(env, ids, valve_angle(env)[ids].clone())
 
 
 def valve_rate(env: ManagerBasedEnv) -> torch.Tensor:
@@ -538,8 +576,16 @@ def lever_held(env: ManagerBasedEnv, dist_threshold: float, ang_threshold: float
 
     Both position and orientation are required: a closed gripper near the
     lever at the wrong orientation is a fist pushing the lever, which the
-    first teacher run learned to do (0.99 s opening, 0% grasps).
+    first teacher run learned to do (0.99 s opening, 0% grasps). With
+    :attr:`ValveTaskCfg.hold_by_contact` both pads must touch the valve instead
+    (the thresholds are then unused).
     """
+    task = valve_task(env)
+    if task.hold_by_contact:
+        from isaaclab_hiveboard.tasks.anymal.ball_valve_rl.expert_bank import CONTACT_FORCE_N
+
+        touching = pad_valve_force(env) > CONTACT_FORCE_N
+        return touching.all(dim=-1) & _gripper_closed(env).bool()
     dist, ang = tcp_grasp_error(env)
     return (dist < dist_threshold) & (ang < ang_threshold) & _gripper_closed(env).bool()
 
