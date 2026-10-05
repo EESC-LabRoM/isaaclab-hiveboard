@@ -356,6 +356,13 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
         help="Override playback FPS. Default: 1 / (sim.dt * decimation), preserving simulated time.",
     )
     parser.add_argument(
+        "--video-render-fps",
+        type=float,
+        default=None,
+        help="Capture frames between policy steps, every round(1 / (fps * sim.dt)) physics substeps, "
+        "for smoother video that still plays in real time (default: one frame per policy step).",
+    )
+    parser.add_argument(
         "--video-source",
         choices=("auto", "scene", "viewer"),
         default="auto",
@@ -375,6 +382,25 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
         help="Lighting rig for RTX viewer video (default: studio). scene_cam keeps the scene's lights.",
     )
     parser.add_argument(
+        "--video-rtx-quality",
+        type=int,
+        default=None,
+        help="omni:rtx:quality for RTX viewer video, e.g. 100 re-enables the path tracer's convergence loop "
+        "for cleaner, slower frames (default: ViewerRTX's interactive setting). scene_cam ignores it.",
+    )
+    parser.add_argument(
+        "--video-crf",
+        type=int,
+        default=18,
+        help="libx264 CRF; lower is higher quality (default: 18; ~12 for publication, 0 is lossless).",
+    )
+    parser.add_argument(
+        "--video-preset",
+        default="medium",
+        choices=("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"),
+        help="libx264 preset; slower compresses better at the same quality (default: medium).",
+    )
+    parser.add_argument(
         "--video-name",
         default=None,
         help="Output filename (default: <task-slug>-<timestamp>.mp4).",
@@ -388,12 +414,14 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
     )
     add_launcher_args(parser)
     args, hydra_args = setup_preset_cli(parser, argv=argv)
-    for name in ("duration", "video_fps", "max_steps", "num_demos"):
+    for name in ("duration", "video_fps", "video_render_fps", "max_steps", "num_demos"):
         value = getattr(args, name)
         if value is not None and (not math.isfinite(value) or value <= 0):
             parser.error(f"--{name.replace('_', '-')} must be positive and finite")
     if args.viser_port is not None and args.viser_port <= 0:
         parser.error("--viser-port must be a positive integer")
+    if not 0 <= args.video_crf <= 51:
+        parser.error("--video-crf must be between 0 and 51")
     if not any(token.startswith(("physics=", "presets=")) for token in hydra_args):
         hydra_args.append("physics=newton_mjwarp")
     if (
@@ -451,11 +479,7 @@ def _play_steps(
             if collision_audit is not None:
                 collision_audit.step(count)
             if video_writer is not None:
-                if video_source == "scene":
-                    frame = _read_scene_rgb(base, args.video_env)
-                else:
-                    frame = _video_visualizer(base).render_rgb_array()
-                video_writer.write(frame)
+                video_writer.write(_grab_frame(base, args, video_source))
 
             log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
             if log_now and args.contact_debug:
@@ -558,7 +582,12 @@ def _request_video_visualizer(env_cfg, args) -> None:
         # Isaac Lab forwards env_cfg.viewer (default 1280x720) over the visualizer's window size.
         env_cfg.viewer.resolution = (1920, 1080)
         # A live window, if any, stays GL; the RTX viewer renders only when a frame is captured.
-        cfgs.append(NewtonRTXVisualizerCfg(**view, rtx_environment=args.video_rtx_environment))
+        render_settings = {}
+        if args.video_rtx_quality is not None:
+            render_settings["omni:rtx:quality"] = ("Int", args.video_rtx_quality)
+        cfgs.append(
+            NewtonRTXVisualizerCfg(**view, rtx_environment=args.video_rtx_environment, render_settings=render_settings)
+        )
     else:
         cfgs.append(NewtonGLVisualizerCfg(**view))
     env_cfg.sim.visualizer_cfgs = cfgs
@@ -611,6 +640,51 @@ def _position_newton_cameras(base, env_index: int) -> None:
         viz.set_camera_view(eye, lookat)
 
 
+def _grab_frame(base, args, video_source):
+    if video_source == "scene":
+        return _read_scene_rgb(base, args.video_env)
+    return _video_visualizer(base).render_rgb_array()
+
+
+def _substep_interval(base, args) -> int | None:
+    """Physics substeps between frames for --video-render-fps, or None for one frame per policy step."""
+    if args.video_render_fps is None:
+        return None
+    return max(1, round(1 / (args.video_render_fps * base.cfg.sim.dt)))
+
+
+def _capture_substeps(base, args, video_source, video_writer, interval: int) -> None:
+    """Write a frame every ``interval`` physics substeps, once the scene (and scene_cam) has updated.
+
+    After setup, the environment updates the scene only in its decimation loop, once per substep.
+    """
+    if base._physics_handles_decimation:
+        # Newton runs the whole decimation loop as one CUDA graph; capture one substep instead so the
+        # environment steps, and updates the scene, once per substep.
+        base.sim.physics_manager.set_decimation(1)
+        base._physics_handles_decimation = False
+    update = base.scene.update
+    substeps = 0
+
+    def update_and_capture(dt: float) -> None:
+        nonlocal substeps
+        update(dt)
+        substeps += 1
+        if substeps % interval == 0:
+            video_writer.write(_grab_frame(base, args, video_source))
+
+    base.scene.update = update_and_capture
+
+
+def _start_capture(base, args, video_source, video_writer: VideoWriter | None) -> VideoWriter | None:
+    """Hook substep capture for --video-render-fps; return the writer the play loop feeds per policy step."""
+    interval = _substep_interval(base, args)
+    if video_writer is None or interval is None:
+        return video_writer
+    _capture_substeps(base, args, video_source, video_writer, interval)
+    return None
+
+
 def _open_video(base, args, video_source) -> VideoWriter | None:
     if not args.video:
         return None
@@ -620,14 +694,15 @@ def _open_video(base, args, video_source) -> VideoWriter | None:
     else:
         # Size the video from a real frame; the framebuffer can differ from the cfg window size.
         video_height, video_width = _video_visualizer(base).render_rgb_array().shape[:2]
-    fps = simulation_fps(base.cfg.sim.dt, base.cfg.decimation)
+    interval = _substep_interval(base, args)
+    fps = simulation_fps(base.cfg.sim.dt, base.cfg.decimation if interval is None else interval)
     if args.video_fps is not None:
         fps = Fraction(args.video_fps).limit_denominator(1_000_000)
     video_name = args.video_name or (f"{_video_slug(args.task)}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4")
     if not video_name.endswith(".mp4"):
         video_name += ".mp4"
     video_path = os.path.abspath(os.path.join(args.video_folder, video_name))
-    video_writer = VideoWriter(video_path, video_width, video_height, fps)
+    video_writer = VideoWriter(video_path, video_width, video_height, fps, crf=args.video_crf, preset=args.video_preset)
     print(
         f"[INFO] Recording {video_source} to {video_path} "
         f"({video_width}x{video_height} @ {fps} fps; "
@@ -758,8 +833,9 @@ def main() -> int:
         video_writer = None
         try:
             video_writer = _open_video(base, args, video_source)
+            step_writer = _start_capture(base, args, video_source, video_writer)
             count = _play_steps(
-                env, obs, args, step_limit, episode_steps, video_writer, video_source, joint_log, collision_audit
+                env, obs, args, step_limit, episode_steps, step_writer, video_source, joint_log, collision_audit
             )
         finally:
             if collision_audit is not None:

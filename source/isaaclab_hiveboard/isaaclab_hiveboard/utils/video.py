@@ -22,7 +22,9 @@ def simulation_fps(physics_dt: float, decimation: int) -> Fraction:
 class VideoWriter:
     """Encode RGB frames; publish the final filename only after successful encoding."""
 
-    def __init__(self, path: str | Path, width: int, height: int, fps: Fraction):
+    def __init__(
+        self, path: str | Path, width: int, height: int, fps: Fraction, *, crf: int = 18, preset: str = "medium"
+    ):
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise RuntimeError("Video recording requires ffmpeg on PATH.")
@@ -54,7 +56,9 @@ class VideoWriter:
                     "-pix_fmt",
                     "yuv420p",
                     "-crf",
-                    "18",
+                    str(crf),
+                    "-preset",
+                    preset,
                     "-movflags",
                     "+faststart",
                     str(self.partial_path),

@@ -85,6 +85,14 @@ def player_command(task: str, output: Path, args: argparse.Namespace) -> list[st
         args.video_source,
         "--video-renderer",
         args.renderer,
+        "--video-rtx-environment",
+        args.rtx_environment,
+        *(["--video-rtx-quality", str(args.rtx_quality)] if args.rtx_quality is not None else []),
+        *(["--video-render-fps", str(args.fps)] if args.fps is not None else []),
+        "--video-crf",
+        str(args.crf),
+        "--video-preset",
+        args.preset,
         "--no-dataset",
         "--no-joint-log",
         "--visualizer",
@@ -197,6 +205,31 @@ def main(argv: list[str] | None = None) -> int:
         default="rtx",
         help="rtx path-traces with kitless OVRTX (default); newton uses the faster Warp/GL rasterizers.",
     )
+    parser.add_argument(
+        "--rtx-environment",
+        choices=("default", "studio", "none"),
+        default="studio",
+        help="Lighting rig for RTX viewer video (default: studio). scene_cam keeps the scene's lights.",
+    )
+    parser.add_argument(
+        "--rtx-quality",
+        type=int,
+        default=None,
+        help="omni:rtx:quality for RTX viewer video; 100 converges each frame for publication renders.",
+    )
+    parser.add_argument(
+        "--fps",
+        type=positive_seconds,
+        default=None,
+        help="Render frames between policy steps at about this simulated rate (default: one per policy step).",
+    )
+    parser.add_argument("--crf", type=int, default=18, help="libx264 CRF; lower is higher quality (18).")
+    parser.add_argument("--preset", default="medium", help="libx264 preset, e.g. slow or veryslow (medium).")
+    parser.add_argument(
+        "--publication",
+        action="store_true",
+        help="Shorthand for --renderer rtx --rtx-quality 100 --fps 50 --crf 12 --preset slow.",
+    )
     parser.add_argument("--list", action="store_true", help="Print selected task IDs without running simulations.")
     parser.add_argument("--dry-run", action="store_true", help="Print recording commands without running simulations.")
     parser.add_argument(
@@ -205,6 +238,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Record all environment variants, including non-Play training tasks (default records only Play envs).",
     )
     args = parser.parse_args(argv)
+    if args.publication:
+        args.renderer, args.rtx_quality, args.crf, args.preset = "rtx", 100, 12, "slow"
+        args.fps = args.fps or 50.0
 
     registered = discover_tasks()
     if args.task:
