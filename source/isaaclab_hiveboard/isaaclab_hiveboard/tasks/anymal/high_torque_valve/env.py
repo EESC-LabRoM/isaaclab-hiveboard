@@ -20,6 +20,7 @@ from isaaclab_hiveboard.tasks.anymal.high_torque_valve.configs.events import Val
 from isaaclab_hiveboard.tasks.anymal.high_torque_valve.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.anymal.high_torque_valve.configs.scene import HighTorqueValveSceneCfg
 from isaaclab_hiveboard.tasks.anymal.high_torque_valve.configs.terminations import TerminationsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -91,3 +92,4 @@ class AnymalHighTorqueValveEnvCfg_PLAY(AnymalHighTorqueValveEnvCfg):
         # Leave time for approach, the slow valve arc, and retreat during replay.
         self.episode_length_s = 20.0
         self.commands.pose_command.open_task_prob = 1.0
+        use_play_viewer(self)

@@ -23,6 +23,7 @@ from isaaclab_hiveboard.tasks.spot.circuit_breaker.configs.events import (
 from isaaclab_hiveboard.tasks.spot.circuit_breaker.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.spot.circuit_breaker.configs.scene import CircuitBreakerSceneCfg
 from isaaclab_hiveboard.tasks.spot.circuit_breaker.configs.terminations import TerminationsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -89,3 +90,4 @@ class SpotCircuitBreakerEnvCfg_PLAY(SpotCircuitBreakerEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 1
         self.commands.pose_command.open_task_prob = 1.0
+        use_play_viewer(self)

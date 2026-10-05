@@ -20,6 +20,7 @@ from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.events import ValveEvent
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.scene import BallValveSceneCfg
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.terminations import DeltaCollectionTerminationsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -92,3 +93,4 @@ class AnymalBallValveEnvCfg_PLAY(AnymalBallValveEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 1
         self.commands.pose_command.open_task_prob = 1.0
+        use_play_viewer(self)

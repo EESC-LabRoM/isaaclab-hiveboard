@@ -21,6 +21,7 @@ from isaaclab_hiveboard.tasks.anymal.bench_valve.configs.events import BenchValv
 from isaaclab_hiveboard.tasks.anymal.bench_valve.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.anymal.bench_valve.configs.scene import BenchValveSceneCfg
 from isaaclab_hiveboard.tasks.anymal.bench_valve.configs.terminations import BenchValveTerminationsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -91,3 +92,4 @@ class AnymalBenchValveEnvCfg_PLAY(AnymalBenchValveEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

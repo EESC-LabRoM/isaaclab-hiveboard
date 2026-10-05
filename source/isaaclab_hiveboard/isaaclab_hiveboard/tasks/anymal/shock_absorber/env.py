@@ -35,6 +35,7 @@ from isaaclab_hiveboard.tasks.anymal.mechanism import (
     pad_contacts,
 )
 from isaaclab_hiveboard.tasks.scenes.shock_absorber import PIN_SEATED, PIN_START, ShockAbsorberSceneCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 PIN_JOINTS = ["PrismaticJoint"]
 _LEFT_PAD, _RIGHT_PAD = pad_contacts("ShockAbsorber")
@@ -146,3 +147,7 @@ class AnymalShockAbsorberEnvCfg_PLAY(AnymalShockAbsorberEnvCfg):
     """Deterministic one-environment Newton demonstration."""
 
     events: MechanismEventCfg = mechanism_events("shock_absorber", PIN_JOINTS, play=True)  # type: ignore
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_play_viewer(self)

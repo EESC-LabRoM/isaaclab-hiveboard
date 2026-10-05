@@ -49,6 +49,7 @@ from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionC
 from isaaclab_hiveboard.mdp.events import apply_articulation_gravcomp, set_contact_stiffness
 from isaaclab_hiveboard.tasks.anymal.ball_valve.configs.scene import BallValveSceneCfg
 from isaaclab_hiveboard.tasks.anymal.ball_valve_rl import actuator_delay, expert_bank, expert_diversity, mdp, valve_dynamics
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 ARM = SceneEntityCfg("robot", joint_names=list(ANYMAL_ARM_JOINT_NAMES), preserve_order=True)
 GRIPPER = SceneEntityCfg("robot", joint_names=list(NEWTON_GRIPPER_JOINT_NAMES), preserve_order=True)
@@ -488,3 +489,4 @@ def configure_play(cfg: AnymalBallValveRLEnvCfg) -> None:
     # The cuRobo expert's turning speed; sweep with
     # env.commands.valve_turn.rate_range=[r,r].
     cfg.commands.valve_turn.rate_range = (0.3, 0.3)
+    use_play_viewer(cfg)

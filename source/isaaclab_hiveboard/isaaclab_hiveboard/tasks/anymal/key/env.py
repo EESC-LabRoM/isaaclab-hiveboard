@@ -22,6 +22,7 @@ from isaaclab_hiveboard.tasks.anymal.mechanism import (
     mechanism_events,
     mechanism_observations,
 )
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 KEY_JOINTS = ["RevoluteJoint"]
 
@@ -61,3 +62,4 @@ class AnymalKeyEnvCfg_PLAY(AnymalKeyEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

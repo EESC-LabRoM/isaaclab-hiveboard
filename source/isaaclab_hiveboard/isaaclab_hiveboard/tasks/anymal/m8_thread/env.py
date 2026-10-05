@@ -28,6 +28,7 @@ from isaaclab_hiveboard.tasks.anymal.screw import (
     screw_terminations,
 )
 from isaaclab_hiveboard.tasks.scenes.threads import M8_SPEC, M8SceneCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 _LEFT_PAD, _RIGHT_PAD = pad_contacts("Thread")
 
@@ -61,3 +62,7 @@ class AnymalM8ThreadEnvCfg_PLAY(AnymalM8ThreadEnvCfg):
     """Deterministic one-environment Newton demonstration."""
 
     events: MechanismEventCfg = screw_events("thread", M8_SPEC, play=True)  # type: ignore
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_play_viewer(self)

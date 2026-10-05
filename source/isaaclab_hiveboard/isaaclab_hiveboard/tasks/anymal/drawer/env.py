@@ -26,6 +26,7 @@ from isaaclab_hiveboard.tasks.anymal.mechanism import (
     mechanism_events,
     mechanism_observations,
 )
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 def _drawer_observations() -> MechanismObservationsCfg:
@@ -82,3 +83,4 @@ class AnymalDrawerEnvCfg_PLAY(AnymalDrawerEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

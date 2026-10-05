@@ -19,6 +19,7 @@ from isaaclab_hiveboard.tasks.spot.bench_valve.configs.events import BenchValveE
 from isaaclab_hiveboard.tasks.spot.gains.configs.observations import ObservationsCfg
 from isaaclab_hiveboard.tasks.spot.gains.configs.scene import SpotGainsSceneCfg
 from isaaclab_hiveboard.tasks.spot.gains.configs.terminations import SpotGainsTerminationsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -84,3 +85,4 @@ class SpotGainsEnvCfg_PLAY(SpotGainsEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

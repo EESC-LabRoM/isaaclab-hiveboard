@@ -22,6 +22,7 @@ from isaaclab_hiveboard.tasks.anymal.mechanism import (
     mechanism_events,
     mechanism_observations,
 )
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 BUTTON_JOINTS = ["RevoluteJoint", "PrismaticJoint"]
 
@@ -63,3 +64,4 @@ class AnymalButtonEnvCfg_PLAY(AnymalButtonEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

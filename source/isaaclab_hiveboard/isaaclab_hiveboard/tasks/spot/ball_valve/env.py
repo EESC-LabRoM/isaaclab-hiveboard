@@ -22,6 +22,7 @@ from isaaclab_hiveboard.tasks.spot.ball_valve.configs.scene import BallValveScen
 from isaaclab_hiveboard.tasks.spot.ball_valve.configs.terminations import DeltaCollectionTerminationsCfg
 
 from isaaclab_hiveboard.assets.spot.bench import DECIMATION, PHYSICS_DT
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -98,3 +99,4 @@ class SpotBallValveEnvCfg_PLAY(SpotBallValveEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 1
         self.commands.pose_command.open_task_prob = 1.0
+        use_play_viewer(self)

@@ -575,11 +575,20 @@ def _video_visualizer(base):
     raise RuntimeError("Viewer video needs a Newton visualizer, but none is active.")
 
 
-def _position_headless_video_camera(base, env_index: int) -> None:
-    """Resolve ViewerCfg's relative eye/target after reset, when asset poses exist."""
-    viz = _video_visualizer(base)
-    if not getattr(viz.cfg, "headless", False):
-        return  # Record what the live Newton window shows.
+def _position_newton_cameras(base, env_index: int) -> None:
+    """Resolve ViewerCfg's relative eye/target after reset, when asset poses exist.
+
+    Newton visualizers treat eye/lookat as world coordinates, so a camera given in
+    an environment or asset frame is placed here, once, on the live window and the
+    headless video viewer alike. Viewer video then records what the live window shows.
+    """
+    newton = [
+        viz
+        for viz in base.sim.visualizers
+        if getattr(viz.cfg, "visualizer_type", None) in (NEWTON_RTX_TYPE, *NEWTON_GL_TYPES)
+    ]
+    if not newton:
+        return
     cfg = base.cfg.viewer
     index = min(max(env_index, 0), base.num_envs - 1)
     origin = torch.zeros(3, device=base.device)
@@ -592,14 +601,13 @@ def _position_headless_video_camera(base, env_index: int) -> None:
         else:
             body_ids, _ = asset.find_bodies(cfg.body_name)
             if len(body_ids) != 1:
-                raise ValueError(f"Video camera expected one body matching {cfg.body_name!r}.")
+                raise ValueError(f"Viewer camera expected one body matching {cfg.body_name!r}.")
             origin = _as_torch(asset.data.body_pos_w)[index, body_ids[0]]
     offset = origin.detach().cpu().tolist()
-    # The Newton viewer treats eye/lookat as world coordinates.
-    viz.set_camera_view(
-        tuple(value + shift for value, shift in zip(cfg.eye, offset, strict=True)),
-        tuple(value + shift for value, shift in zip(cfg.lookat, offset, strict=True)),
-    )
+    eye = tuple(value + shift for value, shift in zip(cfg.eye, offset, strict=True))
+    lookat = tuple(value + shift for value, shift in zip(cfg.lookat, offset, strict=True))
+    for viz in newton:
+        viz.set_camera_view(eye, lookat)
 
 
 def _open_video(base, args, video_source) -> VideoWriter | None:
@@ -609,7 +617,6 @@ def _open_video(base, args, video_source) -> VideoWriter | None:
         cam_cfg = base.scene["scene_cam"].cfg
         video_width, video_height = int(cam_cfg.width), int(cam_cfg.height)
     else:
-        _position_headless_video_camera(base, args.video_env)
         # Size the video from a real frame; the framebuffer can differ from the cfg window size.
         video_height, video_width = _video_visualizer(base).render_rgb_array().shape[:2]
     fps = simulation_fps(base.cfg.sim.dt, base.cfg.decimation)
@@ -710,6 +717,7 @@ def main() -> int:
             episode_steps = max(1, math.ceil(float(base.cfg.episode_length_s) / step_dt))
 
         obs, _ = env.reset(seed=args.seed)
+        _position_newton_cameras(base, args.video_env)
 
         if args.ee_debug:
             from isaaclab_hiveboard.assets.end_effector import SPOT_EE, print_ee_offset_report

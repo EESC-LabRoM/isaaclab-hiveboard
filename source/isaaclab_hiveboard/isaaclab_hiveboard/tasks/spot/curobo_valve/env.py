@@ -25,6 +25,7 @@ from isaaclab_hiveboard.tasks.spot.curobo_valve.configs.actions import (
 from isaaclab_hiveboard.tasks.spot.curobo_valve.configs.commands import (
     CuroboValveCommandsCfg,
 )
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -64,3 +65,4 @@ class SpotCuroboValveEnvCfg_PLAY(SpotCuroboValveEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

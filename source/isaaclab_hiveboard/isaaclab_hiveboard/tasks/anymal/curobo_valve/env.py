@@ -31,6 +31,7 @@ from isaaclab_hiveboard.tasks.anymal.curobo_valve.configs.terminations import (
     AnymalCuroboValveTerminationsCfg,
 )
 from isaaclab_hiveboard.tasks.spot.bench_valve.env import SpotBenchValvePhysicsCfg
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 
 @configclass
@@ -70,3 +71,4 @@ class AnymalCuroboValveEnvCfg_PLAY(AnymalCuroboValveEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 1
+        use_play_viewer(self)

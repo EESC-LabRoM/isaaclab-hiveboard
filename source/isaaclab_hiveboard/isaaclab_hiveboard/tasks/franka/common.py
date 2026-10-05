@@ -25,6 +25,7 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import ASSET_DIR, FRANKA_EE, FRANKA_FR3_HIGH_PD_CFG, as_command_offset, make_ee_frame
 from isaaclab_hiveboard.mdp.events import set_contact_stiffness
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 FRANKA_ARM_JOINT_NAMES = [f"fr3_joint{i}" for i in range(1, 8)]
 FRANKA_FINGER_JOINT_NAMES = ["fr3_finger_joint1", "fr3_finger_joint2"]
@@ -168,6 +169,9 @@ def use_franka(
 
     obj = getattr(scene, object_name)
     obj.init_state.pos = tuple(p + d for p, d in zip(obj.init_state.pos, scene_shift))
+    if env_cfg.viewer.origin_type == "env":
+        # The Play camera is fixed in the environment frame; move it with the object.
+        use_play_viewer(env_cfg, scene_shift)
 
     pose_command = env_cfg.commands.pose_command
     pose_command.body_name = FRANKA_EE.body_name
