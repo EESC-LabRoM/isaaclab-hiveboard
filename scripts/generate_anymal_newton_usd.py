@@ -23,6 +23,8 @@ is the record of how those files are produced. Everything here is kitless
    ``assets/anymal/anymal.py``), and strips nested articulation roots plus the
    gripper's world-fixed joint. Normalize the gripper's mesh collision APIs
    so Newton imports the palm and fingertips as well as the outer fingers.
+   Re-weld the ANYmal and gripper meshes with crease-angle normals into a
+   binary sublayer so Newton's viewers shade them without facets or blobs.
 4. ``verify``: open the baked stage with pxr and check joints / bodies /
    articulation roots.
 
@@ -53,6 +55,10 @@ NUCLEUS_DIR = ANYMAL_USD_DIR / "nucleus"
 DYNAARM_URDF = EXT_ASSETS / "anymal" / "urdf" / "dynaarm.urdf"
 DYNAARM_USD = ANYMAL_USD_DIR / "dynaarm.usd"
 ASSEMBLY_USDA = ANYMAL_USD_DIR / "anymal_d_dynaarm_robotiq.usda"
+# Binary sublayer of ASSEMBLY_USDA holding the re-welded ANYmal/gripper meshes.
+SMOOTH_MESHES_USD = ANYMAL_USD_DIR / "anymal_d_dynaarm_robotiq_smooth_meshes.usd"
+# Corners whose face normals differ by more than this keep a hard edge.
+SMOOTH_CREASE_ANGLE_DEG = 30.0
 
 S3_BASE = "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
 S3_ANYMAL_PREFIX = "Assets/Isaac/6.0/Isaac/IsaacLab/Robots/ANYbotics/ANYmal-D"
@@ -714,6 +720,8 @@ def bake_assembly() -> Path:
             stage.RemovePrim(prim.GetPath())
     _prepare_gripper_geometry(stage, grip_root)
     _configure_gripper_linkage(stage, grip_root)
+    layer = _smooth_meshes(stage, [f"{baked_path}/anymal", f"{baked_path}/robotiq_2f_140"])
+    _split_gripper_render_meshes(stage, layer, f"{baked_path}/robotiq_2f_140")
     # Anchor the trunk like Spot's UUC `root_joint`: weld the root link to the
     # asset top Xform (NOT to world) with identity frames. This moves with the
     # asset through IsaacLab placement/cloning, exactly like the Spot bench.
@@ -814,6 +822,164 @@ def _configure_gripper_linkage(stage, grip_root) -> None:
     print("[BAKE] restored gripper linkage (2 loop connections, 3 joint couplings)")
 
 
+def _smooth_meshes(stage, root_paths: list[str]):
+    """Re-weld the ANYmal and gripper meshes so Newton's computed normals shade them right.
+
+    Newton ignores authored normals: drawn colliders load without them and
+    faceVarying UVs unweld every corner, then the viewers average normals over
+    shared vertices. The gripper meshes are welded (shading smooths over
+    their sharp edges); the ANYmal shell is fully unwelded (faceted),
+    and some of its authored normals are 90 deg off the faces anyway. Rebuild
+    each mesh from its geometry: share a vertex where position and UV agree
+    and the face normals are within SMOOTH_CREASE_ANGLE_DEG, and store UVs
+    per vertex so Newton keeps that topology. Faces keep their order, so
+    material subsets stay valid; gripper colliders are convex hulls, so
+    duplicated vertices change nothing physically.
+    """
+    from pxr import Sdf, Usd, UsdGeom
+
+    # The ANYmal visuals are instanced; instance proxies cannot be edited.
+    for path in root_paths:
+        root = stage.GetPrimAtPath(path)
+        while instances := [p for p in Usd.PrimRange(root) if p.IsInstanceable() and p.GetName() == "visuals"]:
+            for prim in instances:
+                prim.SetInstanceable(False)
+
+    if SMOOTH_MESHES_USD.exists():
+        SMOOTH_MESHES_USD.unlink()
+    layer = Sdf.Layer.CreateNew(str(SMOOTH_MESHES_USD))
+    stage.GetRootLayer().subLayerPaths.append(os.path.relpath(SMOOTH_MESHES_USD, ASSEMBLY_USDA.parent))
+    meshes = [p for path in root_paths for p in Usd.PrimRange(stage.GetPrimAtPath(path)) if p.IsA(UsdGeom.Mesh)]
+    before = after = 0
+    with Usd.EditContext(stage, layer):
+        for prim in meshes:
+            n_points, n_vertices = _smooth_mesh(UsdGeom.Mesh(prim))
+            before += n_points
+            after += n_vertices
+    layer.Save()
+    print(f"[BAKE] re-welded {len(meshes)} ANYmal/gripper meshes ({before} -> {after} vertices)")
+    return layer
+
+
+def _split_gripper_render_meshes(stage, layer, grip_path: str) -> None:
+    """Draw the gripper from visual-only copies and hide its colliders.
+
+    Each 2F-140 mesh is both a convex-hull collider and the drawn geometry.
+    Newton imports it as a hidden hull plus a full-detail ``*_visual`` copy,
+    but Isaac Lab hides that copy (it assumes it belongs to a proxy-purpose
+    collider) and then shows the collider again because the body has no other
+    visual, so viewers draw the 64-vertex hulls (the blobby palm). A sibling
+    ``*_render`` mesh without collision APIs is a real visual shape, and the
+    ``guide`` purpose hides the collider, as on the DynaArm.
+    """
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics, UsdShade
+
+    grip_root = stage.GetPrimAtPath(grip_path)
+    colliders = [p for p in Usd.PrimRange(grip_root) if p.IsA(UsdGeom.Mesh) and p.HasAPI(UsdPhysics.CollisionAPI)]
+    with Usd.EditContext(stage, layer):
+        for prim in colliders:
+            src = UsdGeom.Mesh(prim)
+            dst = UsdGeom.Mesh.Define(stage, prim.GetPath().GetParentPath().AppendChild(f"{prim.GetName()}_render"))
+            for getter in (
+                "GetPointsAttr",
+                "GetFaceVertexCountsAttr",
+                "GetFaceVertexIndicesAttr",
+                "GetNormalsAttr",
+                "GetSubdivisionSchemeAttr",
+                "GetOrientationAttr",
+                "GetDoubleSidedAttr",
+                "GetExtentAttr",
+            ):
+                value = getattr(src, getter)().Get()
+                if value is not None:
+                    getattr(dst, getter)().Set(value)
+            dst.SetNormalsInterpolation(src.GetNormalsInterpolation())
+            transform = UsdGeom.Xformable(prim).GetLocalTransformation()
+            if transform != Gf.Matrix4d(1.0):
+                dst.AddTransformOp().Set(transform)
+            material = UsdShade.MaterialBindingAPI(prim).GetDirectBinding().GetMaterial()
+            _bind_visual_material(dst.GetPrim(), material, material.GetPrim().GetName())
+            UsdGeom.Imageable(prim).CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+    layer.Save()
+    print(f"[BAKE] split {len(colliders)} gripper meshes into hidden colliders and visual copies")
+
+
+def _smooth_mesh(mesh) -> tuple[int, int]:
+    from pxr import Sdf, UsdGeom, Vt
+
+    points = np.asarray(mesh.GetPointsAttr().Get(), dtype=np.float64)
+    indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), dtype=np.int64)
+    counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get())
+    if np.any(counts != 3):
+        raise RuntimeError(f"Expected a triangle mesh: {mesh.GetPath()}")
+    corners = points[indices]
+    tris = corners.reshape(-1, 3, 3)
+    face_n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])  # area-weighted
+    if mesh.GetOrientationAttr().Get() == UsdGeom.Tokens.leftHanded:
+        face_n = -face_n
+    unit_n = face_n / np.maximum(np.linalg.norm(face_n, axis=1, keepdims=True), 1e-20)
+    corner_face = np.arange(len(indices)) // 3
+
+    st = UsdGeom.PrimvarsAPI(mesh).GetPrimvar("st")
+    uvs = None
+    if st and st.HasAuthoredValue():
+        uvs = np.asarray(st.ComputeFlattened(), dtype=np.float64)
+        if st.GetInterpolation() == UsdGeom.Tokens.vertex:
+            uvs = uvs[indices]
+        elif st.GetInterpolation() != UsdGeom.Tokens.faceVarying or len(uvs) != len(indices):
+            raise RuntimeError(f"Unsupported UV layout: {mesh.GetPath()}")
+
+    scale = max(float(np.ptp(points, axis=0).max()), 1e-9)
+    key = [np.round(corners / (scale * 1e-6)).astype(np.int64)]
+    if uvs is not None:
+        key.append(np.round(uvs * 1e6).astype(np.int64))
+    _, group = np.unique(np.concatenate(key, axis=1), axis=0, return_inverse=True)
+    group = group.ravel()
+
+    # Greedy crease split inside each welded position: join the first cluster
+    # whose mean normal is within the crease angle.
+    cos_crease = math.cos(math.radians(SMOOTH_CREASE_ANGLE_DEG))
+    vertex_of_corner = np.empty(len(indices), dtype=np.int64)
+    sums: list[np.ndarray] = []
+    order = np.argsort(group, kind="stable")
+    bounds = np.flatnonzero(np.diff(group[order])) + 1
+    for members in np.split(order, bounds):
+        local: list[int] = []
+        for c in members:
+            n = unit_n[corner_face[c]]
+            for v in local:
+                s = sums[v]
+                if np.dot(s, n) >= cos_crease * np.linalg.norm(s):
+                    break
+            else:
+                v = len(sums)
+                local.append(v)
+                sums.append(np.zeros(3))
+            sums[v] += n
+            vertex_of_corner[c] = v
+    n_vertices = len(sums)
+    first_corner = np.full(n_vertices, -1, dtype=np.int64)
+    first_corner[vertex_of_corner[::-1]] = np.arange(len(indices))[::-1]
+    normals = np.zeros((n_vertices, 3))
+    np.add.at(normals, vertex_of_corner, face_n[corner_face])
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-20)
+
+    mesh.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(corners[first_corner].astype(np.float32)))
+    mesh.GetFaceVertexIndicesAttr().Set(Vt.IntArray.FromNumpy(vertex_of_corner.astype(np.int32)))
+    mesh.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(normals.astype(np.float32)))
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    mesh.GetSubdivisionSchemeAttr().Set(UsdGeom.Tokens.none)
+    if uvs is not None:
+        primvar = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+            "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
+        )
+        primvar.Set(Vt.Vec2fArray.FromNumpy(uvs[first_corner].astype(np.float32)))
+        primvar.GetAttr().SetMetadata("interpolation", UsdGeom.Tokens.vertex)
+        if primvar.IsIndexed():
+            primvar.BlockIndices()
+    return len(points), n_vertices
+
+
 def report_tcp_offset() -> None:
     """Print the measured flange→TCP offset for ``assets/anymal/bench.py``.
 
@@ -886,14 +1052,17 @@ def verify(*, check_newton: bool = False) -> list[str]:
         problems.append("gripper world FixedJoint not stripped")
     grip_root = stage.GetPrimAtPath(f"{baked}/robotiq_2f_140")
     grip_meshes = [p for p in Usd.PrimRange(grip_root, Usd.TraverseInstanceProxies()) if p.IsA(UsdGeom.Mesh)]
-    if len(grip_meshes) != 11:
-        problems.append(f"expected 11 gripper meshes, found {len(grip_meshes)}")
+    grip_colliders = [p for p in grip_meshes if not p.GetName().endswith("_render")]
+    if len(grip_colliders) != 11:
+        problems.append(f"expected 11 gripper collider meshes, found {len(grip_colliders)}")
     for prim in Usd.PrimRange(grip_root, Usd.TraverseInstanceProxies()):
         if prim.HasAPI(UsdPhysics.CollisionAPI) and not prim.IsA(UsdGeom.Gprim):
             problems.append(f"collision API on non-geometry hides gripper visuals: {prim.GetPath()}")
-    for prim in grip_meshes:
-        if not prim.HasAPI(UsdPhysics.CollisionAPI):
-            problems.append(f"gripper mesh missing collision API: {prim.GetPath()}")
+    problems.extend(_verify_gripper_render_meshes(grip_colliders))
+    anymal_meshes = [p for p in Usd.PrimRange(stage.GetPrimAtPath(f"{baked}/anymal")) if p.IsA(UsdGeom.Mesh)]
+    if len(anymal_meshes) != 38:
+        problems.append(f"expected 38 editable ANYmal visual meshes, found {len(anymal_meshes)}")
+    problems.extend(_verify_smooth_meshes(anymal_meshes + grip_meshes))
     for name in ("finger_joint", *GRIPPER_JOINT_RATIOS, *GRIPPER_LOOP_JOINTS):
         if not grip_root.GetChild(name).IsA(UsdPhysics.RevoluteJoint):
             problems.append(f"gripper linkage hinge missing or frozen: {name}")
@@ -925,6 +1094,35 @@ def verify(*, check_newton: bool = False) -> list[str]:
     return problems
 
 
+def _verify_gripper_render_meshes(colliders: list) -> list[str]:
+    """Check that ``_split_gripper_render_meshes`` hid each collider behind a visual copy."""
+    from pxr import UsdGeom, UsdPhysics
+
+    problems = []
+    for prim in colliders:
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            problems.append(f"gripper mesh missing collision API: {prim.GetPath()}")
+        if UsdGeom.Imageable(prim).ComputePurpose() != UsdGeom.Tokens.guide:
+            problems.append(f"gripper collider drawn over its visual copy: {prim.GetPath()}")
+        render = prim.GetParent().GetChild(f"{prim.GetName()}_render")
+        if not render.IsA(UsdGeom.Mesh) or render.HasAPI(UsdPhysics.CollisionAPI):
+            problems.append(f"gripper mesh missing visual-only copy: {prim.GetPath()}")
+    return problems
+
+
+def _verify_smooth_meshes(meshes: list) -> list[str]:
+    """Check that ``_smooth_meshes`` left one vertex normal per point on every mesh."""
+    from pxr import UsdGeom
+
+    problems = []
+    for prim in meshes:
+        mesh = UsdGeom.Mesh(prim)
+        normals = mesh.GetNormalsAttr().Get() or []
+        if mesh.GetNormalsInterpolation() != UsdGeom.Tokens.vertex or len(normals) != len(mesh.GetPointsAttr().Get()):
+            problems.append(f"mesh not re-welded for Newton shading: {prim.GetPath()}")
+    return problems
+
+
 def _verify_newton_visuals(stage, meshes: list) -> list[str]:
     """Check the imported shapes, including meshes beneath collision holders."""
     import newton
@@ -946,8 +1144,18 @@ def _verify_newton_visuals(stage, meshes: list) -> list[str]:
         if shape_id is None:
             problems.append(f"Newton dropped mesh: {path}")
             continue
-        if not builder.shape_flags[shape_id] & newton.ShapeFlags.VISIBLE:
+        flags = builder.shape_flags[shape_id]
+        gripper_collider = "/robotiq_2f_140/" in path and not path.endswith("_render")
+        if gripper_collider:
+            if not flags & newton.ShapeFlags.COLLIDE_SHAPES:
+                problems.append(f"Newton gripper mesh has no collision: {path}")
+            if flags & newton.ShapeFlags.VISIBLE:
+                problems.append(f"Newton draws gripper collider: {path}")
+            continue
+        if not flags & newton.ShapeFlags.VISIBLE:
             problems.append(f"Newton mesh is invisible: {path}")
+        if flags & newton.ShapeFlags.COLLIDE_SHAPES:
+            problems.append(f"Newton visual mesh collides: {path}")
         body = prim.GetParent()
         while body and not body.HasAPI(UsdPhysics.RigidBodyAPI):
             body = body.GetParent()
@@ -956,8 +1164,6 @@ def _verify_newton_visuals(stage, meshes: list) -> list[str]:
             problems.append(f"Newton mesh attached to wrong body: {path}")
         if "/robotiq_2f_140/" in path:
             color = VISUAL_COLORS["robotiq_dark_metal"]
-            if not builder.shape_flags[shape_id] & newton.ShapeFlags.COLLIDE_SHAPES:
-                problems.append(f"Newton gripper mesh has no collision: {path}")
         else:
             name = "dynaarm_joint_metal" if body.GetName() == "dynaarm_wrist_2" else "dynaarm_carbon_dark"
             color = VISUAL_COLORS[name]
@@ -967,7 +1173,7 @@ def _verify_newton_visuals(stage, meshes: list) -> list[str]:
         drawn = builder.shape_flags[shape_id] & newton.ShapeFlags.VISIBLE
         if drawn and "/dynaarm/" in label and "/collisions/" in label:
             problems.append(f"Newton draws arm collider over the visuals: {label}")
-    print(f"[NEWTON] checked visibility, body ownership and colors for {len(meshes)} arm/gripper meshes")
+    print(f"[NEWTON] checked visibility, collision, body ownership and colors for {len(meshes)} arm/gripper meshes")
     return problems
 
 

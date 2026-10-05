@@ -21,6 +21,7 @@ import isaaclab_hiveboard  # noqa: F401
 import torch
 from isaaclab_hiveboard.mdp.recorders import SpotManipulationRecorderCfg
 from isaaclab_hiveboard.utils.video import VideoWriter, simulation_fps
+from isaaclab_hiveboard.utils.usd_viewer_meshes import patch_usd_viewer_subdivision
 from isaaclab_hiveboard.utils.viser_materials import patch_viser_textured_materials
 
 import isaaclab.utils.math as math_utils
@@ -777,6 +778,7 @@ def main() -> int:
     with launch_simulation(env_cfg, args):
         # Before the visualizers log the model's meshes.
         patch_viser_textured_materials()
+        patch_usd_viewer_subdivision()
         env = gym.make(args.task, cfg=env_cfg)
         base = env.unwrapped
         if args.collision_only and not _apply_collision_only(base):
