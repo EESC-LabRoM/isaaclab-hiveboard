@@ -263,7 +263,10 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
         "Default: run until the visualizer closes, or one episode if headless.",
     )
     parser.add_argument(
-        "--duration", type=float, help="Stop after this many simulated seconds, or at the first episode end."
+        "--duration",
+        type=float,
+        help="Stop after this many simulated seconds, or when the task succeeds or fails. "
+        "Disables the episode time limit so it cannot cut the motion short.",
     )
     parser.add_argument(
         "--num-demos",
@@ -434,6 +437,16 @@ def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list
     return args, hydra_args
 
 
+def _drop_time_limit(env_cfg) -> None:
+    """Remove time-out terminations; the --duration step limit bounds the run instead."""
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        return
+    for name, term in vars(terminations).items():
+        if getattr(term, "time_out", False):
+            setattr(terminations, name, None)
+
+
 def _count_step_terminations(terminated, truncated) -> int:
     """Count the number of environments that reached termination in the current step."""
     if torch.is_tensor(terminated):
@@ -479,7 +492,9 @@ def _play_steps(
                 joint_log.sample(count, action)
             if collision_audit is not None:
                 collision_audit.step(count)
-            if video_writer is not None:
+            completed_in_step = _count_step_terminations(terminated, truncated)
+            # The env resets terminated envs inside step(), so that frame would show the reset pose.
+            if video_writer is not None and completed_in_step == 0:
                 video_writer.write(_grab_frame(base, args, video_source))
 
             log_now = (args.pose_debug or args.contact_debug) and (count % max(args.pose_debug_interval, 1) == 0)
@@ -488,7 +503,6 @@ def _play_steps(
             if log_now and args.pose_debug:
                 _print_pose(base, count, args.pose_debug_env)
 
-            completed_in_step = _count_step_terminations(terminated, truncated)
             if completed_in_step > 0:
                 completed_demos += completed_in_step
                 if args.num_demos is not None:
@@ -736,6 +750,8 @@ def main() -> int:
         env_cfg.sim.device = args.device
     if args.no_dataset:
         env_cfg.recorders = None
+    if args.duration is not None and args.num_demos is None:
+        _drop_time_limit(env_cfg)
 
     video_source = _configure_video(env_cfg, args)
 

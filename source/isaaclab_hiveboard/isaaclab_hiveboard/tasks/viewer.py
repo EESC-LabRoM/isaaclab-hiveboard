@@ -10,7 +10,7 @@
 # the lever and bench valves). The camera looks over the robot's right
 # shoulder: the front of the body and the arm fill the lower left and the
 # mechanism face sits right of centre, close enough to see the grasp.
-PLAY_VIEWER_EYE = (0.55, -0.55, 1.02)
+PLAY_VIEWER_EYE = (0.75, -0.75, 1.02)
 PLAY_VIEWER_LOOKAT = (0.90, 0.0, 0.68)
 
 
