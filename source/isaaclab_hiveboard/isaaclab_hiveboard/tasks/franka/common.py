@@ -103,7 +103,10 @@ def finger_contact_stiffness(object_prim_name: str) -> EventTerm:
 
     MJWarp's default solref is mass-normalized, so the light fingers and parts let
     the stiff FR3 arm push them tens of millimetres into each other (25 mm on the
-    button). Same values as the ANYmal small valve. Add it after any material
+    button). Same ke and solimp as the ANYmal small valve, but a much higher kd
+    (damping ratio ~5): at the small valve's kd=400 (ratio 1) the FR3 fingers
+    settle into a +-1 mm limit cycle on the part, visible as jitter on the M30
+    nut and ball-valve lever. Add it after any material
     randomization event, which re-syncs shape properties.
 
     Args:
@@ -116,7 +119,7 @@ def finger_contact_stiffness(object_prim_name: str) -> EventTerm:
         params={
             "shape_regex": f"/Robot/fr3_(left|right)finger/|/{object_prim_name}",
             "ke": 4.0e4,
-            "kd": 400.0,
+            "kd": 2000.0,
             "solimp": (0.95, 0.99, 0.001),
         },
     )

@@ -13,6 +13,7 @@ sync:
         - .ruff_cache/
         - /logs/
         - /outputs/
+        - /wandb/
         - /my_folder/
         - "*.mp4"
         - "*.step"
@@ -31,4 +32,3 @@ sync:
         - "*.stl"
         - "*.STL"
         - "*.webm"
-
