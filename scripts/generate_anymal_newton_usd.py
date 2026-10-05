@@ -89,11 +89,21 @@ GRIPPER_LOOP_JOINTS = ("left_inner_knuckle_joint", "right_inner_knuckle_joint")
 
 # Match dependencies/hiveboard-bench.github.io/tools/anymal_model.py:PALETTE.
 # Keep these local so asset generation does not require the website checkout.
+# These are display (sRGB) values, as MuJoCo draws rgba. USD colors are linear
+# and Newton re-encodes them to sRGB, so the USD carries _linear_color(...):
+# authoring 0.10 directly renders as 0.35 mid-gray instead of near-black.
 VISUAL_COLORS = {
     "dynaarm_carbon_dark": (0.10, 0.09, 0.09),
     "dynaarm_joint_metal": (0.17, 0.17, 0.18),
     "robotiq_dark_metal": (0.09, 0.09, 0.10),
 }
+
+
+def _linear_color(name: str) -> tuple[float, float, float]:
+    """Decode a ``VISUAL_COLORS`` entry from sRGB to linear for USD."""
+    rgb = np.asarray(VISUAL_COLORS[name], dtype=np.float64)
+    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    return tuple(float(c) for c in linear)
 
 
 def _s3_url(key: str) -> str:
@@ -350,16 +360,30 @@ def _visual_material(stage, root_path: str, name: str):
     material = UsdShade.Material.Define(stage, f"{root_path}/Looks/{name}")
     shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("Shader"))
     shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*VISUAL_COLORS[name]))
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*_linear_color(name)))
     shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.6)
     material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     return material
 
 
+def _apply_collider(prim) -> None:
+    """Make ``prim`` a collider that viewers do not draw.
+
+    Newton draws a collider whenever USD would, so a primitive left at the
+    ``default`` purpose covers the DAE visuals with untextured capsules. The
+    ``guide`` purpose hides it (as ANYmal-D's colliders are hidden); physics
+    ignores purpose.
+    """
+    from pxr import UsdGeom, UsdPhysics
+
+    UsdPhysics.CollisionAPI.Apply(prim)
+    UsdGeom.Imageable(prim).CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+
+
 def _bind_visual_material(prim, material, name: str) -> None:
     from pxr import UsdGeom, UsdShade
 
-    UsdGeom.Gprim(prim).CreateDisplayColorAttr().Set([VISUAL_COLORS[name]])
+    UsdGeom.Gprim(prim).CreateDisplayColorAttr().Set([_linear_color(name)])
     UsdShade.MaterialBindingAPI.Apply(prim).Bind(material, UsdShade.Tokens.strongerThanDescendants)
 
 
@@ -484,7 +508,7 @@ def build_dynaarm_usd() -> Path:
                     Gf.Quatf(cquat[3], Gf.Vec3f(cquat[0], cquat[1], cquat[2]))
                 )
                 xform.AddScaleOp().Set(Gf.Vec3f(*col["size"]))
-                UsdPhysics.CollisionAPI.Apply(cprim)
+                _apply_collider(cprim)
                 continue
             elif col["kind"] == "sphere":
                 cprim = UsdGeom.Sphere.Define(stage, f"{path}/collisions/sphere_{i}").GetPrim()
@@ -492,7 +516,7 @@ def build_dynaarm_usd() -> Path:
             else:
                 continue
             _set_link_transform(cprim, col["pos"], cquat)
-            UsdPhysics.CollisionAPI.Apply(cprim)
+            _apply_collider(cprim)
         for i, vis in enumerate(spec["visuals"]):
             try:
                 parts = _mesh_from_dae(resolve_mesh_path(vis["mesh"]))
@@ -907,10 +931,13 @@ def _verify_newton_visuals(stage, meshes: list) -> list[str]:
     from pxr import UsdPhysics
 
     builder = newton.ModelBuilder()
+    # Equality constraints now live in the MuJoCo custom attributes.
+    newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
     builder.add_usd(stage, load_visual_shapes=True, skip_mesh_approximation=True)
     shape_ids = {label: i for i, label in enumerate(builder.shape_label)}
     problems = []
-    gripper_equalities = [label for label in builder.equality_constraint_label if "/robotiq_2f_140/" in label]
+    equality_labels = builder.custom_attributes["mujoco:equality_constraint_label"].values
+    gripper_equalities = [label for label in equality_labels if label and "/robotiq_2f_140/" in label]
     if len(gripper_equalities) != 5:
         problems.append(f"expected 5 Newton gripper constraints, found {len(gripper_equalities)}")
     for prim in meshes:
@@ -934,8 +961,12 @@ def _verify_newton_visuals(stage, meshes: list) -> list[str]:
         else:
             name = "dynaarm_joint_metal" if body.GetName() == "dynaarm_wrist_2" else "dynaarm_carbon_dark"
             color = VISUAL_COLORS[name]
-        if not np.allclose(builder.shape_color[shape_id], color):
+        if not np.allclose(builder.shape_color[shape_id], color, atol=1e-3):
             problems.append(f"Newton mesh color differs from website palette: {path}")
+    for shape_id, label in enumerate(builder.shape_label):
+        drawn = builder.shape_flags[shape_id] & newton.ShapeFlags.VISIBLE
+        if drawn and "/dynaarm/" in label and "/collisions/" in label:
+            problems.append(f"Newton draws arm collider over the visuals: {label}")
     print(f"[NEWTON] checked visibility, body ownership and colors for {len(meshes)} arm/gripper meshes")
     return problems
 

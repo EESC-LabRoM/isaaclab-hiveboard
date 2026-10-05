@@ -77,6 +77,7 @@ from isaaclab_hiveboard.utils.command_setup import (
     validate_command,
     validate_setup,
 )
+from isaaclab_hiveboard.utils.viser_materials import patch_viser_textured_materials
 
 import isaaclab.utils.math as math_utils
 from isaaclab.sensors import BaseFrameTransformer
@@ -1199,6 +1200,7 @@ def _open_viewer(args):
     from isaaclab_newton.physics import NewtonManager
     from newton.viewer import ViewerViser
 
+    patch_viser_textured_materials()
     port = getattr(args, "viser_port", getattr(args, "port", 9080))
     viewer = ViewerViser(port=port, label="HiveBoard command setup")
     viewer.set_model(NewtonManager.get_model())
