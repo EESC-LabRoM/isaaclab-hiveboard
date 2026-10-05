@@ -1665,3 +1665,61 @@ def set_joint_limit_damping(
     if solver is not None:
         solver.notify_model_changed(ModelFlags.JOINT_DOF_PROPERTIES)
     print(f"[INFO] joint limit kd={kd:g} on {len(sel)} {asset_cfg.name} joints {names}", flush=True)
+
+
+def set_mimic_constraint_stiffness(
+    env: ManagerBasedEnv,
+    env_ids: Sequence[int] | torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    solref: tuple[float, float],
+    solimp: tuple[float, float, float],
+) -> None:
+    """Set the MuJoCo solref/solimp of the mimic constraints on ``asset_cfg``'s joints.
+
+    Newton turns a mimic constraint (e.g. the screw coupling from
+    ``register_screw_joint_mimic``) into an mjEQ_JOINT equality with MuJoCo's
+    default solref (0.02, 1) and solimp (0.9, 0.95, 0.001). That is soft
+    enough for a 70 N squeeze to slide a light nut 20 mm along its thread.
+    Newton has no model field for a mimic's solref, and the solver only
+    re-syncs a mimic's coefficients and active flag, so this writes
+    ``mjw_model.eq_solref/eq_solimp`` directly. Keep ``solref[0]`` >= 2 x the
+    physics substep, or MuJoCo clamps it.
+    """
+    del env_ids
+    try:
+        from isaaclab_newton.physics import NewtonManager as SimulationManager
+    except ImportError as err:
+        print(f"[WARN] set_mimic_constraint_stiffness: Newton not available ({err}).")
+        return
+
+    solver = getattr(SimulationManager, "_solver", None)
+    eq_to_mimic = getattr(solver, "mjc_eq_to_newton_mimic", None)
+    if eq_to_mimic is None:
+        print("[WARN] set_mimic_constraint_stiffness: the solver has no mimic equalities.", flush=True)
+        return
+    model = SimulationManager.get_model()
+    prefix = env.scene[asset_cfg.name].cfg.prim_path.replace("{ENV_REGEX_NS}", "/World/envs/env_.*")
+    import re
+
+    pattern = re.compile(prefix + "/")
+    follower = model.constraint_mimic_joint0.numpy()
+    joint_label = model.joint_label
+    eq_to_mimic = eq_to_mimic.numpy()
+    sel = (eq_to_mimic >= 0) & np.array(
+        [[m >= 0 and bool(pattern.match(str(joint_label[follower[m]]))) for m in row] for row in eq_to_mimic]
+    )
+    if not sel.any():
+        print(f"[WARN] set_mimic_constraint_stiffness: no mimic constraint on {asset_cfg.name}.", flush=True)
+        return
+    ref = solver.mjw_model.eq_solref.numpy()
+    imp = solver.mjw_model.eq_solimp.numpy()
+    if ref.shape[0] != sel.shape[0]:
+        # Shared across worlds (leading dim 1): select by equality only.
+        sel = np.broadcast_to(sel.any(axis=0), ref.shape[:2])
+    ref[sel] = solref
+    imp[sel, :3] = solimp
+    solver.mjw_model.eq_solref.assign(ref)
+    solver.mjw_model.eq_solimp.assign(imp)
+    print(
+        f"[INFO] mimic solref={solref} solimp={solimp} on {int(sel.sum())} {asset_cfg.name} equalities", flush=True
+    )

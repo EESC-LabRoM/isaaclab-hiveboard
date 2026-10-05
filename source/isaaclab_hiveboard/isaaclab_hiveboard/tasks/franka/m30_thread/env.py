@@ -12,9 +12,13 @@ from isaaclab_hiveboard.tasks.franka.common import shift_target_frames, use_fran
 from isaaclab_hiveboard.tasks.scenes.screw import SCREW_GRASP_FRAMES
 from isaaclab_hiveboard.tasks.scenes.threads import M30_SPEC
 
+# The pads meet the nut flats at fr3_finger_joint ~0.0215 m. Closing to 0.0
+# drove them deep enough that the contact pushed the nut along its thread.
+FINGER_CLOSE = 0.019
+
 
 def _use_franka_m30_thread(env_cfg) -> None:
-    use_franka(env_cfg, "thread", "reset_object_root")
+    use_franka(env_cfg, "thread", "reset_object_root", finger_close=FINGER_CLOSE)
     shift_target_frames(env_cfg, SCREW_GRASP_FRAMES, M30_SPEC.franka_tip_x - M30_SPEC.grasp_x)
 
 

@@ -2,6 +2,7 @@
 
 from isaaclab.utils.configclass import configclass
 
+from isaaclab_hiveboard.tasks.franka.common import use_franka_physics
 from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg
 
 from .configs.actions import FrankaLampActionCfg
@@ -20,3 +21,7 @@ class FrankaLampEnvCfg(SpotLampEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     events: FrankaLampEventCfg = FrankaLampEventCfg()
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_franka_physics(self)

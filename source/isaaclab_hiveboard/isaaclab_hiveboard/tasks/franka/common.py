@@ -24,7 +24,9 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.assets import ASSET_DIR, FRANKA_EE, FRANKA_FR3_HIGH_PD_CFG, as_command_offset, make_ee_frame
-from isaaclab_hiveboard.mdp.events import set_contact_stiffness
+from isaaclab_hiveboard.mdp.actions import RateLimitedBinaryJointPositionActionCfg
+from isaaclab_hiveboard.mdp.commands.sequential_pose_command import GripperCommand
+from isaaclab_hiveboard.mdp.events import set_contact_stiffness, set_mimic_constraint_stiffness
 from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 
 FRANKA_ARM_JOINT_NAMES = [f"fr3_joint{i}" for i in range(1, 8)]
@@ -98,16 +100,36 @@ FRANKA_OBJECT_POSE_RANGE = {
 }
 
 
+# Physics settings follow the website's MuJoCo FR3 model
+# (hiveboard-bench.github.io/public/sim/models/fr3.xml: 2 ms step, pad solref
+# (0.005, 1), screw equalities solref (0.01, 1) with solimp dmax 0.999).
+#
+# MuJoCo clamps every solref time constant to >= 2 x the physics step. At 5 ms
+# that made the 15 g fingers' contacts so soft they sank 10-30 mm into parts.
+# 1.5 ms leaves the finger contacts unclamped. Each task keeps its env step.
+FRANKA_PHYSICS_DT = 0.0015
+# Damping ratio ~1: solref (0.005, 1). kd=2000 (ratio ~5) made the contact
+# ~25x softer once MuJoCo clamped its time constant.
+FINGER_CONTACT_KE = 4.0e4
+FINGER_CONTACT_KD = 400.0
+FINGER_OPEN = 0.04
+# The stock binary action jumps the finger target in one step, and the drive
+# slams the pads into the part (12 mm into the M30 nut in one 75 ms step).
+# Ramp the target at about the real FR3 hand's closing speed instead.
+FINGER_CLOSE_SPEED = 0.05
+FINGER_SETTLE_S = 0.1
+"""Time for the drive to settle once the ramped target reaches the close command [s]."""
+
+
 def finger_contact_stiffness(object_prim_name: str) -> EventTerm:
     """Stiffen FR3 finger and object contacts (see :func:`set_contact_stiffness`).
 
     MJWarp's default solref is mass-normalized, so the light fingers and parts let
     the stiff FR3 arm push them tens of millimetres into each other (25 mm on the
-    button). Same ke and solimp as the ANYmal small valve, but a much higher kd
-    (damping ratio ~5): at the small valve's kd=400 (ratio 1) the FR3 fingers
-    settle into a +-1 mm limit cycle on the part, visible as jitter on the M30
-    nut and ball-valve lever. Add it after any material
-    randomization event, which re-syncs shape properties.
+    button). Same values as the ANYmal small valve. Needs
+    :data:`FRANKA_PHYSICS_DT`: at 5 ms MuJoCo clamps the 5 ms time constant to
+    10 ms. Add it after any material randomization event, which re-syncs shape
+    properties.
 
     Args:
         object_prim_name: Leading name of the object prims under the env, e.g.
@@ -118,11 +140,64 @@ def finger_contact_stiffness(object_prim_name: str) -> EventTerm:
         mode="startup",
         params={
             "shape_regex": f"/Robot/fr3_(left|right)finger/|/{object_prim_name}",
-            "ke": 4.0e4,
-            "kd": 2000.0,
+            "ke": FINGER_CONTACT_KE,
+            "kd": FINGER_CONTACT_KD,
             "solimp": (0.95, 0.99, 0.001),
         },
     )
+
+
+def use_franka_physics(env_cfg, finger_close: float | None = None) -> None:
+    """Simulation settings every FR3 task shares, whatever its scene and actions.
+
+    Runs physics at :data:`FRANKA_PHYSICS_DT` with the env step unchanged,
+    stiffens a native screw coupling's equality, and ramps the gripper close.
+    Call it after the task's own ``__post_init__`` has set the decimation and
+    the gripper action.
+
+    Args:
+        env_cfg: The FR3 task config.
+        finger_close: Finger close command [m]. ``None`` keeps the task's.
+            Stopping a few mm past the part's contact width keeps the squeeze
+            even and the pads from sliding off.
+    """
+    step_dt = env_cfg.sim.dt * env_cfg.decimation
+    env_cfg.decimation = max(1, round(step_dt / FRANKA_PHYSICS_DT))
+    env_cfg.sim.dt = step_dt / env_cfg.decimation
+
+    pose_command = getattr(env_cfg.commands, "pose_command", None)
+    coupling = getattr(pose_command, "screw_coupling", None)
+    if coupling is not None and coupling.use_native_mimic_constraint:
+        # MuJoCo's default equality (solref 0.02, solimp 0.9/0.95) let a 70 N
+        # squeeze slide the M30 nut 20 mm off its pitch.
+        env_cfg.events.screw_constraint = EventTerm(
+            func=set_mimic_constraint_stiffness,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg(coupling.asset_name),
+                "solref": (0.01, 1.0),
+                "solimp": (0.95, 0.999, 0.001),
+            },
+        )
+
+    hand = env_cfg.actions.gripper_action
+    close = dict(hand.close_command_expr)
+    if finger_close is not None:
+        close = {"fr3_finger_joint.*": finger_close}
+    env_cfg.actions.gripper_action = RateLimitedBinaryJointPositionActionCfg(
+        asset_name=hand.asset_name,
+        joint_names=hand.joint_names,
+        open_command_expr=hand.open_command_expr,
+        close_command_expr=close,
+        close_speed=FINGER_CLOSE_SPEED,
+    )
+    # Hold each close until the ramped target arrives, so the arm does not
+    # leave with the part only half gripped.
+    close_s = (FINGER_OPEN - min(close.values())) / FINGER_CLOSE_SPEED + FINGER_SETTLE_S
+    for command in getattr(pose_command, "commands", None) or []:
+        if isinstance(command, GripperCommand) and not command.open_gripper and command.duration_s < close_s:
+            env_cfg.episode_length_s += close_s - command.duration_s
+            command.duration_s = close_s
 
 
 @configclass
@@ -150,6 +225,7 @@ def use_franka(
     object_name: str,
     root_reset_event: str | None = None,
     scene_shift: tuple[float, float, float] = FRANKA_SCENE_SHIFT,
+    finger_close: float | None = None,
 ) -> None:
     """Swap the robot-specific parts of a shared HiveBoard task for the FR3.
 
@@ -161,6 +237,8 @@ def use_franka(
             already all zeros (the ``_PLAY`` variants).
         scene_shift: Object offset from the shared scene's spawn. Objects that
             protrude further toward the robot need a smaller -X shift.
+        finger_close: Finger close command [m] (see :func:`use_franka_physics`).
+            ``None`` closes fully.
     """
     scene = env_cfg.scene
     scene.robot = FRANKA_NEWTON_CFG
@@ -185,6 +263,7 @@ def use_franka(
                 setattr(command, key, value)
 
     env_cfg.actions = FrankaJointPositionActionCfg()
+    use_franka_physics(env_cfg, finger_close)
 
     # Replace any stiffening that targets the legged robots' grippers.
     for name, term in list(vars(env_cfg.events).items()):

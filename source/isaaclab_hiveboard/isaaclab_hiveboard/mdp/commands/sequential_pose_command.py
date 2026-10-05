@@ -1060,10 +1060,12 @@ class _CuroboPlannedGoToFrameHandler(_GoToFrameHandler):
         """The handlers of the chain this one leads, itself first; empty unless it leads one."""
         if self._chain_members_cache is None:
             handlers = self._command_term._command_handlers
-            i = handlers.index(self)
+            # A standalone handler (the command editor's preview) is not in
+            # the term's sequence, so it leads no chain.
+            i = next((k for k, h in enumerate(handlers) if h is self), None)
             members = []
             leads = getattr(self.cfg, "chain_with_next", False)
-            if leads and not (i > 0 and getattr(handlers[i - 1].cfg, "chain_with_next", False)):
+            if leads and i is not None and not (i > 0 and getattr(handlers[i - 1].cfg, "chain_with_next", False)):
                 members = [self]
                 j = i
                 while getattr(handlers[j].cfg, "chain_with_next", False):
