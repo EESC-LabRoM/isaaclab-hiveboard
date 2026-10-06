@@ -109,7 +109,7 @@ class PreStepExpertFallbackRecorder(RecorderTerm):
 
     Stored per step as ``data/demo_*/expert_fallback`` so demonstrations and
     DAgger corrections produced by a patched or failed plan can be found and
-    filtered later (see :func:`isaaclab_hiveboard.imitation.merge_datasets`).
+    filtered later (see :func:`isaaclab_hiveboard_rl.imitation.merge_datasets` in hiveboard-rl).
     Tasks without the command term record nothing.
     """
 
