@@ -45,6 +45,8 @@ URDF conversion uses
 Each task is `Isaac-HiveBoard-<Robot>-<Tool>-v0`, with a `-Play-v0` variant
 (fixed reset, for watching and evaluating):
 
+The environments with ✓ have a working heuristic, while the ones with x do not.
+
 | Tool | Spot | Franka | ANYmal |
 | --- | :-: | :-: | :-: |
 | `BallValve` | ✓ | ✓ | ✓ |

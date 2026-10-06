@@ -7,7 +7,7 @@
 
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg
+from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg, use_lamp_play_viewer
 
 from .configs.actions import AnymalLampActionCfg
 from .configs.commands import FramePoseCommandsCfg
@@ -25,3 +25,12 @@ class AnymalLampEnvCfg(SpotLampEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     events: AnymalLampEventCfg = AnymalLampEventCfg()
     commands: FramePoseCommandsCfg = FramePoseCommandsCfg()
+
+
+@configclass
+class AnymalLampEnvCfg_PLAY(AnymalLampEnvCfg):
+    """Deterministic one-environment ANYmal + DynaArm demonstration."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_lamp_play_viewer(self)

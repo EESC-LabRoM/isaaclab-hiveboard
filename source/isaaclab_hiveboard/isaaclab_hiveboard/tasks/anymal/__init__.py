@@ -28,7 +28,7 @@ from .high_torque_valve.env import (
     AnymalHighTorqueValveEnvCfg_PLAY,
 )
 from .key.env import AnymalKeyEnvCfg, AnymalKeyEnvCfg_PLAY
-from .lamp.env import AnymalLampEnvCfg
+from .lamp.env import AnymalLampEnvCfg, AnymalLampEnvCfg_PLAY
 from .m8_thread.env import AnymalM8ThreadEnvCfg, AnymalM8ThreadEnvCfg_PLAY
 from .m30_thread.env import AnymalM30ThreadEnvCfg, AnymalM30ThreadEnvCfg_PLAY
 from .peg_insertion.env import AnymalPegInsertionEnvCfg, AnymalPegInsertionEnvCfg_PLAY
@@ -64,6 +64,7 @@ __all__ = [
     "AnymalHighTorqueValveEnvCfg",
     "AnymalHighTorqueValveEnvCfg_PLAY",
     "AnymalLampEnvCfg",
+    "AnymalLampEnvCfg_PLAY",
     "AnymalSmallValveEnvCfg",
     "AnymalSmallValveEnvCfg_PLAY",
 ]

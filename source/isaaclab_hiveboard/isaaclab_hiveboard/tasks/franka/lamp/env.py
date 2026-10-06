@@ -3,7 +3,7 @@
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.tasks.franka.common import use_franka_physics
-from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg
+from isaaclab_hiveboard.tasks.spot.lamp.env import SpotLampEnvCfg, use_lamp_play_viewer
 
 from .configs.actions import FrankaLampActionCfg
 from .configs.commands import FramePoseCommandsCfg
@@ -25,3 +25,12 @@ class FrankaLampEnvCfg(SpotLampEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         use_franka_physics(self)
+
+
+@configclass
+class FrankaLampEnvCfg_PLAY(FrankaLampEnvCfg):
+    """Deterministic one-environment FR3 demonstration."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_lamp_play_viewer(self)

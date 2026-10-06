@@ -6,7 +6,7 @@ from .circuit_breaker.env import FrankaCircuitBreakerEnvCfg, FrankaCircuitBreake
 from .drawer.env import FrankaDrawerEnvCfg, FrankaDrawerEnvCfg_PLAY
 from .high_torque_valve.env import FrankaHighTorqueValveEnvCfg, FrankaHighTorqueValveEnvCfg_PLAY
 from .key.env import FrankaKeyEnvCfg, FrankaKeyEnvCfg_PLAY
-from .lamp.env import FrankaLampEnvCfg
+from .lamp.env import FrankaLampEnvCfg, FrankaLampEnvCfg_PLAY
 from .m8_thread.env import FrankaM8ThreadEnvCfg, FrankaM8ThreadEnvCfg_PLAY
 from .m30_thread.env import FrankaM30ThreadEnvCfg, FrankaM30ThreadEnvCfg_PLAY
 from .peg_insertion.env import FrankaPegInsertionEnvCfg, FrankaPegInsertionEnvCfg_PLAY
@@ -35,6 +35,7 @@ __all__ = [
     "FrankaHighTorqueValveEnvCfg",
     "FrankaHighTorqueValveEnvCfg_PLAY",
     "FrankaLampEnvCfg",
+    "FrankaLampEnvCfg_PLAY",
     "FrankaSmallValveEnvCfg",
     "FrankaSmallValveEnvCfg_PLAY",
 ]

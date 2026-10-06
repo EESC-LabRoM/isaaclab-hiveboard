@@ -7,13 +7,14 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_hiveboard.mdp.commands.sequential_pose_command import register_screw_joint_mimic
+from isaaclab_hiveboard.tasks.viewer import use_play_viewer
 from isaaclab_tasks.utils import PresetCfg
 
 from .configs.actions import SpotLampActionCfg
 from .configs.commands import FramePoseCommandsCfg
 from .configs.events import LampEventCfg
 from .configs.observations import ObservationsCfg
-from .configs.scene import LampSceneCfg
+from .configs.scene import LAMP_SPAWN_POS, LampSceneCfg
 from .configs.terminations import TerminationsCfg
 
 
@@ -74,3 +75,18 @@ class SpotLampEnvCfg(ManagerBasedRLEnvCfg):
                 revolute_pos_at_reset=lamp_reset_joint_pos.get(coupling.revolute_joint_name, 0.0),
                 prismatic_pos_at_reset=lamp_reset_joint_pos.get(coupling.prismatic_joint_name, 0.0),
             )
+
+
+def use_lamp_play_viewer(env_cfg) -> None:
+    """Put the viewer at the shared Play camera, moved with the robot's lamp spawn."""
+    shift = tuple(p - q for p, q in zip(env_cfg.scene.lamp.init_state.pos, LAMP_SPAWN_POS))
+    use_play_viewer(env_cfg, shift)
+
+
+@configclass
+class SpotLampEnvCfg_PLAY(SpotLampEnvCfg):
+    """Deterministic one-environment Spot demonstration."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_lamp_play_viewer(self)

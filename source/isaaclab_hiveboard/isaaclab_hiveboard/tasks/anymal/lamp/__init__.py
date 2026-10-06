@@ -5,6 +5,6 @@
 
 """ANYmal + DynaArm lamp-screwing task."""
 
-from .env import AnymalLampEnvCfg
+from .env import AnymalLampEnvCfg, AnymalLampEnvCfg_PLAY
 
-__all__ = ["AnymalLampEnvCfg"]
+__all__ = ["AnymalLampEnvCfg", "AnymalLampEnvCfg_PLAY"]

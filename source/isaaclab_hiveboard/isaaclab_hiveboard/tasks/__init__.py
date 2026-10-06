@@ -20,10 +20,24 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-HiveBoard-Spot-Lamp-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.spot.lamp.env:SpotLampEnvCfg_PLAY"},
+)
+
+gym.register(
     id="Isaac-HiveBoard-Franka-Lamp-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lamp.env:FrankaLampEnvCfg"},
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Franka-Lamp-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.franka.lamp.env:FrankaLampEnvCfg_PLAY"},
 )
 
 gym.register(
@@ -270,6 +284,13 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.lamp.env:AnymalLampEnvCfg"},
+)
+
+gym.register(
+    id="Isaac-HiveBoard-Anymal-Lamp-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": "isaaclab_hiveboard.tasks.anymal.lamp.env:AnymalLampEnvCfg_PLAY"},
 )
 
 gym.register(

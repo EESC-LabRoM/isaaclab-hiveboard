@@ -103,6 +103,38 @@ def articulation_joint_position_success(
     return command.is_done() & (torch.abs(joint_pos[:, 0] - target) <= tolerance)
 
 
+def screw_travel_success(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    tolerance: float,
+) -> torch.Tensor:
+    """Require sequence completion and the screw advanced by the travel the sequence commands.
+
+    The goal is the reset position of the command's ``screw_coupling`` prismatic
+    joint minus the summed ``axial_distance`` of its ``ScrewFrameCfg`` segments,
+    clamped at ``lower_limit`` (seated). Reading the live command list means a
+    saved setup with a different number of turns is judged by its own turns, and
+    a sequence with the full travel requires the screw to be seated.
+    """
+    command: CommandTerm = env.command_manager.get_term(command_name)
+    if not hasattr(command, "is_done"):
+        raise AttributeError(
+            f"The command term '{command_name}' does not have the method 'is_done'."
+        )
+    coupling = command.cfg.screw_coupling
+    if coupling is None:
+        raise ValueError(f"The command term '{command_name}' has no screw_coupling.")
+
+    asset = env.scene[coupling.asset_name]
+    joint_ids, _ = asset.find_joints(coupling.prismatic_joint_name)
+    if len(joint_ids) != 1:
+        raise ValueError(f"Expected exactly one joint named '{coupling.prismatic_joint_name}'.")
+    travel = sum(getattr(cmd, "axial_distance", 0.0) for cmd in command.cfg.commands)
+    start = asset.data.default_joint_pos.torch[:, joint_ids[0]]
+    goal = (start - travel).clamp_min(coupling.lower_limit)
+    return command.is_done() & (asset.data.joint_pos.torch[:, joint_ids[0]] <= goal + tolerance)
+
+
 def articulation_joint_ranges_success(
     env: ManagerBasedRLEnv,
     command_name: str,

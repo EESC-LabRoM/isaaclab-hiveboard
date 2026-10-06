@@ -6,7 +6,6 @@ from isaaclab_hiveboard.assets import (
     SPOT_EE,
     make_ee_frame,
 )
-from isaaclab_hiveboard.assets.spot.constants import ARM_JOINT_NAMES, SPOT_DEFAULT_JOINT_POS, SPOT_DEFAULT_POS
 from isaaclab_hiveboard.assets.spot.spot import (
     SPOT_ARM_NEWTON_CFG,
     SPOT_ARM_UUC_BODY_PRIM,
@@ -30,7 +29,6 @@ from isaaclab.utils.configclass import configclass
 LAMP_SPAWN_POS = (1.0, 0.0, 0.65)
 # 180 degrees about Z, in Isaac Lab 3 xyzw order.
 LAMP_SPAWN_QUAT = (0.0, 0.0, 1.0, 0.0)
-SPOT_FORWARD_OFFSET = 0.030
 LAMP_UNSCREWED_POSITION = 0.024
 LAMP_SEATED_POSITION = 0.0
 
@@ -184,11 +182,5 @@ class LampSceneCfg(InteractiveSceneCfg):
     )
 
     def __post_init__(self):
-        self.robot.init_state.pos = (SPOT_FORWARD_OFFSET, 0.0, SPOT_DEFAULT_POS[2])
-        # Pose IK needs the forward-facing arm branch. From the shared folded
-        # reset, elbow roll hits its upper limit before reaching the lamp.
-        # The editor can escape that branch by trying multiple IK seeds.
-        self.robot.init_state.joint_pos.update({name: SPOT_DEFAULT_JOINT_POS[name] for name in ARM_JOINT_NAMES[:-1]})
-        self.robot.init_state.joint_pos["arm_f1x"] = -1.3
         self.ee_frame.prim_path = "{ENV_REGEX_NS}/Robot/" + SPOT_ARM_UUC_SOURCE_PRIM
         self.ee_frame.target_frames[0].prim_path = "{ENV_REGEX_NS}/Robot/" + SPOT_ARM_UUC_BODY_PRIM

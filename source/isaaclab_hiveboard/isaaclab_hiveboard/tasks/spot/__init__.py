@@ -32,7 +32,7 @@ from .high_torque_valve.env import (
     SpotHighTorqueValveEnvCfg_PLAY,
 )
 from .key.env import SpotKeyEnvCfg, SpotKeyEnvCfg_PLAY
-from .lamp.env import SpotLampEnvCfg
+from .lamp.env import SpotLampEnvCfg, SpotLampEnvCfg_PLAY
 from .m8_thread.env import SpotM8ThreadEnvCfg, SpotM8ThreadEnvCfg_PLAY
 from .m30_thread.env import SpotM30ThreadEnvCfg, SpotM30ThreadEnvCfg_PLAY
 from .peg_insertion.env import SpotPegInsertionEnvCfg, SpotPegInsertionEnvCfg_PLAY
@@ -70,6 +70,7 @@ __all__ = [
     "SpotHighTorqueValveEnvCfg",
     "SpotHighTorqueValveEnvCfg_PLAY",
     "SpotLampEnvCfg",
+    "SpotLampEnvCfg_PLAY",
     "SpotSmallValveEnvCfg",
     "SpotSmallValveEnvCfg_PLAY",
 ]

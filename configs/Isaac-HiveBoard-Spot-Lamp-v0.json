@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "task": "Isaac-HiveBoard-Spot-Lamp-v0",
+  "task": "Isaac-HiveBoard-Spot-Lamp-Play-v0",
   "asset_name": "robot",
   "body_name": "arm_link_wr1",
   "body_offset": {
@@ -20,6 +20,8 @@
     {
       "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
+        "phase": null,
+        "until": null,
         "frame_name": "target_frame",
         "target_frame_name": "approaching",
         "target_offset_pos": [
@@ -41,6 +43,8 @@
         "distance_threshold": 0.015,
         "orientation_threshold_deg": 10.0,
         "valve_done_threshold_rad": null,
+        "done_when_joint": null,
+        "done_when_travel": null,
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
@@ -57,19 +61,28 @@
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
+        "plan_batch_size": 1,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "chain_with_next": false,
+        "chain_blend_s": 0.4,
+        "chain_max_joint_step": 0.15,
+        "chain_max_pose_error_m": 0.01,
+        "wrist_flip_joints": null,
+        "wrist_flip_margin": 0.05
       }
     },
     {
       "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
+        "phase": null,
+        "until": null,
         "frame_name": "target_frame",
         "target_frame_name": "lamp_grasp",
         "target_offset_pos": [
           0.0,
-          0.0,
-          0.0
+          -2.465190328815662e-32,
+          -0.004570960998535156
         ],
         "target_offset_rot": [
           0.0,
@@ -85,6 +98,8 @@
         "distance_threshold": 0.015,
         "orientation_threshold_deg": 10.0,
         "valve_done_threshold_rad": null,
+        "done_when_joint": null,
+        "done_when_travel": null,
         "canonicalize_upward": true,
         "hold_current_orientation": true,
         "robot_joint_names": [
@@ -101,13 +116,22 @@
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
+        "plan_batch_size": 1,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
+        "reference_quat_xyzw": null,
+        "chain_with_next": false,
+        "chain_blend_s": 0.4,
+        "chain_max_joint_step": 0.15,
+        "chain_max_pose_error_m": 0.01,
+        "wrist_flip_joints": null,
+        "wrist_flip_margin": 0.05
       }
     },
     {
       "type": "GripperCommand",
       "parameters": {
+        "phase": null,
+        "until": null,
         "open_gripper": false,
         "duration_s": 0.75
       }
@@ -115,6 +139,8 @@
     {
       "type": "ScrewFrameCfg",
       "parameters": {
+        "phase": null,
+        "until": null,
         "frame_name": "target_frame",
         "target_frame_name": "screw_frame",
         "target_offset_pos": [
@@ -144,8 +170,19 @@
       }
     },
     {
+      "type": "GripperCommand",
+      "parameters": {
+        "phase": null,
+        "until": null,
+        "open_gripper": true,
+        "duration_s": 0.1
+      }
+    },
+    {
       "type": "CuroboPlannedGoToFrameCfg",
       "parameters": {
+        "phase": null,
+        "until": null,
         "frame_name": "target_frame",
         "target_frame_name": "release_frame",
         "target_offset_pos": [
@@ -161,12 +198,14 @@
         ],
         "target_position_env": null,
         "target_orientation_env": null,
-        "gripper_open": false,
+        "gripper_open": true,
         "velocity": 0.2,
         "angular_velocity": 1.0,
         "distance_threshold": 0.015,
         "orientation_threshold_deg": 10.0,
         "valve_done_threshold_rad": null,
+        "done_when_joint": null,
+        "done_when_travel": null,
         "canonicalize_upward": true,
         "hold_current_orientation": true,
         "robot_joint_names": [
@@ -183,15 +222,15 @@
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
         "interpolation_buffer_size": 128,
+        "plan_batch_size": 1,
         "reference_pos_env": null,
-        "reference_quat_xyzw": null
-      }
-    },
-    {
-      "type": "GripperCommand",
-      "parameters": {
-        "open_gripper": true,
-        "duration_s": 0.5
+        "reference_quat_xyzw": null,
+        "chain_with_next": false,
+        "chain_blend_s": 0.4,
+        "chain_max_joint_step": 0.15,
+        "chain_max_pose_error_m": 0.01,
+        "wrist_flip_joints": null,
+        "wrist_flip_margin": 0.05
       }
     }
   ]
