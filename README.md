@@ -52,11 +52,11 @@ Each task is `Isaac-HiveBoard-<Robot>-<Tool>-v0`, with a `-Play-v0` variant
 | `HighTorqueValve` | ✓ | ✓ | ✓ |
 | `CircuitBreaker` | ✓ | ✓ | ✓ |
 | `Button` | ✓ | ✓ | ✓ |
-| `Key` | ✓ | ✓ | ✓ |
-| `Drawer` | ✓ | ✓ | ✓ |
+| `Key` | x | x | x |
+| `Drawer` | x | x | x |
 | `M8Thread` / `M30Thread` | x | ✓ | ✓ |
 | `PegInsertion` | x | x | x |
-| `ShockAbsorber` | x | ✓ | ✓ |
+| `ShockAbsorber` | x | x | x |
 | `Lamp`  | ✓ | ✓ | ✓ |
 
 List everything registered:
