@@ -22,8 +22,8 @@ class TerminationsCfg:
         func=articulation_joint_ranges_success,
         params={
             "command_name": "pose_command",
-            "asset_name": "key",
-            # Turned at least 80 of its 90 deg.
+            "asset_name": "lock",
+            # Plug turned at least 80 of its 90 deg.
             "ranges": {"RevoluteJoint": (math.radians(80.0), math.radians(95.0))},
         },
     )

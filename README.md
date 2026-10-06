@@ -54,7 +54,7 @@ have one yet.
 | `HighTorqueValve` | ✓ | ✓ | ✓ |
 | `CircuitBreaker` | ✓ | ✓ | ✓ |
 | `Button` | ✓ | ✓ | ✓ |
-| `Key` | ✗ | ✗ | ✗ |
+| `Key` | ✓ | ✓ | ✓ |
 | `Drawer` | ✗ | ✗ | ✗ |
 | `M8Thread` / `M30Thread` | ✗ | ✓ | ✓ |
 | `PegInsertion` | ✗ | ✗ | ✗ |

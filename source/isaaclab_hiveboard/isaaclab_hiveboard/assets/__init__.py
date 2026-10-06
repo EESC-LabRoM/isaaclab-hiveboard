@@ -53,6 +53,7 @@ _EXPORT_MODULES = {
     "KEY_URDF": ".hiveboard",
     "KEY_USD": ".hiveboard",
     "KEY_NEWTON_USD": ".hiveboard",
+    "LOCK_NEWTON_USD": ".hiveboard",
     "LAMP_URDF": ".hiveboard",
     "LAMP_USD": ".hiveboard",
     "LAMP_NEWTON_USD": ".hiveboard",

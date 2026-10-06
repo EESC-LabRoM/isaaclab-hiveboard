@@ -7,10 +7,22 @@
 
 from isaaclab.utils.configclass import configclass
 
+from isaaclab_hiveboard.assets import SPOT_EE
 from isaaclab_hiveboard.tasks.anymal.key.env import AnymalKeyEnvCfg, AnymalKeyEnvCfg_PLAY
+from isaaclab_hiveboard.tasks.scenes.key import key_frames, key_in_hand
 from isaaclab_hiveboard.tasks.spot.common import use_spot
 
-PINCH_FRAMES = ("key_approaching", "key_grasp")
+# Spot's finger swings open along TCP +Z, so with no roll its jaws face the
+# bow's flat sides. The quarter turn runs arm_wr1 from about 0 to -1.7 rad,
+# inside its +-2.88 rad limits. At -90 it needed -3.2 and cuRobo jumped to
+# another arm configuration with the key in the lock.
+SPOT_KEY_JAW_ROLL_DEG = 0.0
+
+
+def _use_spot_key(env_cfg) -> None:
+    use_spot(env_cfg)
+    env_cfg.scene.robot = key_in_hand(env_cfg.scene.robot, SPOT_EE, jaw_roll_deg=SPOT_KEY_JAW_ROLL_DEG)
+    env_cfg.scene.target_frame = key_frames(jaw_roll_deg=SPOT_KEY_JAW_ROLL_DEG)
 
 
 @configclass
@@ -19,7 +31,7 @@ class SpotKeyEnvCfg(AnymalKeyEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        use_spot(self, PINCH_FRAMES)
+        _use_spot_key(self)
 
 
 @configclass
@@ -28,4 +40,4 @@ class SpotKeyEnvCfg_PLAY(AnymalKeyEnvCfg_PLAY):
 
     def __post_init__(self):
         super().__post_init__()
-        use_spot(self, PINCH_FRAMES)
+        _use_spot_key(self)

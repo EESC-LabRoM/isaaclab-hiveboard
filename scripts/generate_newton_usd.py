@@ -25,6 +25,8 @@ Drawer / key: UUC conversion of the re-authored URDFs in ``hiveboard/drawer``
 and ``hiveboard/key`` (the upstream ones have no joints). The drawer is split
 into a kinematic housing and a free box; cuts and shafts stay URDF primitives,
 so there is no CoACD overlay: a hull of the slotted plate would fill the exit.
+The key is likewise split: the lock (housing + turning plug) is a fixed
+articulation, the key a free body that the robot carries welded to its hand.
 Threads / peg / shock absorber: UUC conversion of the re-authored URDFs in
 ``hiveboard/{m8_thread,m30_thread,peg_insertion,shock_absorber}``, plus a
 CoACD overlay for the shock-absorber spring.
@@ -119,8 +121,10 @@ DRAWER_HOUSING_UUC_DIR = DRAWER_USD_DIR / "uuc_housing"
 DRAWER_BOX_UUC_DIR = DRAWER_USD_DIR / "uuc_box"
 DRAWER_HOUSING_OVERLAY = DRAWER_USD_DIR / "Drawer_Housing_uuc_newton.usda"
 DRAWER_BOX_OVERLAY = DRAWER_USD_DIR / "Drawer_Box_uuc_newton.usda"
-KEY_URDF = EXT_ASSETS / "hiveboard/key/Key_Assembly.urdf"
-KEY_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc"
+LOCK_URDF = EXT_ASSETS / "hiveboard/key/Lock_Assembly.urdf"
+LOCK_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc_lock"
+KEY_URDF = EXT_ASSETS / "hiveboard/key/Key.urdf"
+KEY_UUC_DIR = EXT_ASSETS / "hiveboard/key/usd/uuc_key"
 
 # Threads, peg and shock absorber: re-authored URDFs (upstream welds the peg
 # and pin, and collides with base hulls that cone over the thread). The
@@ -146,7 +150,7 @@ ARTICULATED_UUC_ASSETS = (
         "Button_Assembly",
         (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")),
     ),
-    ("key", KEY_UUC_DIR / "Key_Assembly.usda", "Key_Assembly", (("RevoluteJoint", "PhysicsRevoluteJoint"),)),
+    ("lock", LOCK_UUC_DIR / "Lock_Assembly.usda", "Lock_Assembly", (("RevoluteJoint", "PhysicsRevoluteJoint"),)),
     *(
         (label, usda, prim, (("RevoluteJoint", "PhysicsRevoluteJoint"), ("PrismaticJoint", "PhysicsPrismaticJoint")))
         for label, usda, prim in (
@@ -702,6 +706,7 @@ def verify() -> list[str]:
     for label, overlay, default_prim in (
         ("drawer housing", DRAWER_HOUSING_OVERLAY, "Drawer_Housing"),
         ("drawer box", DRAWER_BOX_OVERLAY, "Drawer_Box"),
+        ("key", KEY_UUC_DIR / "Key.usda", "Key"),
     ):
         if not overlay.exists():
             problems.append(f"missing {label}: {overlay}")
@@ -833,8 +838,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[UUC] drawer housing: {DRAWER_HOUSING_UUC_DIR / 'Drawer_Housing.usda'}")
             print(f"[UUC] drawer box: {DRAWER_BOX_UUC_DIR / 'Drawer_Box.usda'}")
         if want_key:
+            run_uuc_conversion(LOCK_URDF, LOCK_UUC_DIR, args.uuc_python)
             run_uuc_conversion(KEY_URDF, KEY_UUC_DIR, args.uuc_python)
-            print(f"[UUC] key: {KEY_UUC_DIR / 'Key_Assembly.usda'}")
+            # The robot spawn welds the key to its hand; UUC's world weld would fight that.
+            _strip_world_fixed_joint(KEY_UUC_DIR / "Payload" / "Physics.usda")
+            _disable_visual_mesh_collision(LOCK_UUC_DIR / "Payload" / "Geometry.usda")
+            _disable_visual_mesh_collision(KEY_UUC_DIR / "Payload" / "Geometry.usda")
+            print(f"[UUC] lock: {LOCK_UUC_DIR / 'Lock_Assembly.usda'}")
+            print(f"[UUC] key: {KEY_UUC_DIR / 'Key.usda'}")
         for label, urdf, out_dir in uuc_only:
             run_uuc_conversion(urdf, out_dir, args.uuc_python)
             print(f"[UUC] {label}: {out_dir / urdf.with_suffix('.usda').name}")
