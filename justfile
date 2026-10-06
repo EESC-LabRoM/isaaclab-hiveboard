@@ -124,5 +124,3 @@ collect-demos num_demos="10":
 # Record every registered HiveBoard environment at its simulation-time FPS (RTX path-traced)
 record-all *args:
     uv run python scripts/record_all_envs.py {{args}}
-
-# RL and imitation learning live in EESC-LabRoM/hiveboard-rl (this repo is its submodule)
