@@ -572,24 +572,63 @@ def _strip_world_fixed_joint(payload: Path) -> None:
     stage.GetRootLayer().Save()
 
 
-def render_rigid_overlay(default_prim: str, reference: str) -> str:
-    """Reference one UUC layer. Do not hull the drawer's slotted plate."""
+def render_rigid_overlay(default_prim: str, reference: str, anchor_body: str | None = None) -> str:
+    """Reference one UUC layer. Do not hull the drawer's slotted plate.
+
+    anchor_body: weld a collision-free child body to this link. Newton's USD
+    importer leaves a lone body on a world FixedJoint as an orphan joint with
+    no articulation, so Articulation() on it finds nothing. A second body makes
+    UsdPhysics report a real fixed-base articulation.
+    """
+    head = [
+        "#usda 1.0",
+        "(",
+        f'    defaultPrim = "{default_prim}"',
+        "    metersPerUnit = 1",
+        '    upAxis = "Z"',
+        ")",
+        "",
+        "# urdf-usd-converter output. Shafts and side cuts are URDF primitives;",
+        "# do not convex-hull the slotted plate over them.",
+    ]
+    if anchor_body is None:
+        body = ["{", "}"]
+    else:
+        head += [
+            "#",
+            "# anchor: a near-massless, collision-free child welded to the base so",
+            "# Newton builds a fixed-base articulation (see render_rigid_overlay).",
+        ]
+        body = [
+            "{",
+            '    over "Geometry"',
+            "    {",
+            '        def Xform "anchor" (',
+            '            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]',
+            "        )",
+            "        {",
+            "            float3 physics:diagonalInertia = (1e-7, 1e-7, 1e-7)",
+            "            float physics:mass = 0.001",
+            "        }",
+            "    }",
+            "",
+            '    over "Physics"',
+            "    {",
+            '        def PhysicsFixedJoint "anchor_joint"',
+            "        {",
+            f"            rel physics:body0 = </{default_prim}/Geometry/{anchor_body}>",
+            f"            rel physics:body1 = </{default_prim}/Geometry/anchor>",
+            "        }",
+            "    }",
+            "}",
+        ]
     return "\n".join(
         (
-            "#usda 1.0",
-            "(",
-            f'    defaultPrim = "{default_prim}"',
-            "    metersPerUnit = 1",
-            '    upAxis = "Z"',
-            ")",
-            "",
-            "# urdf-usd-converter output. Shafts and side cuts are URDF primitives;",
-            "# do not convex-hull the slotted plate over them.",
+            *head,
             f'def Xform "{default_prim}" (',
             f"    prepend references = @{reference}@</{default_prim}>",
             ")",
-            "{",
-            "}",
+            *body,
             "",
         )
     )
@@ -720,7 +759,9 @@ def verify() -> list[str]:
                     for prim in stage.Traverse()
                     if prim.HasAPI(UsdPhysics.RigidBodyAPI)
                 ]
-                if len(bodies) != 1:
+                # The housing carries a welded anchor body (render_rigid_overlay).
+                movers = [b for b in bodies if not b.endswith("/anchor")]
+                if len(movers) != 1:
                     problems.append(f"{label} should be one rigid body, found {bodies}")
                 for prim in stage.Traverse():
                     if prim.IsA(UsdPhysics.PrismaticJoint) or prim.GetTypeName() == "PhysicsPrismaticJoint":
@@ -887,7 +928,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[OVERLAY] wrote {SM_OVERLAY} ({len(text) // 1024} KiB)")
 
     if want_drawer:
-        housing_text = render_rigid_overlay("Drawer_Housing", "./uuc_housing/Drawer_Housing.usda")
+        housing_text = render_rigid_overlay("Drawer_Housing", "./uuc_housing/Drawer_Housing.usda", anchor_body="base")
         box_text = render_rigid_overlay("Drawer_Box", "./uuc_box/Drawer_Box.usda")
         DRAWER_HOUSING_OVERLAY.write_text(housing_text, encoding="utf-8")
         DRAWER_BOX_OVERLAY.write_text(box_text, encoding="utf-8")
