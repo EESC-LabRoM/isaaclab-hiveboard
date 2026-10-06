@@ -3288,7 +3288,8 @@ def _find_world_joint(builder, world: int, joint_name: str) -> int | None:
 def _add_registered_screw_mimics_to_builder(_payload=None) -> None:
     """``PhysicsEvent.MODEL_INIT`` callback: add one native mimic constraint per env.
 
-    Runs after replication, so ``NewtonManager._builder`` already holds every
+    Runs after replication, so the shared Newton builder (the simulation's
+    ``NewtonBuilderCfg`` backend) already holds every
     env's joints in one flat builder (see :func:`register_screw_joint_mimic`
     for why this can't run earlier), and resolves per-env leader/follower
     joint indices from it. ``current_world`` is a read-only property normally driven by
@@ -3306,14 +3307,14 @@ def _add_registered_screw_mimics_to_builder(_payload=None) -> None:
     simultaneously-registered couplings would need the loop nesting swapped.
     Harmless today since the lamp is the only registrant.
     """
-    from isaaclab_newton.physics import NewtonManager
+    from isaaclab.sim import SimulationContext
+    from isaaclab_newton.physics import NewtonBuilderCfg, NewtonManager
 
     registry = getattr(NewtonManager, "_screw_mimic_registry", None)
     if not registry:
         return
-    builder = NewtonManager._builder
-    if builder is None:
-        return
+    sim = SimulationContext.instance()
+    builder = sim.get_or_create_backend(NewtonBuilderCfg(physics_cfg=sim.cfg.physics))
     num_worlds = builder.world_count
     for entry in registry:
         coupling = entry.coupling
@@ -3465,7 +3466,7 @@ class ScrewJointCouplingCfg:
     register cloth/soft-body meshes into the builder — see
     :func:`register_screw_joint_mimic`). This project's env cloning goes
     through ``newton_physics_replicate`` (``isaaclab_newton.cloner``), which
-    runs well before ``MODEL_INIT`` and leaves ``NewtonManager._builder``
+    runs well before ``MODEL_INIT`` and leaves the shared Newton builder
     already fully replicated and label-renamed by the time the callback
     fires — unlike the single-call standalone lead-screw example
     (``newton/examples/basic/example_basic_mimic_joint.py``), the hook

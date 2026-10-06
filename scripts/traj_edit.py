@@ -585,7 +585,7 @@ def main() -> int:
                         obs, _ = env.reset()
                         editor.term.set_frozen(False)
                 viewer.begin_frame(sim_time)
-                viewer.log_state(NewtonManager.get_state())
+                viewer.log_state(NewtonManager.get_state_0())
                 editor.log_beads(viewer)
                 viewer.end_frame()
             viewer.close()

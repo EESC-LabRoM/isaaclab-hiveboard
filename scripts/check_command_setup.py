@@ -364,7 +364,7 @@ class EditorStartupTests(unittest.TestCase):
                     patch("command_edit.refresh_frame_sensors"),
                     patch("command_edit.PreviewIK", return_value=ik),
                     patch("isaaclab_newton.physics.NewtonManager.get_model"),
-                    patch("isaaclab_newton.physics.NewtonManager.get_state", return_value=reset_state),
+                    patch("isaaclab_newton.physics.NewtonManager.get_state_0", return_value=reset_state),
                     patch("newton.viewer.ViewerViser", return_value=viewer),
                     patch.multiple(
                         CommandEditor,
@@ -586,7 +586,7 @@ class GeometryTests(unittest.TestCase):
         )
         physics = NS(
             forward=lambda: state.copy_(reset_pose),
-            get_state=lambda: state,
+            get_state_0=lambda: state,
             _newton_frame_transform_sensors=[NS(update=lambda current: native_buffer.copy_(current))],
         )
         env = NS(scene=NS(sensors={"target_frame": frame}), sim=NS(physics_manager=physics))

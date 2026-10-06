@@ -143,7 +143,7 @@ class ObservationsCfg:
         """Fixed scene-camera RGB frames (unnormalized uint8) for video recording."""
 
         scene_rgb = ObsTerm(
-            func=mdp.image,
+            func=mdp.image_rgb,
             params={"sensor_cfg": SceneEntityCfg("scene_cam"), "data_type": "rgb", "normalize": False},
         )
 

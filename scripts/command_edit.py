@@ -1212,7 +1212,7 @@ def _publish_frame(viewer, timestamp: float) -> None:
     from isaaclab_newton.physics import NewtonManager
 
     viewer.begin_frame(timestamp)
-    viewer.log_state(NewtonManager.get_state())
+    viewer.log_state(NewtonManager.get_state_0())
     viewer.end_frame()
 
 

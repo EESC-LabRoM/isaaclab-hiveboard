@@ -242,7 +242,7 @@ class reset_from_expert_bank(ManagerTermBase):
         mid_start_prob: float = 0.0,
         expert_task: str | None = None,
     ) -> None:
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
         draw = torch.randint(0, self.bank.size, (len(ids),), device=env.device)
         self.write_start_state(env, ids, draw)
         if mid_start_prob > 0.0:

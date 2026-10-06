@@ -22,7 +22,7 @@ from pathlib import Path
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.sim.spawners.from_files.from_files import _spawn_from_usd_file
+from isaaclab.sim.spawners.from_files.from_files import spawn_from_usd_file
 from isaaclab.sim.utils import clone, create_prim, get_current_stage
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -403,7 +403,7 @@ def spawn_robotiq_2f140(
     **kwargs,
 ):
     """Spawn Isaac Lab's standalone Robotiq 2F-140, fixed in world."""
-    prim = _spawn_from_usd_file(prim_path, cfg.usd_path, cfg, translation, orientation)
+    prim = spawn_from_usd_file(prim_path, cfg.usd_path, cfg, translation, orientation)
     _strip_physics_scenes(prim)
     palm = _gripper_base_prim(prim)
     if not palm.IsValid():
@@ -431,7 +431,7 @@ def spawn_anymal_d_dynaarm_robotiq(
     **kwargs,
 ):
     """Spawn ANYmal-D from USD, weld the DynaArm onto ``base``, then the 2F-140."""
-    prim = _spawn_from_usd_file(prim_path, cfg.usd_path, cfg, translation, orientation)
+    prim = spawn_from_usd_file(prim_path, cfg.usd_path, cfg, translation, orientation)
     _attach_dynaarm(prim_path, cfg)
     return prim
 

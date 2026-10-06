@@ -145,7 +145,7 @@ class randomize_valve_dynamics(ManagerTermBase):
         stuck_prob: float = 0.0,
         stuck_breakaway: tuple[float, float] = STUCK_BREAKAWAY_RANGE,
     ) -> None:
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
         values = torch.empty(len(ids), len(VALVE_DYNAMICS), device=env.device)
         for i, name in enumerate(VALVE_DYNAMICS):
             values[:, i].uniform_(*ranges[name])

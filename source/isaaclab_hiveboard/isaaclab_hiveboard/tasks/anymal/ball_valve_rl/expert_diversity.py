@@ -171,7 +171,7 @@ class sample_expert_diversity(ManagerTermBase):
     ) -> None:
         if self._rotate is None:
             self._resolve(env, command_name)
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
         n = len(ids)
         values = torch.empty(n, len(EXPERT_DIVERSITY), device=env.device)
         for i, name in enumerate(EXPERT_DIVERSITY[:-1]):

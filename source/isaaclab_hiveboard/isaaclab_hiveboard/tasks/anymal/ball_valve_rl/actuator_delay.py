@@ -64,7 +64,7 @@ def randomize_actuator_delay(
     The lag is rounded to whole physics steps and capped at the groups' ``max_delay``.
     """
     asset = env.scene[asset_cfg.name]
-    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
     dt = env.physics_dt
     low = math.floor(round(delay_range_s[0] / dt, 6))
     high = math.ceil(round(delay_range_s[1] / dt, 6))

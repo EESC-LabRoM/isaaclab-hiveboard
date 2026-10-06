@@ -1236,7 +1236,7 @@ class RandomizeValveHandlePoseEvent(ManagerTermBase):
             env: The environment instance.
             env_ids: The environment ids to apply the event to.
         """
-        if env_ids is None:
+        if env_ids is None or isinstance(env_ids, slice):
             env_ids = torch.arange(env.num_envs, device=env.device)
         else:
             env_ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
@@ -1437,7 +1437,7 @@ class ResetDynaarmToFrameEvent(ManagerTermBase):
         ik_rotation_tolerance: float = 0.1,
         ik_max_iterations: int = 80,
     ) -> None:
-        if env_ids is None:
+        if env_ids is None or isinstance(env_ids, slice):
             env_ids = torch.arange(env.scene.num_envs, device=env.device)
         else:
             env_ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)

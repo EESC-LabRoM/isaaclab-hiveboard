@@ -18,6 +18,6 @@ def refresh_frame_sensors(env):
     physics = env.sim.physics_manager
     physics.forward()
     for sensor in getattr(physics, "_newton_frame_transform_sensors", ()):
-        sensor.update(physics.get_state())
+        sensor.update(physics.get_state_0())
     for sensor in frames:
         sensor.update(0.0, force_recompute=True)

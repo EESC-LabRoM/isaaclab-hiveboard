@@ -135,7 +135,7 @@ def write_valve_angle(
 
 def sync_coupled_joint(env: ManagerBasedEnv, env_ids: torch.Tensor | None) -> None:
     """Reset event: put the coupled joint where the turned joint's angle says (after a reset of that angle)."""
-    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
     if valve_task(env).coupled_joint_name is not None:
         write_valve_angle(env, ids, valve_angle(env)[ids].clone())
 
@@ -212,7 +212,7 @@ class IntegratedJointPositionAction(JointAction):
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids)
-        ids = slice(None) if env_ids is None else env_ids
+        ids = slice(None) if env_ids is None or isinstance(env_ids, slice) else env_ids
         # The action manager resets after the reset events, so the measured
         # joints already hold the randomized reset state: start from there.
         self._target[ids] = self._asset.data.joint_pos.torch[ids][:, self._joint_ids]
@@ -277,7 +277,7 @@ def reset_joints_from_postures(
     little).
     """
     asset: BaseArticulation = env.scene[asset_cfg.name]
-    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None or isinstance(env_ids, slice) else env_ids
     table = torch.tensor(list(postures.values()), device=env.device)
     pick = torch.randint(len(table), (len(ids),), device=env.device)
     q = table[pick] + torch.empty(len(ids), table.shape[1], device=env.device).uniform_(*position_range)
@@ -526,7 +526,7 @@ class registered_valve_b(ManagerTermBase):
         # root and joint state read here are the new episode's.
         ids = (
             torch.arange(self.num_envs, device=self.device)
-            if env_ids is None
+            if env_ids is None or isinstance(env_ids, slice)
             else torch.as_tensor(env_ids, device=self.device)
         )
         if ids.numel() == 0:
@@ -725,10 +725,10 @@ class ValveTurnRateCommand(CommandTerm):
     def _update_metrics(self):
         self.metrics["tracking_error_rad"] = (valve_angle(self._env) - self.ref_angle).abs()
 
-    def _resample_command(self, env_ids: Sequence[int]):
+    def _resample_command(self, env_ids: Sequence[int] | slice):
         # The command manager resets after the reset events, so the valve angle
         # and expert-bank trajectory read here are the new episode's.
-        self.rate[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.rate_range)
+        self.rate[env_ids] = torch.empty_like(self.rate[env_ids]).uniform_(*self.cfg.rate_range)
         bank_term = getattr(self._env, "expert_bank_term", None)
         if bank_term is not None and bank_term.bank.turn_rate is not None:
             # The expert's own turning speed: the references follow it.
