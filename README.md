@@ -4,947 +4,198 @@
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 
-An Isaac Lab extension package for simulating, controlling, and benchmarking various robot platforms (**Boston Dynamics Spot with Arm**, **Franka Emika Panda**, and **ANYmal C/D**) performing manipulation tasks on the **[HiveBoard Benchmark](https://github.com/EESC-LabRoM/HiveBoard)**.
+Isaac Lab tasks for **Boston Dynamics Spot with Arm**, **Franka FR3** and
+**ANYmal + DynaArm** operating the mechanisms of the
+**[HiveBoard Benchmark](https://github.com/EESC-LabRoM/HiveBoard)**, simulated
+with Newton MJWarp (no Isaac Sim needed).
 
 ---
 
-## 🚀 Features
-
-- **Multi-Robot Support**:
-  - 🐕 **Boston Dynamics Spot with Arm**: Differential IK, CuRobo collision avoidance, and RMPFlow control for gate valves, lever valves, and circuit breakers.
-  - 🦾 **Franka Emika Panda**: Precision end-effector tracking with orientation alignments and real-time pose diagnostics.
-- **HiveBoard Submodule Integration**: Directly loads CAD/URDF/USD models from `dependencies/HiveBoard` (ball valves, high torque gate valves, small valves, circuit breakers, drawers, keys, buttons).
-- **Demonstration Collection**: Fixed-base relative TCP demonstration collector exporting HDF5 datasets compatible with Diffusion Policy.
-- **Pose Diagnostics**: Automated frame error decomposition (IK tracking vs facing/jaw alignment).
-- **`uv` Ready**: Seamless dependency management and script execution.
-
----
-
-## 📦 Installation
-
-Clone the repository with submodules:
+## Installation
 
 ```bash
 git clone --recurse-submodules https://github.com/EESC-LabRoM/isaaclab-hiveboard.git
 cd isaaclab-hiveboard
-```
+# already cloned? git submodule update --init --recursive
 
-If already cloned without submodules, initialize HiveBoard:
-
-```bash
-git submodule update --init --recursive
-```
-
-Create the Python 3.12 environment and install the local Isaac Lab 3 packages:
-
-```bash
 uv sync --python 3.12
 ```
 
-The default install is kitless: Isaac Sim, camera support, and CuRobo are not
-required. Development extras remain available as `--extra cameras`, `--extra
-curobo`, and `--extra data`.
+Optional extras: `--extra curobo` (cuRobo-planned commands, needs CUDA),
+`--extra cameras`, `--extra data`.
+
+The Newton USD assets are build outputs and must be generated once on a fresh
+clone:
+
+```bash
+uv run python scripts/generate_newton_usd.py --verify-only   # what is missing
+uv run python scripts/generate_newton_usd.py \
+  --uuc-python /path/to/uuc-venv/bin/python                  # generate
+just generate-anymal-usd                                     # ANYmal assets
+```
+
+URDF conversion uses
+[urdf-usd-converter](https://github.com/newton-physics/urdf-usd-converter);
+`--uuc-python` points at a Python that can `import urdf_usd_converter`.
 
 ---
 
-## 🕹️ Available Environments
+## Available tasks
 
-| Task ID | Robot | Target Object | Controller / Action |
-| --- | --- | --- | --- |
-| `Isaac-HiveBoard-Spot-BallValve-v0` | Spot + Arm | Ball (Lever) Valve | Sequential Absolute / Relative IK |
-| `Isaac-HiveBoard-Spot-BenchValve-Play-v0` | Spot + Arm | Ball (Lever) Valve | Fixed 50 Hz joint trajectory (website clip) |
-| `Isaac-HiveBoard-Spot-Gains-Play-v0` | Spot + Arm | none (robot only) | Same joint clip; PD gain eval / optimize |
-| `Isaac-HiveBoard-Spot-CircuitBreaker-v0` | Spot + Arm | Circuit Breaker | Sequential Pose IK |
-| `Isaac-HiveBoard-Spot-HighTorqueValve-v0` | Spot + Arm | Gate Valve | Multi-revolution IK |
-| `Isaac-HiveBoard-Spot-SmallValve-v0` | Spot + Arm | Small Gate Valve | Multi-revolution IK |
-| `Isaac-HiveBoard-Spot-Lamp-v0` | Spot + Arm | Screw-in Lamp | TCP pose IK with screw coupling |
-| `Isaac-HiveBoard-Franka-Lamp-v0` | Franka FR3 | Screw-in Lamp | TCP pose IK with screw coupling |
-| `Isaac-HiveBoard-Franka-LeverValve-v0` | Franka Panda | Ball (Lever) Valve | Operational Space / Differential IK |
-| `Isaac-HiveBoard-Franka-CircuitBreaker-v0` | Franka Panda | Circuit Breaker | Differential IK with facing alignment |
+Each task is `Isaac-HiveBoard-<Robot>-<Tool>-v0`, with a `-Play-v0` variant
+(fixed reset, for watching and evaluating):
 
-List all available tasks:
+| Tool | Spot | Franka | ANYmal |
+| --- | :-: | :-: | :-: |
+| `BallValve` | ✓ | ✓ | ✓ |
+| `SmallValve` | ✓ | ✓ | ✓ |
+| `HighTorqueValve` | ✓ | ✓ | ✓ |
+| `CircuitBreaker` | ✓ | ✓ | ✓ |
+| `Button` | ✓ | ✓ | ✓ |
+| `Key` | ✓ | ✓ | ✓ |
+| `Drawer` | ✓ | ✓ | ✓ |
+| `M8Thread` / `M30Thread` | ✓ | ✓ | ✓ |
+| `PegInsertion` | ✓ | ✓ | ✓ |
+| `ShockAbsorber` | ✓ | ✓ | ✓ |
+| `Lamp` (no `-Play`) | ✓ | ✓ | ✓ |
+| `CuroboValve` | ✓ | | ✓ |
+| `BenchValve` (website joint clip) | ✓ | | ✓ |
 
-```bash
-uv run python scripts/list_envs.py
-```
-
----
-
-## 🎮 Running Simulations
-
-### Kitless Spot Ball-Valve Play
-
-The validated task uses Newton MJWarp at 600 Hz, a 20 Hz controller, a fixed
-Spot base, committed USD assets, and a simple local floor (no warehouse or
-Nucleus assets). Interactive play uses the Newton visualizer and does not
-launch Isaac Sim:
+List everything registered:
 
 ```bash
-uv run --python 3.12 python scripts/play.py \
-  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
-  --pose-debug --contact-debug \
-  physics=newton_mjwarp --visualizer newton
-```
-
-`--contact-debug` prints finger/jaw net force and valve-filtered force every
-`--pose-debug-interval` steps. HDF5 episode traces (including named
-`evaluation` contact terms) are written under `logs/recorded_datasets/`.
-
-The valve reset uses Isaac Lab's standard `reset_root_state_uniform` and
-`reset_joints_by_offset` terms. Set a fixed custom start in
-`tasks/scenes/lever_valve.py` (`ball_valve.init_state.pos`, `.rot`, and
-`.joint_pos`), or edit the corresponding ranges in
-`tasks/spot/ball_valve/configs/events.py` for per-episode sampling.
-
-Run without a window:
-
-```bash
-uv run --python 3.12 python scripts/play.py \
-  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
-  physics=newton_mjwarp --visualizer none
-```
-
-`scripts/play_spot_ball_valve.py` is the pass/fail demo runner: it exits
-nonzero unless the physical valve joint reaches the sampled endpoint within
-the 15-degree success tolerance.
-
-### Record every environment at real-time playback speed
-
-```bash
-just record-all
-# Equivalent:
-uv run python scripts/record_all_envs.py
-```
-
-The recorder discovers all environments registered in
-`source/isaaclab_hiveboard/isaaclab_hiveboard/tasks/__init__.py`, including
-Play variants, aliases, and `validate_command_spot`. Each runs in a separate
-process with one environment, recording up to 10 simulated seconds or the first
-episode end. HDF5 and joint-tracking logs are disabled for this video batch.
-
-Each video's FPS is calculated **after resolving the task configuration** as
-`1 / (sim.dt * decimation)`. For example, `dt=1/200` with decimation `15`
-records at `40/3` (approximately 13.33) FPS; the 50 Hz bench tasks record at
-50 FPS. One frame is captured per environment step, preserving simulated time
-even when rendering runs slowly. Fractional rates are preserved; the duration
-limit rounds up to a whole environment step.
-
-The default runs without a window. It captures `scene_cam` when available and
-otherwise uses Isaac Lab's perspective video recorder with the task's configured
-view. `--viewer` also opens the live Newton viewer. Both `ffmpeg` and `ffprobe`
-must be on PATH, and the tasks require their usual GPU/runtime and assets.
-
-Videos are path-traced with kitless RTX (OVRTX, installed through
-`isaaclab-dev[ovrtx]`; no Isaac Sim needed). `scene_cam` switches to
-`OVRTXRendererCfg` and keeps the scene's lights. Tasks without one record
-through the headless Newton RTX viewer at 1920x1080 with its `studio` lighting
-rig (`play.py --video-rtx-environment default|studio|none`). RTX takes roughly
-twice as long as rasterizing; `--renderer newton` restores the fast Warp/GL
-output. Newton's USD import segfaults intermittently, so a task that exits
-with a crash is re-run up to `--crash-retries` times (default 2). `summary.json`
-records the attempts. The same renderer is available in the player:
-`scripts/play.py --video --video-renderer rtx`.
-
-```bash
-just record-all --list                           # Preview all registered IDs
-just record-all --duration 30                    # Up to 30 simulated seconds each
-just record-all --match Spot --duration 5         # Only IDs containing Spot
-just record-all --task validate_command_spot      # One exact ID; --task can repeat
-just record-all --viewer --match BenchValve       # Watch while recording
-just record-all --dry-run                        # Print commands without running
-just record-all --renderer newton                # Fast rasterized videos instead of RTX
-```
-
-Videos and per-environment logs are saved under a new dated folder in
-`videos/environments/` (change the parent with `--output`). `summary.json`
-records each outcome, actual FPS, frame count, video duration, and log path.
-Failures do not stop the batch; the command exits nonzero if any recording
-fails. `--timeout` sets the wall-time limit per task (default 900 seconds,
-including startup). Interrupted or failed encodes may leave `.partial.mp4`
-files; only finalized, probed MP4s count as successful recordings.
-
-### Newton lamp tasks
-
-Generate the lamp asset once, then run either robot with the kitless player:
-
-```bash
-uv run python scripts/generate_newton_usd.py --assets lamp
-uv run python scripts/play.py --task Isaac-HiveBoard-Spot-Lamp-v0 physics=newton_mjwarp --visualizer newton
-uv run python scripts/play.py --task Isaac-HiveBoard-Franka-Lamp-v0 physics=newton_mjwarp --visualizer newton
-```
-
-The original HiveBoard lamp USD remains in `dependencies/HiveBoard/Simulation/Lamp/`.
-Newton uses the generated USD with the URDF's primitive bulb colliders, plus
-an environment-side 6 mm/revolution screw coupling. The default sequence uses
-sixteen quarter turns. Franka's public FR3 USD is downloaded on first use.
-Pass `--device cpu --visualizer none --max-steps 5` for a short headless check.
-
-Saved Franka setups can use `CuroboPlannedGoToFrameCfg` and
-`CuroboPlannedRotateFrameCfg` with `robot_joint_names` set to `fr3_joint1`
-through `fr3_joint7` (requires CUDA). The arm executes their planned joint
-waypoints to preserve cuRobo's elbow configuration. Plain `GoToFrameCfg` and
-`RotateFrameCfg` use differential IK; `ScrewFrameCfg` also uses differential
-IK to retain the lamp's rotation/translation coupling. Franka uses implicit
-joint drives to keep the arm and gripper stable at the lamp task's timestep.
-
-### Website Spot valve playback
-
-`Isaac-HiveBoard-Spot-BenchValve-Play-v0` replays the HiveBoard website Spot
-clip: the same 50 Hz joint trajectory, home pose, upright board at chest
-height, and arm PD (`kp=500`, `kd=40`) as
-`dependencies/hiveboard-bench.github.io`. This is not the IK collection task.
-
-```bash
-uv run --python 3.12 python scripts/play.py \
-  --task Isaac-HiveBoard-Spot-BenchValve-Play-v0 \
-  physics=newton_mjwarp --visualizer newton
-```
-
-Headless playback writes commanded vs measured arm joints to
-`logs/joint_tracking/<timestamp>/` (`joint_traj.csv`, error plots, RMS summary).
-The same log includes valve-filtered contact force and a hit flag for the
-finger, lower jaw, `wr1`, `wr0`, `el1`, and `el0`. Pass `--joint-log DIR` to
-choose the directory, or `--no-joint-log` to skip.
-
-### Editing the website clip
-
-`scripts/traj_edit.py` is the Newton / Isaac Lab port of the HiveBoard website
-`tools/traj_edit.py`. It loads `spot_bench_valve.json`, draws the same TCP
-beads the playback markers use, and re-solves damped-least-squares IK on this
-Spot instead of MuJoCo.
-
-```bash
-uv run python scripts/traj_edit.py physics=newton_mjwarp --visualizer none
-# or: just edit-spot-traj
-```
-
-This opens Newton's own ViewerGL (not the Isaac Lab visualizer wrapper). The
-editor is under **Example Options → Trajectory Editor** in the left panel
-(press **H** if the HUD is hidden). Pause, select a bead (cyan), nudge with
-**I/K J/L U/O** (Shift = 1 mm) or the xyz fields, then **Solve** / Enter.
-**Save** writes `q` and `keys` back to the JSON. Re-IK only a file without the
-viewer:
-
-```bash
-just retarget-spot-traj
-```
-
-### Single-position command validation
-
-`validate_command_spot` contains Spot, ground, and light. It continuously commands
-the TCP to `(0.9182, -0.0727, 0.8261)` metres relative to the environment origin,
-using the bench-valve sequential command and position IK. There is no automatic
-success termination or timeout. The wrist orientation is unconstrained.
-CUDA graph caching is disabled so the solver applies the gravity-compensation
-settings written at startup.
-
-```bash
-just validate-command-spot
-# Headless tracking check (prints TCP position error in metres):
-just validate-command-spot --headless --visualizer none --max-steps 350
-```
-
-Change `TARGET_POSITION_ENV` in
-`source/isaaclab_hiveboard/isaaclab_hiveboard/tasks/spot/validate_command_spot/env.py`
-to test another position. The target stays active after arrival.
-
-### Robot-only gain baseline
-
-`Isaac-HiveBoard-Spot-Gains-Play-v0` is the same clip with no HiveBoard: ground,
-light, and Spot. Use it to tune PD without valve contact. CUDA graphs are off
-so live `kp`/`kd` writes take effect.
-
-```bash
-uv run --python 3.12 python scripts/play.py \
-  --task Isaac-HiveBoard-Spot-Gains-Play-v0 \
-  physics=newton_mjwarp --visualizer newton --no-joint-log
-```
-
-Score the current bench gains, or search `kp`/`kd`. `--num-envs N` runs N
-copies in one physics step and scores a different gain set in each
-(`--optimize` uses a (1+λ) log-space search with λ = N):
-
-```bash
-uv run --python 3.12 python scripts/optimize_spot_gains.py \
-  --num-envs 16 physics=newton_mjwarp --visualizer none
-
-uv run --python 3.12 python scripts/optimize_spot_gains.py --optimize \
-  --joints all --num-envs 16 --max-evals 80 \
-  physics=newton_mjwarp --visualizer none
-```
-
-`--joints` can be `gripper`, `arm`, or `all`. Results go to `logs/gain_opt/`.
-
-```bash
-uv run --python 3.12 python scripts/play_spot_ball_valve.py \
-  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
-  physics=newton_mjwarp --visualizer newton
-```
-
-### Regenerating Newton USD assets
-
-The `*.usd*` files the Newton tasks load are gitignored build outputs, so a
-fresh clone must generate them once. `scripts/generate_newton_usd.py` converts
-the committed URDFs with [urdf-usd-converter](https://github.com/newton-physics/urdf-usd-converter)
-(kitless; needs a Python that can `import urdf_usd_converter`) and bakes the
-valve CoACD overlay. Check what is missing:
-
-```bash
-uv run python scripts/generate_newton_usd.py --verify-only
-```
-
-Rewrite the valve overlay only (needs `coacd` + `trimesh` in the project venv):
-
-```bash
-uv run python scripts/generate_newton_usd.py --skip-conversion
-# or: just generate-newton-usd --skip-conversion
-```
-
-Full regeneration including URDF conversion:
-
-```bash
-uv run python scripts/generate_newton_usd.py --uuc-python /path/to/uuc-venv/bin/python
-```
-
-UUC rejects OBJ meshes that list vertices no face uses (leftover CAD
-polylines). Strip those before converting Spot:
-
-```bash
-just strip-obj-unused-verts
-```
-
-To change the assets, edit that script — never hand-edit the generated USD —
-then re-run and commit the script.
-
-> [!WARNING]
-> Only `Isaac-HiveBoard-Spot-BallValve-v0` and its `-Play-v0` variant are
-> validated with Isaac Lab 3 and Newton. The remaining HiveBoard environments,
-> cameras, and training configurations still require migration validation.
-
-### Collecting Demonstrations
-
-Record 10 successful demonstrations to HDF5:
-
-```bash
-uv run python scripts/collect_demos.py \
-  --headless --device cuda:0 \
-  --num_demos 10
+just list-envs
 ```
 
 ---
 
-## 🧠 Imitation Learning (BC + DAgger)
+## Running the samples
 
-`scripts/imitation/` trains an MLP policy on scripted-expert demonstrations and
-then improves it with DAgger. Datasets are written in robomimic's layout
-(`data/demo_<i>/obs/<key>` plus `actions`), so they load both in this repo's
-scripts and in Isaac Lab's
-`scripts/imitation_learning/robomimic/train.py`.
-
-Install the trainer once:
+The quickest way is the `play` recipe, which runs a task's `-Play-v0` variant
+in the Newton viewer:
 
 ```bash
-uv sync --extra imitation     # adds robomimic v0.4.0
+just play Spot BallValve
+just play Franka CircuitBreaker
+just play Anymal SmallValve
 ```
 
-**1. Collect expert demonstrations.** The expert is the task's own
-`pose_command` sequence, so nothing is learned here - a known-good solution is
-transcribed into a trainable dataset.
-
-```bash
-uv run python scripts/imitation/collect_demos.py \
-  --task Isaac-HiveBoard-Spot-BallValve-v0 \
-  --num_demos 50 --num_envs 1
-```
-
-The expert adapts to whichever action space a task uses: tasks whose
-`pose_command` sets `output_joint_positions` (the ball valve) get the cuRobo
-joint waypoints `[q_arm, gripper]` directly, while pose-IK tasks (the lamp) get
-`[pos, quat, gripper]`.
-
-> cuRobo-planned tasks run with `--num_envs > 1`. Each environment owns its
-> plan and is solved on its own as it enters a segment, since the cached cuRobo
-> solvers take one problem at a time. Physics is parallel but planning is not:
-> a segment start costs about 0.8 s of solve per environment entering it.
-
-**2. Behaviour cloning.**
-
-```bash
-uv run python scripts/imitation/train_bc.py \
-  --task Isaac-HiveBoard-Spot-BallValve-v0 \
-  --dataset logs/imitation/datasets/expert_<stamp>.hdf5
-```
-
-Actions are rescaled per dimension into `[-1, 1]` before training, and the
-stats are written to `action_norm.json` beside the checkpoint so
-`RobomimicPolicy` can invert them. This is not optional book-keeping:
-robomimic's actor ends in a `tanh` and physically cannot emit anything outside
-`[-1, 1]`, so a joint-position task commanding radians trains to a plateau
-instead of converging. On the ball valve the difference is a final L2 of
-2e-05 with normalization against 0.246 without.
-
-**3. DAgger.** Each round rolls the current policy out, asks the expert what it
-would have done at every state the policy actually visited, appends those
-corrections and retrains. `--beta` is the chance of deferring to the expert on
-any step and decays by `--beta_decay` each round.
-
-```bash
-uv run python scripts/imitation/dagger.py \
-  --initial_dataset logs/imitation/datasets/expert_<stamp>.hdf5 \
-  --rounds 5 --episodes_per_round 40 --num_envs 8
-```
-
-**4. Evaluate** against the task's own `success` termination term, with
-`--expert` giving the ceiling the policy is chasing:
-
-```bash
-uv run python scripts/imitation/eval_policy.py --checkpoint <run>/models/model_epoch_600.pth
-uv run python scripts/imitation/eval_policy.py --expert     # baseline
-```
-
-### Observations and privileged information
-
-The policy reads the task's `bc` observation group. Every term is reproducible
-on hardware, in three tiers:
-
-| Tier | Ball valve | Source on hardware |
-| --- | --- | --- |
-| Proprioception | `eef_pos`, `eef_quat`, `arm_joint_pos`, `arm_joint_vel`, `gripper_pos` | joint encoders + FK |
-| Privileged object state | `object_pos`, `object_quat`, `valve_current_angle` | AprilTag on the valve |
-| Task specification | `valve_goal_angle`, `valve_task_direction` | commanded by the operator |
-
-The privileged tier is what the AprilTags supply, so no state estimator is
-needed at deployment. The task-specification tier matters on the ball valve
-because episodes sample both open and close goals - without it a policy cannot
-know which way to turn. Contact forces are excluded even though the task
-records them, since neither Spot's gripper nor the 2F-140 has force sensing on
-hardware.
-
-`Isaac-HiveBoard-Anymal-BallValve-v0` carries the same group, keyed
-identically, so the pipeline runs on either robot with no change beyond
-`--task`. Only the underlying joints differ: six DynaArm joints in
-`arm_joint_pos`/`arm_joint_vel` against Spot's seven, and `gripper_pos` reading
-the 2F-140's `finger_joint` motor (the rest of the parallel linkage is driven
-by USD constraints, so it carries no independent information). Datasets from
-the two robots are *not* interchangeable - the key shapes differ.
-
-The Spot lamp group follows the same shape, with `object_pos`, `object_quat`
-and `lamp_joint_pos` as its privileged tier.
-
-To use this pipeline on another task, give that task a `bc` observation group
-with `concatenate_terms = False` and register a
-`robomimic_bc_cfg_entry_point` pointing at a config JSON - see
-`tasks/spot/lamp/configs/observations.py` and
-`tasks/spot/lamp/agents/robomimic/bc.json`.
-
-### Task status
-
-The scripted expert must actually solve a task before any of this produces
-data. Always check the ceiling first:
-
-```bash
-uv run python scripts/imitation/eval_policy.py --expert --task <task> --num_envs 1
-```
-
-**`Isaac-HiveBoard-Spot-BallValve-v0`** needed two task settings corrected
-before it could ever report success: `episode_length_s` 5.0 -> 25.0 (the
--90 degree turn alone takes ~5.2 s at 0.3 rad/s, so episodes timed out
-mid-turn) and the success tolerance, which was `math.radians(0.010)` - 0.01
-degrees - against the ~0.9 degrees the expert actually achieves.
-
-With those fixed the expert scores 100% on the deterministic `-Play-v0`
-variant, but two *independent* reset settings still defeat it on the randomized
-task, each measured by toggling it alone:
-
-| Setting | Expert success |
-| --- | --- |
-| Deterministic reset, no randomization | 4/4 |
-| `valve_joint_parameters` enabled | 0/8 |
-| `valve_joint_parameters` disabled | 3/3 |
-| Full pose randomization, friction term disabled | 0/8 |
-
-`valve_joint_parameters` sets the valve's revolute joint friction to 0.01-0.10
-(`operation="abs"`), which resists the gripper across its whole sampled range.
-The `reset_valve_root` pose ranges (+-0.20 m x, +-0.30 m y and z, +-30 degrees
-roll/pitch, +-36 degrees yaw) put the valve outside what cuRobo plans to
-reliably; plans fail and the expert falls back to direct servoing.
-
-Both need retuning against the gripper's achievable torque and the arm's
-reachable workspace. Until then, collect with the friction term switched off:
-
-```bash
-uv run python scripts/imitation/collect_demos.py \
-  --task Isaac-HiveBoard-Spot-BallValve-v0 --num_envs 1 \
-  --disable_events valve_joint_parameters
-```
-
-**`Isaac-HiveBoard-Anymal-BallValve-v0`** needed three corrections before its
-expert could produce anything. Two were the settings the Spot task had already
-needed - `episode_length_s` 5.0 -> 25.0 and the `math.radians(0.010)` success
-tolerance -> 0.035 rad - and they were necessary but not sufficient.
-
-The third was an actuator, and it is worth recording how it presented, because
-it looked exactly like a bad grasp pose. The sequence stalled at command index
-1 (`lever_pivot`) with the TCP 9.4 cm high and 16.6 degrees off, cuRobo
-reporting a good plan tracked to its last waypoint:
-
-```
-[SEQ]   env=0 seg 0 done in 2.40s -> seg 1
-[STALL] env=0 stuck on seg 1/6 for >=4.0s
-[STALL] target_pos_b=[0.970, -0.024, 0.204] ee_pos_b=[0.956, -0.022, 0.297]
-        pos_err_m=0.0940 ori_err_deg=16.63
-[STALL] curobo: waypoint 21/21
-```
-
-Authoring a tuned `configs/Isaac-HiveBoard-Anymal-BallValve-v0.json` moved the
-target but not the error, which ruled out the command sequence. Comparing
-commanded against measured joints found the cause: five of the six arm joints
-tracked to 0.002 rad, while `dynaarm_wrist_flexion` held a steady **0.29 rad**
-offset with its actuator pinned at the 40 N.m ceiling - against a 0.63 kg
-gripper assembly whose gravity load is ~1.3 N.m. That 0.29 rad *is* the
-16.6 degrees of orientation error and most of the 9.4 cm.
-
-It was the discrete PD fighting itself, the same failure the comment above
-`dynaarm_forearm` in `assets/anymal/bench.py` describes for the roll joints:
-wrist flexion was the last light joint still on the flat 200/20 gains with no
-armature. Raising the effort ceiling makes it *worse* (the ringing gets more
-authority - the sequence then fails to finish even segment 0). Soft gains plus
-armature, matching its neighbours, fix it:
-
-| `dynaarm_wrist_flex` | stiffness | damping | armature | Expert on `-Play-v0` |
-| --- | --- | --- | --- | --- |
-| Before | 200.0 | 20.0 | none | 0/3 |
-| Raised effort ceiling to 200 N.m | 200.0 | 20.0 | none | 0/2, worse |
-| After | 40.0 | 1.5 | 0.01 | **2/2** |
-
-The full sequence now runs: approach, grasp, a 5.3 s rotate, release, retreat.
-
-On the randomized task the blocker is the opposite of Spot's. Toggling each
-randomization term alone:
-
-| Setting | Expert success |
-| --- | --- |
-| Full randomization | 0/8 |
-| `valve_joint_parameters` disabled (friction) | 0/6 |
-| `reset_valve_root` disabled (valve pose) | 6/6 |
-
-Valve friction, which defeats Spot's gripper, does not bother the 2F-140; the
-`reset_valve_root` pose ranges (+-0.20 m x, +-0.30 m y and z, +-30 degrees
-roll/pitch, +-36 degrees yaw) do. Until those ranges are narrowed to what the
-DynaArm reaches, collect with the pose term switched off - friction, material
-and valve-actuator randomization all stay on:
-
-```bash
-uv run python scripts/imitation/collect_demos.py \
-  --task Isaac-HiveBoard-Anymal-BallValve-v0 --num_envs 1 \
-  --disable_events reset_valve_root
-```
-
-That dataset has no variety in valve pose, so a policy trained on it will not
-generalize across valve placements - it teaches the task, not the reach.
-
-**`Isaac-HiveBoard-Spot-Lamp-v0`** does not currently succeed at all. Its
-sixteen-quarter-turn sequence is still at command index 1 when the episode
-times out, and it fails even with a 150 s episode, so collection writes an
-empty dataset.
-
----
-
-## 🤖 Reinforcement Learning (teacher → student)
-
-`Isaac-HiveBoard-Anymal-BallValve-RL-v0` trains a sim-to-real expert for the
-fixed-base ANYmal + DynaArm opening the ball valve (closed → -90°), with the
-two-stage recipe from IndustReal/AutoMate and Zhang et al. (CoRL 2024):
-
-1. **Teacher** - PPO (RSL-RL) whose actor and critic read privileged simulator
-   state (`teacher` group: valve angle and rate, true valve pose, lever grasp
-   target, pad contact forces, joint velocities).
-2. **Student** - distilled from the teacher with RSL-RL's DAgger-style
-   `Distillation`, reading only what the robot has at deployment (`policy`
-   group, 5-step history): arm encoders, gripper motor angle, TCP pose from
-   forward kinematics, the previous action, and the **registration** of the
-   board latched at the start of the episode - the valve pose with a
-   per-episode error (±1 cm, ±2°, plus 2 mm jitter) and the lever's initial
-   angle (±2°). After that the student tracks the lever only through its own
-   proprioception; it never sees the live valve angle. It also receives the commanded
-   turning speed - the one operator input - so a single policy turns the valve
-   at whatever speed is asked for.
-
-| | |
-| --- | --- |
-| Action | 6 arm joint increments integrated into the position target (0.05 rad/step at 20 Hz, a joint-space version of IndustReal's action integrator) + binary ramped gripper |
-| Command | turning speed [rad/s], sampled per episode in 0.25-0.8 (Play: 0.3, the cuRobo expert's speed). A reference angle starts moving at that speed once the lever is first grasped |
-| Reward | reach → align → grasp, then tracking of the reference angle (only while the lever is held at the expert grasp pose: ≤3 cm, ≤0.35 rad, closed). "Open" only pays once the reference has also reached open, so turning faster than commanded earns nothing. Penalties on valve speed deviating from the command, valve motion while not held, pad force > 60 N, action rate |
-| Randomization | valve pose ±3-4 cm / ±0.1 rad yaw, start angle 0 to -0.4 rad, arm ±0.1 rad, valve friction / armature / materials, pad friction |
-| Success | valve within 0.035 rad (2°) of fully open, same as the scripted task |
-
-**Expert bank.** The teacher is trained against precomputed cuRobo expert
-trajectories. `scripts/rl/build_expert_bank.py` runs the scripted expert
-(with its saved command setup) in 1024 parallel environments from the RL task's
-reset distribution, at the RL task's 20 Hz, with cuRobo planning every
-environment that enters a segment on the same tick as one batch
-(`plan_batch_size` on the cuRobo command configs; `BatchMotionPlanner` and a
-batched `MotionRetargeter`). 5000 trajectories took 170 s, and the expert
-opened the valve while holding the lever in 5120/5120 randomized episodes
-(7.7 ± 0.5 s to open). The saved ANYmal ball-valve setup no longer has a
-separate gripper-close step before the turn: the rotate segment closes the
-gripper as it starts, so the expert turns without idling.
-
-```bash
-uv run python scripts/rl/build_expert_bank.py --num_envs 1024 --num_trajectories 5000
-uv run python scripts/rl/build_expert_bank.py --num_envs 1 --max_waves 4 \
-  --video logs/expert_bank/video_review "env.viewer.origin_type=world" \
-  "env.viewer.eye=[0.55,1.05,1.05]" "env.viewer.lookat=[0.9,0.0,0.8]"   # review clip
-```
-
-Each RL episode resets to a random bank trajectory's start state
-(`reset_from_expert_bank`), and `track_expert` rewards following the expert
-joint by joint: during the reach, the expert's planned joint path by time, with
-the steps where the scripted expert settles onto a segment end before starting
-the next removed; during the turn, the joint configuration the expert had at
-the lever's current angle. A small
-TCP error near the wrist singularity can hide large forearm/wrist excursions,
-so the evaluator reports per-joint RMS error against the expert, RMS
-acceleration and velocity reversals per second, next to the same numbers for
-the bank's own trajectories.
-
-The lever grasp pose (`GRASP_OFFSET_*` in `tasks/anymal/ball_valve_rl/mdp.py`)
-is the cuRobo expert's, measured by replaying its demonstration through the RL
-action space. The same replay checks that every reward term is reachable; the
-expert opens the valve in 8.7 s of the 12 s episode:
-
-```bash
-uv run python scripts/rl/measure_grasp_offset.py
-```
-
-```bash
-just rl-teacher                                   # PPO, 4096 envs, 3000 iterations
-just rl-student logs/rsl_rl/anymal_ball_valve_teacher/<run>/model_2999.pt
-just rl-eval logs/rsl_rl/anymal_ball_valve_teacher/<run>/model_2999.pt
-just rl-eval logs/rsl_rl/anymal_ball_valve_student/<run>/model_1499.pt \
-  --agent rsl_rl_distillation_cfg_entry_point
-just rl-play <checkpoint>                         # Newton viewer + TorchScript/ONNX export
-```
-
-Use `--agent rsl_rl_distillation_recurrent_cfg_entry_point` for an LSTM student.
-`scripts/rl/evaluate.py` runs the `-Play-v0` task (nominal physics, closed
-valve, registration error kept) and reports the success rate with a 95% Wilson
-interval, the NIST one-sided 95% reliability bound, time to open, and stage
-rates (reached / grasped / opened while held / opened by any means), peak valve
-rate and peak gripper speed. `--trace` prints one episode step by step. It
-writes JSON next to the checkpoint. Any
-Hydra override applies, e.g. a turning-speed sweep with
-`env.commands.valve_turn.rate_range=[0.6,0.6]` (the report compares commanded
-and achieved rate), or a registration-error sweep with
-`env.observations.policy.registered_valve.params.bias_pos=0.02`.
-
-Results so far (Newton MJWarp, `-Play-v0`, 100 episodes unless noted; success =
-valve open while the lever is held at the expert grasp):
-
-| Policy | Observations | Success | 95% Wilson | Reliability ≥ | Time to open | Peak pad force |
-| --- | --- | --- | --- | --- | --- | --- |
-| cuRobo scripted expert (replay) | privileged | opens in 8.7 s | - | - | 8.7 s | - |
-| Teacher v4, it. 2299 | privileged | 100/100 | [96.3, 100]% | 97.0% | 1.43 ± 0.06 s | 97 N |
-| Student v6, it. 500 | proprio + registration | 99/100 | [94.6, 99.8]% | 95.3% | 1.58 ± 0.37 s | 294 N |
-| Student v6, it. 1499 | proprio + registration | 100/100 | [96.3, 100]% | 97.0% | 1.48 ± 0.12 s | 281 N |
-| Student v6, it. 500, 2 cm registration error (50 ep.) | proprio + registration | 43/50 | [73.8, 93.0]% | 75.3% | 1.73 ± 0.39 s | - |
-
-The learned policies turn the lever much faster than the scripted expert
-(peak valve rate ~6-7 rad/s for teacher and final student, expert 0.3 rad/s) and the
-student's pad forces peak near 300 N. Both are worth bounding (a lower
-`valve_overspeed` threshold, a stronger `pad_force` weight) before running on
-hardware.
-
-The hold gate and penalties close the shortcuts the teacher found on the way:
-with a distance-only gate it pushed the lever open with a closed "fist"
-(100% "opened" in 1 s, 0% grasped); with the full gate but no impact penalty it
-struck the lever on the approach, flinging it half open at ~11 rad/s before
-grasping. Check `grasped`, peak valve rate and `--trace` before trusting a
-success rate.
-
-The environment silences MJWarp's per-world `linesearch iterations limit
-reached` printf at startup: with thousands of worlds it prints hundreds of
-thousands of lines a minute and stalls training.
-
-### Small valve
-
-`Isaac-HiveBoard-Anymal-SmallValve-RL-v0` (and `-Play-v0`) is the same MDP
-on the small gate valve: the expert clamps the handwheel's hub with the TCP on
-the stem axis and turns it a quarter turn (0 → -90°) by rolling the wrist.
-`tasks/anymal/small_valve_rl/env.py` only swaps the scene and the valve: every
-RL term reads the valve from the environment's `valve_task`
-(`mdp.ValveTaskCfg`: asset, joint, closed/open angles, grasp frame and the
-expert's grasp offset in it), and the bank builder reads its ranges and
-expert settings from the RL task's env module. Differences from the ball
-valve:
-
-- The handwheel joint is continuous, with no end stop at closed. A seat torque
-  or spring toward closed spins it past closed (63 rad/s before the expert
-  arrived), so the valve dynamics are friction (0.02-1 N·m), damping and
-  inertia only, with no stuck valves (`closed_end_stop=False` refuses them).
-- The handwheel's spokes turn through a full turn about the stem (the valve
-  body's pitch); the grasp varies by ±5 mm along the stem and ±0.12 rad about
-  it (at ±0.25 rad the pads slipped and the expert kept only 19%).
-- The expert grips for 0.3 s before turning (`EXPERT_GRIP_S`; the saved
-  setup's 1.2 s is for the scripted task's slower close).
-
-The `rl-*` recipes take the valve from `RL_TOOL`:
-
-```bash
-RL_TOOL=SmallValve just rl-bank                    # 5000 cuRobo trajectories
-RL_TOOL=SmallValve just rl-student-ppo             # PPO student, privileged critic
-RL_TOOL=SmallValve just rl-eval logs/rsl_rl/anymal_small_valve_student_ppo/<run>/model_<it>.pt \
-  --agent rsl_rl_student_ppo_cfg_entry_point
-```
-
-### M30 thread
-
-`Isaac-HiveBoard-Anymal-M30Thread-RL-v0` (and `-Play-v0`) runs the M30 nut
-down its last two turns until seated (`RevoluteJoint` 0 → -4π,
-`PrismaticJoint` 7 mm → 0), with the same MDP. The cuRobo expert regrasps
-every 120°: grasp, turn, let go, back off 3 cm, grasp again, six times, then
-backs off to the approach point (~50 s). `tasks/anymal/m30_thread_rl/env.py`
-sets the part's `ValveTaskCfg`; what the screw needs beyond a valve:
-
-- The nut's travel follows its angle through the thread's mimic constraint.
-  `ValveTaskCfg.coupled_joint_name` makes every reset (bank start, mid-trajectory
-  start, the bank builder's) write both joints, and the RL task registers the
-  same mimic constraint and zeroes the travel drive, as the scripted task does.
-- The hand turns away from the fixed grasp pose with the nut, so the nut counts
-  as held while the gripper is closed with both pads touching it
-  (`hold_by_contact`).
-- The teacher's expert-gripper reference follows the expert's command after the
-  first grasp (`expert_gripper_reference(follow_release=True)`): it opens and
-  closes with every regrasp.
-- The command setup's phases are tagged, and the bank builder ends a spare
-  grasp at once when the nut is already within 0.1 rad of seated
-  (`configure_expert`), so the expert lets go and backs off after its last turn.
-- Success is seated within the protocol's 1 mm (1.8 rad of turn).
-- The board turns through a full roll about the thread and tilts ±15°; the
-  nut starts on its flats (the grasp goal is fixed to the board).
-- The fast cuRobo reach (forearm targets up to 2.6 rad/s, past the action's
-  2 rad/s) and the regrasp lag need wider expert-reference terminations: 0.5 rad
-  for the joints and the nut angle.
-
-The bank builder's GPU memory grows ~9 GB per 512-environment wave on this
-task (cuRobo plans many small batches once the turn rates desynchronize the
-environments), so a 46 GB GPU fits four waves. Build the bank in halves and
-merge them:
-
-```bash
-for s in 0 1; do RL_TOOL=M30Thread just rl-bank 512 2000 --seed $s \
-  --output logs/expert_bank/anymal_m30_thread_bank_2000_s$s.pt; done   # ~25 min each
-uv run python scripts/rl/merge_expert_banks.py logs/expert_bank/anymal_m30_thread_bank_2000_s{0,1}.pt \
-  --output logs/expert_bank/anymal_m30_thread_bank_4000.pt
-RL_TOOL=M30Thread just rl-student-ppo                 # PPO student, privileged critic
-RL_TOOL=M30Thread just rl-eval logs/rsl_rl/anymal_m30_thread_student_ppo/<run>/model_<it>.pt \
-  --agent rsl_rl_student_ppo_cfg_entry_point
-```
-
-Student PPO v1 (4096 envs, 3000 iterations, ~4.6 h on an L40S), 256 Play
-episodes per checkpoint: it 600 93.0% seated / 87.1% complete, **it 1600 93.4% /
-93.0%** (pad squeeze p99 201 N), it 2000 91.4% / 91.4%, it 2999 74.6% / 73.4%
-(late regression, pad peaks up to 1.4 kN). 13 of it 1600's 17 failures stop
-exactly one 120° turn short: when a turn slips, the deployable policy cannot
-tell, since it follows the expert's clock (`episode_time`) and its 5-step
-history cannot count turns.
-
-### Circuit breaker
-
-`Isaac-HiveBoard-Anymal-CircuitBreaker-RL-v0` (and `-Play-v0`) flips the
-circuit breaker's toggle up, from its down stop to its up stop
-(`RevoluteJoint` +30° → -30°), with the same MDP. The lever is too small to
-pinch (2.3 cm long, 4 cm wide; the 2F-140 bottoms out ~24 mm apart), so the
-expert pushes it: a closed fist comes in under the lever and pushes straight
-up past the pivot, holds the lever at its stop for 0.3 s, backs off up and
-out, then returns to the approach point (~7 s). `tasks/anymal/circuit_breaker_rl/env.py`
-sets the breaker's `ValveTaskCfg`; what a push needs beyond a grasp:
-
-- `ValveTaskCfg.push`: the lever counts as held while either pad touches it,
-  and reaching the up stop counts once a pad has touched it earlier in the
-  episode (`mdp.opening_credited`): a pushed lever runs ahead of the hand to
-  its stop. Letting go needs no open gripper (the fist stays closed).
-- The expert's actuation is the go-to segment tagged `actuate`, not a rotate:
-  `expert_diversity` varies its hand speed (0.1-0.2 m/s, in the `turn_rate`
-  slot) and moves its goals with the grasp offset (±1 cm across the lever, ±0.3
-  rad of fist roll); the bank builder finds the breaker's reset events by what
-  they do (`reset_breaker_*`).
-- The bank builder's `configure_expert` hook fixes the scripted sequence for
-  RL: the lever starts at its down stop (the scripted task starts it half way),
-  every goal is 2 cm higher (the push started too low and stopped short), the
-  push runs 1 cm deeper (from the stop the authored push slipped off the
-  lever's tip half way up; 0.5 cm let more levers bounce off the stop), ends on the lever's angle (the fist is then stuck
-  under the raised lever, short of its goal), holds it up for 0.3 s (released
-  at once, 14% bounced back off the stop), and retreats up and out before
-  coming down (a retreat that moved down near the lever pushed it back in 7-34%
-  of the episodes). The grip wait and the final release are dropped.
-- Lever dynamics are the scripted task's friction (0.01-0.1 N·m) plus a light
-  detent (≤ 0.1 N·m) and armature ≤ 0.002 kg·m². The push loads the DynaArm's
-  soft wrist (~1 cm of give per 10 N at the fingertips), so stiffer levers
-  (detents to 0.5 N·m, stuck toggles to 1.5 N·m) were flipped in only 27% of
-  the expert's episodes.
-- The end stops are damped (`breaker_end_stops`, limit `kd` 100 N·m·s/rad, in
-  every breaker task: ANYmal, Spot and Franka). With Newton's default `kd` 10 the light lever's stops
-  were near-elastic in MJWarp: flicked into a stop at 6-15 rad/s it sprang back
-  50-60°, often to the other stop. Damped, the expert left the lever up in
-  95.3% of its episodes instead of 88.3%, and a student trained on the bouncy
-  stops completed 99.8% instead of 93.0%.
-- Success is the lever within 0.1 rad of its up stop: the HiveBoard lever has
-  no toggle spring to snap it home.
-- The flick (up to ~3 rad/s) is not penalized (`valve_overspeed` off), and the
-  teacher's expert-gripper reference follows the expert's command from the
-  start (`follow_reach`).
-
-```bash
-RL_TOOL=CircuitBreaker just rl-bank 512 5000
-RL_TOOL=CircuitBreaker just rl-student-ppo            # PPO student, privileged critic
-RL_TOOL=CircuitBreaker just rl-eval logs/rsl_rl/anymal_circuit_breaker_student_ppo/<run>/model_<it>.pt \
-  --agent rsl_rl_student_ppo_cfg_entry_point
-```
-
----
-
-## 📁 Repository Structure
-
-```
-isaaclab-hiveboard/
-├── dependencies/
-│   └── HiveBoard/               # Git submodule (URDF/USD models & meshes)
-├── scripts/                     # Standalone CLI tools (play.py, collect_demos.py, etc.)
-│   └── imitation/               # BC + DAgger pipeline (collect, train, dagger, eval)
-└── source/
-    └── isaaclab_hiveboard/
-        ├── config/
-        │   └── extension.toml   # Omniverse extension configuration
-        ├── setup.py
-        └── isaaclab_hiveboard/
-            ├── assets/          # Dynamic HiveBoard & robot asset resolvers
-            ├── imitation/       # Expert, rollout loop, dataset & policy helpers
-            ├── mdp/             # Custom actions, commands, events, observations
-            ├── tasks/           # Robot tasks (spot/, franka/, anymal/)
-            └── utils/           # Diagnostics & metrics
-```
-
-## Interactive command setup
-
-Use the Newton Viser editor to author a `SequentialPoseCommand` task in your browser:
-
-```bash
-just edit-commands
-# Open http://localhost:8080
-
-# Choose another task or reopen saved settings:
-just edit-commands --task Isaac-HiveBoard-Spot-BenchValve-Play-v0
-just edit-commands --setup logs/command_setup.json
-
-# Optionally use the CUDA device:
-just edit-commands --device cuda:0
-```
-
-The editor defaults to CPU and does not require CUDA. The default task is
-`Isaac-HiveBoard-Spot-BallValve-Play-v0`. Supply the same `--task`
-when loading settings authored for another task. `--port` changes the browser port;
-`--out` chooses the save file. Settings are saved only when you click **Save setup**.
-
-Without `--setup`, the editor loads `configs/<task>.json` if it exists, falling back
-to the base task's file for a `-Play-v0` variant. If neither exists, it starts from
-the task's built-in settings. An explicit `--setup` takes precedence. By default,
-saving updates the loaded file, or creates `configs/<task>.json` if none was loaded.
-
-- **GoTo:** select a bead or command, then drag its position and orientation. Choose
-  an object frame in **Reference** to keep the goal relative to that object, or use
-  a fixed environment pose. Edit speeds, tolerances and the gripper state below it.
-- **Rotate / Screw:** drag the reference pivot, set the axis in that reference frame,
-  and adjust the signed angle, angular speed and screw travel. The arc is shown in
-  3D. **Use remaining valve angle** preserves valve-task behavior; turn it off to
-  use the entered angle.
-- **Open / Close gripper:** choose the state and hold duration. Duplicate, insert,
-  reorder or delete commands with the sequence controls.
-- **TCP offset:** enable **Drag TCP offset** to hold the robot still while placing
-  the tool center point relative to its end-effector body. Numeric translation and
-  XYZ Euler rotation controls are also available. Turn calibration off to see the
-  arm match the selected goal using that offset.
-- **Preview:** scrub a command or play the sequence. Position and orientation
-  residuals show whether IK reached the goal. Unreachable goals remain editable.
-
-The editor loads the task's scene once and uses its robot Jacobian for subsequent
-edits. This is a **kinematic preview**: objects stay at their reset poses, and IK
-does not check collisions, forces or grasp success. cuRobo command settings survive
-save/load, but preview does not run the planner. Editing a goal with a dense cuRobo
-reference clears that reference so the edited endpoint is used on replay.
-
-Validate the saved setup with the task's normal physics and command handlers:
+Or call the player directly for full control:
 
 ```bash
 uv run python scripts/play.py \
   --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
-  --setup logs/command_setup.json
+  physics=newton_mjwarp --visualizer newton
 ```
 
-#### Phases and mechanism goals
+Useful options:
 
-Each command can carry a `phase`: `approach`, `engage`, `grip`, `actuate`,
-`release` or `retreat` (pick it in the editor's **Phase** dropdown). Phases can be
-skipped or repeated: the ball valve's turn closes the gripper itself, a push needs
-no grip. `SequentialPoseCommand.phase` reports each env's current phase, and the
-RL expert bank records it per step (`phase_id`, names in `meta["phases"]`), so
-code that needs "the turn" or "the grasp" finds it by name, not by segment index.
-`isaaclab_hiveboard.mdp.commands.skills.SkillSet` builds phase-tagged cuRobo
-segments for a robot in Python configs:
+| Option | Effect |
+| --- | --- |
+| `--visualizer none` | Run without a window |
+| `--device cpu` | Run on CPU |
+| `--num_envs N` | Spawn N environments |
+| `--duration S` / `--max-steps N` | Stop after S simulated seconds / N steps |
+| `--pose-debug` | Print TCP pose error each interval |
+| `--contact-debug` | Print finger and object contact forces |
+| `--setup FILE` / `--no-setup` | Use a saved command setup / the sequence as coded |
+| `--video` | Save an MP4 under `videos/` (`--video-renderer rtx` for path tracing) |
+| `--no-dataset` | Skip HDF5 episode recording under `logs/recorded_datasets/` |
 
-```python
-from isaaclab_hiveboard.mdp.commands.skills import MechanismGoalCfg, SkillSet
-from isaaclab_hiveboard.tasks.anymal.mechanism import ANYMAL_CUROBO
+Lamp tasks need their asset generated first:
 
-anymal = SkillSet(**ANYMAL_CUROBO)
-commands = [
-    anymal.approach("approaching"),
-    anymal.engage("lever_pivot"),
-    anymal.turn(angle_deg=-90, until=MechanismGoalCfg(goal_tolerance=0.05, settle_speed=0.05)),
-    anymal.release(),
-    anymal.retreat("approaching", hold_current_orientation=True),
-]
+```bash
+uv run python scripts/generate_newton_usd.py --assets lamp
+uv run python scripts/play.py --task Isaac-HiveBoard-Franka-Lamp-v0 physics=newton_mjwarp --visualizer newton
 ```
 
-`until` ends a segment as soon as a mechanism joint gets where it should, whichever
-comes first with the segment's own done check: inside `[low, high]`, within
-`goal_tolerance` of the episode's sampled valve goal, and/or slower than
-`settle_speed` (at rest, e.g. on its end stop). Asset and joint default to the
-command's `valve_asset_name`/`valve_joint_name`. Unlike the older
-`done_when_joint`/`valve_done_threshold_rad`, it is checked during the whole
-segment, not only once a cuRobo plan has run out.
+### Record every task
 
-#### Which setup a task runs
+```bash
+just record-all                           # all tasks, headless, RTX
+just record-all --list                    # preview the task IDs
+just record-all --match Spot --duration 5 # only IDs containing "Spot"
+just record-all --renderer newton         # fast rasterized videos
+```
 
-With no `--setup`, a task runs `configs/<task>.json` when that file exists.
-**A `-Play-v0` variant falls back to its base task's file**: the two differ only
-in events and command sampling, so they share one tuned command sequence. Save
-a `configs/<task>-Play-v0.json` if a variant ever needs its own - a task's own
-file always wins - and pass `--no-setup` to run the sequence as coded in Python.
+Videos and a `summary.json` go to a dated folder under `videos/environments/`.
+`ffmpeg` and `ffprobe` must be on `PATH`.
 
-This fallback applies everywhere a setup is loaded, `scripts/imitation/`
-included: the scripted expert *is* the command sequence, so collecting without
-the setup would transcribe a different expert from the one you tuned in the
-editor and watched in `play.py`.
+---
 
-Replay with `--setup` automatically shows the active command path: yellow waypoint
-spheres, a green next-waypoint marker, RGB orientation frames along the path, and
-the current/target TCP poses. GoTo shows the remaining motion; Rotate/Screw shows
-the signed arc; cuRobo commands show their actual planned waypoints. The path
-disappears during gripper holds and when the sequence finishes. Use
-`--no-show-command-path` to hide the path, or `--show-command-path` to enable it
-without a setup file.
+## Editing commands
 
-GoTo's `canonicalize_upward` selects the upright grasp when the command starts
-and keeps that choice while following the reference. This prevents 180° target
-flips when a moving handle crosses a horizontal pose.
+Each task drives the robot through a sequence of commands (go to a pose,
+rotate, close/open the gripper, ...). Edit it in the browser with the Viser
+command editor:
 
-The JSON stores command parameters and a body-to-TCP transform, with quaternions in
-`(x, y, z, w)` order. `play.py --setup` applies the offset to the command term, matching
-IK action and `ee_tcp` sensor before creating the environment. Existing task Python
-configs are not rewritten. For programmatic use, call
-`isaaclab_hiveboard.utils.command_setup.apply_setup(env_cfg, data, task=task_id)`
-before `gym.make()`. Joint-trajectory-only tasks continue to use `scripts/traj_edit.py`.
+```bash
+just edit-commands                                          # default: Spot ball valve
+just edit-commands --task Isaac-HiveBoard-Franka-BallValve-Play-v0
+just edit-commands --setup logs/command_setup.json          # reopen a saved file
+# then open http://localhost:8080
+```
 
-Checks: `just check-command-setup`; scene and Viser startup:
-`just edit-commands --device cpu --smoke-test`.
+In the editor:
+
+- **GoTo:** select a bead or command and drag its position and orientation.
+  Pick an object frame in **Reference** to keep the goal relative to it. Edit
+  speeds, tolerances and the gripper state below.
+- **Rotate / Screw:** drag the pivot, set the axis, angle, angular speed and
+  screw travel.
+- **Open / Close gripper:** choose the state and hold time. Duplicate, insert,
+  reorder or delete commands with the sequence controls.
+- **Phase:** tag each command `approach`, `engage`, `grip`, `actuate`,
+  `release` or `retreat`.
+- **TCP offset:** enable **Drag TCP offset** to place the tool center point
+  relative to the end-effector body.
+- **Preview:** scrub or play the sequence; residuals show whether IK reached
+  each goal.
+
+The preview is kinematic only: objects stay put and no collisions, forces or
+cuRobo plans are simulated. Click **Save setup** to write the file.
+
+### Where setups live
+
+- With no `--setup`, the editor and `play.py` load `configs/<task>.json`.
+- A `-Play-v0` variant falls back to its base task's file, so both share one
+  sequence. A task's own file always wins.
+- Saving updates the loaded file, or creates `configs/<task>.json`.
+- `--out FILE` saves elsewhere; `--port` changes the browser port.
+
+Check a setup with real physics:
+
+```bash
+uv run python scripts/play.py \
+  --task Isaac-HiveBoard-Spot-BallValve-Play-v0 \
+  --setup configs/Isaac-HiveBoard-Spot-BallValve-v0.json
+```
+
+Replay draws the active command path (waypoints, next target and TCP frames);
+hide it with `--no-show-command-path`.
+
+### Spot website clip
+
+The `BenchValve` tasks replay a fixed joint trajectory instead of commands.
+Edit it with:
+
+```bash
+just edit-spot-traj        # Newton viewer: Example Options → Trajectory Editor
+just retarget-spot-traj    # re-solve IK without the viewer
+```
+
+---
+
+## Repository structure
+
+```
+isaaclab-hiveboard/
+├── configs/                 # Saved command setups, one per task
+├── dependencies/HiveBoard/  # Git submodule: HiveBoard URDF/USD models
+├── scripts/                 # play.py, command_edit.py, record_all_envs.py, ...
+└── source/isaaclab_hiveboard/isaaclab_hiveboard/
+    ├── assets/              # Robot and HiveBoard asset configs
+    ├── mdp/                 # Actions, commands, events, observations
+    ├── tasks/               # spot/, franka/, anymal/
+    └── utils/
+```
