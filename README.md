@@ -43,9 +43,9 @@ URDF conversion uses
 ## Available tasks
 
 Each task is `Isaac-HiveBoard-<Robot>-<Tool>-v0`, with a `-Play-v0` variant
-(fixed reset, for watching and evaluating):
-
-The environments with ✓ have a working heuristic, while the ones with x do not.
+(fixed reset, for watching and evaluating). In the table below, ✓ marks the
+robot/tool pairs that have a working heuristic and ✗ marks those that don't
+have one yet.
 
 | Tool | Spot | Franka | ANYmal |
 | --- | :-: | :-: | :-: |
@@ -54,12 +54,12 @@ The environments with ✓ have a working heuristic, while the ones with x do not
 | `HighTorqueValve` | ✓ | ✓ | ✓ |
 | `CircuitBreaker` | ✓ | ✓ | ✓ |
 | `Button` | ✓ | ✓ | ✓ |
-| `Key` | x | x | x |
-| `Drawer` | x | x | x |
-| `M8Thread` / `M30Thread` | x | ✓ | ✓ |
-| `PegInsertion` | x | x | x |
-| `ShockAbsorber` | x | x | x |
-| `Lamp`  | ✓ | ✓ | ✓ |
+| `Key` | ✗ | ✗ | ✗ |
+| `Drawer` | ✗ | ✗ | ✗ |
+| `M8Thread` / `M30Thread` | ✗ | ✓ | ✓ |
+| `PegInsertion` | ✗ | ✗ | ✗ |
+| `ShockAbsorber` | ✗ | ✗ | ✗ |
+| `Lamp` | ✓ | ✓ | ✓ |
 
 List everything registered:
 
