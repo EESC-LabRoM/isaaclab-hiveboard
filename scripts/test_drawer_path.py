@@ -212,7 +212,7 @@ def test_open_is_forward_travel():
         assert prismatic == [], (name, prismatic)
     housing_stage = Usd.Stage.Open(_cfg("drawer_housing").spawn.usd_path)
     fixed = [prim.GetName() for prim in housing_stage.Traverse() if prim.IsA(UsdPhysics.FixedJoint)]
-    assert fixed == ["root_joint"]
+    assert sorted(fixed) == ["anchor_joint", "root_joint"]
     box_stage = Usd.Stage.Open(_cfg("drawer").spawn.usd_path)
     assert [prim for prim in box_stage.Traverse() if prim.IsA(UsdPhysics.Joint)] == []
     assert _cfg("drawer").spawn.rigid_props.kinematic_enabled is False

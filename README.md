@@ -54,12 +54,10 @@ Each task is `Isaac-HiveBoard-<Robot>-<Tool>-v0`, with a `-Play-v0` variant
 | `Button` | ✓ | ✓ | ✓ |
 | `Key` | ✓ | ✓ | ✓ |
 | `Drawer` | ✓ | ✓ | ✓ |
-| `M8Thread` / `M30Thread` | ✓ | ✓ | ✓ |
-| `PegInsertion` | ✓ | ✓ | ✓ |
-| `ShockAbsorber` | ✓ | ✓ | ✓ |
-| `Lamp` (no `-Play`) | ✓ | ✓ | ✓ |
-| `CuroboValve` | ✓ | | ✓ |
-| `BenchValve` (website joint clip) | ✓ | | ✓ |
+| `M8Thread` / `M30Thread` | x | ✓ | ✓ |
+| `PegInsertion` | x | x | x |
+| `ShockAbsorber` | x | ✓ | ✓ |
+| `Lamp`  | ✓ | ✓ | ✓ |
 
 List everything registered:
 
