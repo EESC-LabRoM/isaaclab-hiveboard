@@ -8,15 +8,17 @@ travel. The USD check reads the files the drawer scene spawns.
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import torch
-from pxr import Usd, UsdPhysics
+from pxr import Gf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 import drawer_path as slot
 from isaaclab_hiveboard.tasks.anymal.drawer.configs.commands import DRAWER_OPEN, FramePoseCommandsCfg
 from isaaclab_hiveboard.tasks.anymal.drawer.configs.terminations import TerminationsCfg
 from isaaclab_hiveboard.tasks.anymal.drawer.slide import done_when_travel_holds, drawer_slide_success
+from isaaclab_hiveboard.tasks.anymal.drawer.slide import drawer_clear_of_guides, drawer_removal_success
 from isaaclab_hiveboard.tasks.scenes.drawer import DRAWER_PULL, DrawerSceneCfg
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -47,6 +49,69 @@ def _cfg(name: str):
     if field.default_factory is not None:  # type: ignore[attr-defined]
         return field.default_factory()  # type: ignore[misc]
     return field.default
+
+
+def test_robot_adapters_preserve_drawer_timing():
+    """Robot adapters must preserve the fine tick and existing command rate."""
+    from isaaclab_hiveboard.tasks.anymal.drawer.env import AnymalDrawerEnvCfg, AnymalDrawerEnvCfg_PLAY
+    from isaaclab_hiveboard.tasks.franka.drawer.env import FrankaDrawerEnvCfg, FrankaDrawerEnvCfg_PLAY
+    from isaaclab_hiveboard.tasks.spot.drawer.env import SpotDrawerEnvCfg, SpotDrawerEnvCfg_PLAY
+    from isaaclab_hiveboard.tasks.anymal.drawer.slide import drawer_removal_success, drawer_slide_success
+
+    removal = (AnymalDrawerEnvCfg, AnymalDrawerEnvCfg_PLAY, FrankaDrawerEnvCfg, FrankaDrawerEnvCfg_PLAY)
+    opening = (SpotDrawerEnvCfg, SpotDrawerEnvCfg_PLAY)
+    for cls in (*removal, *opening):
+        cfg = cls()
+        assert cfg.sim.dt <= 0.001, cls.__name__
+        assert abs(cfg.sim.dt * cfg.decimation - 0.075) < 1e-9, cls.__name__
+        expected_success = drawer_removal_success if cls in removal else drawer_slide_success
+        assert cfg.terminations.success.func is expected_success, cls.__name__
+
+
+def test_runtime_collision_matches_urdf():
+    """Check the generated runtime USD, including units and collision schemas."""
+    links = {link.attrib["name"]: link for link in ET.parse(slot.DRAWER_URDF).getroot().findall("link")}
+    for asset, link in (("drawer_housing", "base"), ("drawer", "drawer")):
+        stage = Usd.Stage.Open(_cfg(asset).spawn.usd_path)
+        cache = UsdGeom.XformCache()
+        prims = {prim.GetName(): prim for prim in stage.Traverse()}
+        collisions = links[link].findall("collision")
+        expected = {item.attrib["name"] for item in collisions}
+        active = {
+            prim.GetName() for prim in stage.Traverse()
+            if prim.HasAPI(UsdPhysics.CollisionAPI)
+            and UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is not False
+        }
+        assert active == expected, (asset, active, expected)
+        for item in collisions:
+            name = item.attrib["name"]
+            prim = prims[name]
+            material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+            mu = UsdPhysics.MaterialAPI(material.GetPrim()).GetDynamicFrictionAttr().Get()
+            assert abs(mu - (0.8 if name == "face" else 0.08)) < 1e-6, name
+            if name == "face":
+                assert prim.GetAttribute("mjc:condim").Get() == 4
+            center, _ = slot._origin(item.find("origin"))
+            transform = cache.GetLocalToWorldTransform(prim)
+            actual = transform.Transform(Gf.Vec3d(0, 0, 0))
+            assert all(abs(a - b) < 1e-7 for a, b in zip(actual, center)), name
+            geometry = item.find("geometry")
+            cube = geometry.find("box")
+            if cube is not None:
+                size = tuple(float(v) for v in cube.attrib["size"].split())
+                for i in range(3):
+                    axis = Gf.Vec3d(*(1.0 if j == i else 0.0 for j in range(3)))
+                    actual_size = transform.TransformDir(axis).GetLength() * UsdGeom.Cube(prim).GetSizeAttr().Get()
+                    assert abs(actual_size - size[i]) < 1e-7, name
+            else:
+                cylinder = geometry.find("cylinder")
+                shape = UsdGeom.Cylinder(prim)
+                assert abs(shape.GetRadiusAttr().Get() - float(cylinder.attrib["radius"])) < 1e-7, name
+                assert abs(shape.GetHeightAttr().Get() - float(cylinder.attrib["length"])) < 1e-7, name
+                axis = shape.GetAxisAttr().Get()
+                unit_axis = Gf.Vec3d(*(1.0 if j == "XYZ".index(axis) else 0.0 for j in range(3)))
+                direction = transform.TransformDir(unit_axis).GetNormalized()
+                assert abs(direction[1]) > 0.999999, name
 
 
 def test_drawer_leaves_only_forward_then_up():
@@ -87,8 +152,10 @@ def test_drawer_leaves_only_forward_then_up():
     assert not slot.hitting(collision, slot.probe(raised, 0, distance))
     # The same rise from the closed pose is still inside the ceiling.
     assert slot.hitting(collision, (0.0, 0.0, lift))
-    # No joint limit: a long straight pull still meets the lip.
-    assert slot.hitting(collision, (0.2, 0.0, 0.0))
+    # The finite CAD lip blocks a continuous pull at the face. A teleported
+    # pose far beyond the physical housing is collision-free.
+    assert slot.hitting(collision, slot.probe(at_lip, 0, distance))
+    assert not slot.hitting(collision, (0.2, 0.0, 0.0))
 
     for pose in (closed, at_lip, raised):
         for extra in collision.extras:
@@ -198,7 +265,7 @@ def test_open_is_forward_travel():
         if params.get("done_when_travel") is not None:
             travels.append(params["done_when_travel"])
     assert travels
-    assert all(item[2] == DRAWER_OPEN and item[3] >= DRAWER_OPEN for item in travels)
+    assert all(item[2] >= DRAWER_OPEN and item[3] >= item[2] for item in travels)
 
     for name in ("drawer_housing", "drawer"):
         cfg = _cfg(name)
@@ -217,6 +284,33 @@ def test_open_is_forward_travel():
     assert [prim for prim in box_stage.Traverse() if prim.IsA(UsdPhysics.Joint)] == []
     assert _cfg("drawer").spawn.rigid_props.kinematic_enabled is False
     assert _cfg("drawer_housing").actuators == {}
+
+
+def test_removal_requires_both_shafts_clear():
+    """Opening, lifting inside the slot, or clearing only one pin is insufficient."""
+    import isaaclab.utils.math as math_utils
+
+    for housing_quat in ((0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 0.0)):
+        for pose, expected in (
+            ((0.0, 0.0, 0.0), False),
+            ((DRAWER_OPEN, 0.0, 0.0), False),
+            ((0.0256, 0.0, 0.012), False),
+            ((0.070, 0.0, 0.0), True),
+            ((0.070, 0.0, 0.030), True),
+            ((0.070, 0.0, -0.300), True),
+        ):
+            env = _Env(pose, housing_quat, done=True)
+            assert bool(drawer_removal_success(env, "pose_command", "drawer", "drawer_housing")[0]) is expected
+
+        env = _Env((0.050, 0.0, 0.030), housing_quat, done=True)
+        # Yaw puts one pin behind the case even though the box origin moved 50 mm.
+        quarter_turn = torch.tensor([[0.0, 0.0, 2 ** -0.5, 2 ** -0.5]])
+        env.scene["drawer"].data.root_quat_w.torch = math_utils.quat_mul(torch.tensor([housing_quat]), quarter_turn)
+        assert not bool(drawer_clear_of_guides(env, "drawer", "drawer_housing")[0])
+        assert not bool(drawer_removal_success(env, "pose_command", "drawer", "drawer_housing")[0])
+
+    unfinished = _Env((0.070, 0.0, 0.030), (0.0, 0.0, 0.0, 1.0), done=False)
+    assert not bool(drawer_removal_success(unfinished, "pose_command", "drawer", "drawer_housing")[0])
 
 
 def _boxes_overlap(a: slot.Box, b: slot.Box) -> bool:

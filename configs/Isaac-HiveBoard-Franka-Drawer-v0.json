@@ -1,19 +1,19 @@
 {
   "version": 1,
-  "task": "Isaac-HiveBoard-Anymal-Drawer-v0",
+  "task": "Isaac-HiveBoard-Franka-Drawer-v0",
   "asset_name": "robot",
-  "body_name": "robotiq_base_link",
+  "body_name": "fr3_hand",
   "body_offset": {
     "pos": [
       0.0,
       0.0,
-      0.215
+      0.1034
     ],
     "rot": [
+      0.7071068,
       0.0,
-      -0.7071068,
-      0.0,
-      0.7071068
+      0.7071068,
+      0.0
     ]
   },
   "commands": [
@@ -31,9 +31,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -48,15 +48,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -86,9 +87,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -103,15 +104,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -133,7 +135,7 @@
         "phase": "grip",
         "until": null,
         "open_gripper": false,
-        "duration_s": 1.0
+        "duration_s": 0.9
       }
     },
     {
@@ -150,9 +152,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -172,15 +174,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -210,9 +213,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -227,15 +230,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -261,13 +265,13 @@
         "target_offset_pos": [
           -0.005,
           0.0,
-          0.0125
+          0.012
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -282,15 +286,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -316,13 +321,13 @@
         "target_offset_pos": [
           -0.019,
           0.0,
-          0.0125
+          0.012
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -342,15 +347,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -380,9 +386,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -397,15 +403,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,
@@ -444,9 +451,9 @@
         ],
         "target_offset_rot": [
           0.0,
-          0.21643961393810288,
+          0.3826834323650898,
           0.0,
-          0.9762960071199334
+          0.9238795325112867
         ],
         "target_position_env": null,
         "target_orientation_env": null,
@@ -461,15 +468,16 @@
         "canonicalize_upward": false,
         "hold_current_orientation": false,
         "robot_joint_names": [
-          "dynaarm_shoulder_rotation",
-          "dynaarm_shoulder_flexion",
-          "dynaarm_elbow_flexion",
-          "dynaarm_forearm_rotation",
-          "dynaarm_wrist_flexion",
-          "dynaarm_wrist_rotation"
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
         ],
-        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.yaml",
-        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/anymal/cumotion/dynaarm.urdf",
+        "robot_curobo_yaml": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.yaml",
+        "robot_urdf": "/home/gonzales/Documents/repositories/isaaclab-hiveboard/source/isaaclab_hiveboard/isaaclab_hiveboard/assets/franka/cumotion/fr3.urdf",
         "num_ik_seeds": 4,
         "num_trajopt_seeds": 1,
         "max_plan_attempts": 1,

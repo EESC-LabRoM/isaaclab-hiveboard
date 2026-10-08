@@ -17,14 +17,14 @@ import sys
 import traceback
 from pathlib import Path
 
-from isaaclab.app import AppLauncher
+from isaaclab.app import add_launcher_args, launch_simulation
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--log", type=Path, required=True)
-AppLauncher.add_app_launcher_args(parser)
+parser.add_argument("--dt", type=float, help="Override the drawer physics tick in seconds.")
+add_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
-simulation_app = AppLauncher(args_cli).app
 
 import torch
 import warp as wp
@@ -33,16 +33,20 @@ import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
 import newton
 from isaaclab.assets import Articulation, RigidObject
+from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg, SimulationContext
+from isaaclab.utils import configclass
 from isaaclab_newton.physics import NewtonManager
 
 import drawer_path as slot
 from isaaclab_hiveboard.tasks.anymal.drawer.configs.commands import DRAWER_OPEN
+from isaaclab_hiveboard.tasks.anymal.drawer.physics import DRAWER_SIM_DT, DrawerPhysicsCfg
 from isaaclab_hiveboard.tasks.anymal.drawer.slide import drawer_displacement
-from isaaclab_hiveboard.tasks.anymal.mechanism import MechanismPhysicsCfg
 from isaaclab_hiveboard.tasks.scenes.drawer import DrawerSceneCfg
 
-DT = 1.0 / 200.0
+DT = DRAWER_SIM_DT if args_cli.dt is None else args_cli.dt
+if DT <= 0:
+    parser.error("--dt must be positive")
 SPEED = 0.02
 _ALLOWED_JOINTS = {int(newton.JointType.FREE), int(newton.JointType.FIXED)}
 
@@ -105,7 +109,7 @@ def _reset(box: RigidObject, housing: Articulation, sim: SimulationContext) -> N
     housing.write_root_com_velocity_to_sim_index(root_velocity=_default_vel(housing))
     box.write_data_to_sim()
     housing.write_data_to_sim()
-    for _ in range(15):
+    for _ in range(round(0.075 / DT)):
         sim.step()
         box.update(DT)
         housing.update(DT)
@@ -143,7 +147,7 @@ def _push(
         pose = _pose(world)
         vel = _housing_velocity(box, housing)
         x = pose[0]
-        cap = 0.08 if vz else 0.08
+        cap = 0.08
         if hold_x is None:
             fx = _clamp(6.0 * (vx - float(vel[0])), cap) if vx else 0.0
         else:
@@ -167,9 +171,9 @@ def _push(
         sim.step()
         box.update(DT)
         housing.update(DT)
-        if notes is not None and step % 100 == 0:
+        if notes is not None and step % max(1, round(0.5 / DT)) == 0:
             notes.append(f"t={step * DT:.2f} fx={fx:+.3f} vel={tuple(round(float(v), 4) for v in vel.tolist())} pose={_pose(world)}")
-        if step % 25 == 0 or step == steps - 1:
+        if step % max(1, round(0.125 / DT)) == 0 or step == steps - 1:
             trace.append(_pose(world))
     box.permanent_wrench_composer.reset()
     return trace
@@ -188,20 +192,23 @@ def main() -> int:
     lines = [f"lip={lip:.4f} clear_lift={clear_lift:.4f} drawer_open={DRAWER_OPEN:.4f}"]
 
     sim_utils.create_new_stage()
-    sim = SimulationContext(
-        SimulationCfg(dt=DT, gravity=(0.0, 0.0, 0.0), physics=MechanismPhysicsCfg(), render_interval=1)
-    )
-    sim_utils.create_prim("/World/Env_0", "Xform", translation=(0.0, 0.0, 0.0))
-    housing_cfg = _cfg("drawer_housing").replace(prim_path="/World/Env_0/DrawerHousing")
-    box_cfg = _cfg("drawer").replace(prim_path="/World/Env_0/Drawer")
+    sim = SimulationContext(sim_cfg)
+    housing_cfg = _cfg("drawer_housing")
+    box_cfg = _cfg("drawer")
     # Same orientation for both, so body axes are the housing axes. The scene
     # itself yaws the pair together; that common yaw is not what this check tests.
     housing_cfg.init_state.rot = (0.0, 0.0, 0.0, 1.0)
     box_cfg.init_state.rot = (0.0, 0.0, 0.0, 1.0)
     # The scene spawn stays undamped. This check keeps the free box from spinning away.
     box_cfg.spawn.rigid_props.angular_damping = 0.02
-    housing = Articulation(housing_cfg)
-    box = RigidObject(box_cfg)
+    @configclass
+    class ContactSceneCfg(InteractiveSceneCfg):
+        drawer_housing = housing_cfg
+        drawer = box_cfg
+
+    scene = InteractiveScene(ContactSceneCfg(num_envs=1, env_spacing=1.0))
+    housing = scene["drawer_housing"]
+    box = scene["drawer"]
     sim.reset()
     assert housing.is_initialized and box.is_initialized
     _set_mu(0.05)
@@ -235,7 +242,7 @@ def main() -> int:
     # inside that face, so the circle test reports a graze. Past the face fails.
     forward_ok = (
         held[0] > 0.012
-        and held[0] < lip + 0.002
+        and held[0] < lip + 0.0005
         and abs(held[2]) < 0.004
         and slot.y_captured(collision, held)
     )
@@ -263,7 +270,7 @@ def main() -> int:
     only_forward = _push(box, housing, sim, 4.0, vx=SPEED)
     stuck = only_forward[-1]
     lines.append(f"forward_only: {_fmt(only_forward)}")
-    forward_only_ok = stuck[0] < lip + 0.002 and abs(stuck[2]) < 0.004 and slot.y_captured(collision, stuck)
+    forward_only_ok = stuck[0] < lip + 0.0005 and abs(stuck[2]) < 0.004 and slot.y_captured(collision, stuck)
     lines.append(f"forward_only_ok: {forward_only_ok} pose={stuck}")
 
     _reset(box, housing, sim)
@@ -277,7 +284,7 @@ def main() -> int:
     sideways = _push(box, housing, sim, 1.0, vy=0.01)
     slid = sideways[-1]
     lines.append(f"sideways: {_fmt(sideways)}")
-    sideways_ok = abs(slid[1]) < 0.012 and slot.y_captured(collision, slid) and abs(slid[0]) < 0.008
+    sideways_ok = abs(slid[1]) < 0.002 and slot.y_captured(collision, slid) and abs(slid[0]) < 0.008
     lines.append(f"sideways_ok: {sideways_ok} pose={slid}")
 
     _reset(box, housing, sim)
@@ -311,12 +318,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    sim_cfg = SimulationCfg(
+        dt=DT, gravity=(0.0, 0.0, 0.0), physics=DrawerPhysicsCfg().default, render_interval=1
+    )
     try:
-        code = main()
+        with launch_simulation(sim_cfg, args_cli):
+            code = main()
     except Exception as exc:
         args_cli.log.write_text(f"RESULT launch-error\n{traceback.format_exc()}\n", encoding="utf-8")
         print(f"RESULT launch-error\n{traceback.format_exc()}", file=sys.stderr)
         raise
-    finally:
-        simulation_app.close()
     raise SystemExit(code)

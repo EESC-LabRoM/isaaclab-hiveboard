@@ -42,6 +42,14 @@ class YCylinder:
     radius: float
     length: float
 
+    def bounds(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+        x, y, z = self.center
+        return (
+            (x - self.radius, x + self.radius),
+            (y - self.length / 2, y + self.length / 2),
+            (z - self.radius, z + self.radius),
+        )
+
     def translated(self, dx: float, dy: float, dz: float) -> YCylinder:
         x, y, z = self.center
         return YCylinder(self.name, (x + dx, y + dy, z + dz), self.radius, self.length)
@@ -49,7 +57,7 @@ class YCylinder:
 
 @dataclass(frozen=True)
 class DrawerCollision:
-    cuts: tuple[Box, ...]
+    cuts: tuple[Box | YCylinder, ...]
     shafts: tuple[YCylinder, ...]
     extras: tuple[Box, ...]
     # URDF joint types. The box is free, so this is not a set of limits.
@@ -87,7 +95,7 @@ def _axis_index(rotation: list[list[float]]) -> int:
 def load_drawer_collision(urdf: Path | None = None) -> DrawerCollision:
     """Parse boxes, Y-cylinders and the URDF joint types from ``urdf``."""
     root = ET.parse(str(urdf or DRAWER_URDF)).getroot()
-    cuts: list[Box] = []
+    cuts: list[Box | YCylinder] = []
     shafts: list[YCylinder] = []
     extras: list[Box] = []
     for link in root.findall("link"):
@@ -113,7 +121,7 @@ def load_drawer_collision(urdf: Path | None = None) -> DrawerCollision:
                 axis = _axis_index(rotation)
                 if axis != 1:
                     raise ValueError(f"collision {name} cylinder axis is not Y")
-                shafts.append(
+                (cuts if name.startswith("cut_") else shafts).append(
                     YCylinder(
                         name,
                         origin,
@@ -139,13 +147,18 @@ def _circle_rect(cx: float, cz: float, radius: float, x0: float, x1: float, z0: 
     return (cx - nearest_x) ** 2 + (cz - nearest_z) ** 2 < (radius - 1e-9) ** 2
 
 
-def intersects(shaft: YCylinder, box: Box) -> bool:
-    """Positive-volume overlap of a Y-cylinder and an axis-aligned box."""
+def intersects(shaft: YCylinder, box: Box | YCylinder) -> bool:
+    """Positive-volume overlap of a shaft and a box or parallel cylinder."""
     (x0, x1), (y0, y1), (z0, z1) = box.bounds()
     sy0 = shaft.center[1] - 0.5 * shaft.length
     sy1 = shaft.center[1] + 0.5 * shaft.length
     if not _intervals_overlap(sy0, sy1, y0, y1):
         return False
+    if isinstance(box, YCylinder):
+        return (
+            (shaft.center[0] - box.center[0]) ** 2 + (shaft.center[2] - box.center[2]) ** 2
+            < (shaft.radius + box.radius - 1e-9) ** 2
+        )
     return _circle_rect(shaft.center[0], shaft.center[2], shaft.radius, x0, x1, z0, z1)
 
 
@@ -189,24 +202,27 @@ def probe(pose: Pose, axis: int, distance: float) -> Pose:
 
 
 def forward_end(collision: DrawerCollision, probe_distance: float) -> float:
-    """Largest forward travel at zero lift whose next probe step hits a cut.
+    """First contact along a continuous, level forward pull.
 
     The search stops at the cuts. There is no joint limit to hide a short lip.
     """
     step = probe_distance / 2.0
-    last_free = None
+    last_free = 0.0
     value = 0.0
     while value <= 0.6 + 1e-12:
         pose = (value, 0.0, 0.0)
         if hitting(collision, pose):
-            break
-        ahead = probe(pose, 0, probe_distance)
-        if hitting(collision, ahead):
-            last_free = value
+            low, high = last_free, value
+            for _ in range(40):
+                middle = (low + high) / 2
+                if hitting(collision, (middle, 0.0, 0.0)):
+                    high = middle
+                else:
+                    low = middle
+            return low
+        last_free = value
         value += step
-    if last_free is None:
-        raise RuntimeError("no forward pose is free now and blocked one probe ahead")
-    return last_free
+    raise RuntimeError("no forward collision along the guide")
 
 
 def raised_clear(collision: DrawerCollision, forward: float, probe_distance: float) -> float:

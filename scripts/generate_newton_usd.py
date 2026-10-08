@@ -572,7 +572,9 @@ def _strip_world_fixed_joint(payload: Path) -> None:
     stage.GetRootLayer().Save()
 
 
-def render_rigid_overlay(default_prim: str, reference: str, anchor_body: str | None = None) -> str:
+def render_rigid_overlay(
+    default_prim: str, reference: str, anchor_body: str | None = None, soft_grasp_body: str | None = None
+) -> str:
     """Reference one UUC layer. Do not hull the drawer's slotted plate.
 
     anchor_body: weld a collision-free child body to this link. Newton's USD
@@ -593,6 +595,25 @@ def render_rigid_overlay(default_prim: str, reference: str, anchor_body: str | N
     ]
     if anchor_body is None:
         body = ["{", "}"]
+        if soft_grasp_body is not None:
+            # The rubber pads grip a surface patch. Enable torsional friction
+            # on the tab so that the drawer can transmit a lift without
+            # freely pivoting about the two point-contact normals. Newton's
+            # default torsional friction length is 5 mm, matching this tab.
+            body = [
+                "{",
+                '    over "Geometry"',
+                "    {",
+                f'        over "{soft_grasp_body}"',
+                "        {",
+                '            over "face"',
+                "            {",
+                "                int mjc:condim = 4",
+                "            }",
+                "        }",
+                "    }",
+                "}",
+            ]
     else:
         head += [
             "#",
@@ -642,6 +663,31 @@ def render_sm_overlay() -> str:
         default_prim="Small_Valve",
         targets=SM_TARGETS,
     )
+
+
+def apply_drawer_contact_materials(path: Path, body_name: str) -> None:
+    """Keep sliding guide friction separate from the handle's pad friction."""
+    from pxr import Usd, UsdPhysics, UsdShade
+
+    stage = Usd.Stage.Open(str(path))
+    root = stage.GetDefaultPrim().GetPath()
+    guide = UsdShade.Material.Define(stage, root.AppendPath("Materials/Guide"))
+    material = UsdPhysics.MaterialAPI.Apply(guide.GetPrim())
+    material.CreateStaticFrictionAttr(0.1)
+    material.CreateDynamicFrictionAttr(0.08)
+    material.CreateRestitutionAttr(0.0)
+    pad = UsdShade.Material.Define(stage, root.AppendPath("Materials/Handle"))
+    material = UsdPhysics.MaterialAPI.Apply(pad.GetPrim())
+    material.CreateStaticFrictionAttr(0.8)
+    material.CreateDynamicFrictionAttr(0.8)
+    material.CreateRestitutionAttr(0.0)
+    body = stage.GetPrimAtPath(root.AppendPath(f"Geometry/{body_name}"))
+    for prim in body.GetChildren():
+        if prim.HasAPI(UsdPhysics.CollisionAPI) and UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is not False:
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(
+                pad if prim.GetName() == "face" else guide, materialPurpose="physics"
+            )
+    stage.GetRootLayer().Save()
 
 
 def render_shock_overlay() -> str:
@@ -865,6 +911,9 @@ def main(argv: list[str] | None = None) -> int:
             run_uuc_conversion(BUTTON_URDF, BUTTON_UUC_DIR, args.uuc_python)
             print(f"[UUC] button: {BUTTON_UUC_DIR / 'Button_Assembly.usda'}")
         if want_drawer:
+            from drawer_collision import sync_drawer_collision
+
+            sync_drawer_collision()
             housing_urdf, box_urdf = _split_drawer_urdfs(DRAWER_URDF.parent)
             try:
                 run_uuc_conversion(housing_urdf, DRAWER_HOUSING_UUC_DIR, args.uuc_python)
@@ -929,9 +978,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if want_drawer:
         housing_text = render_rigid_overlay("Drawer_Housing", "./uuc_housing/Drawer_Housing.usda", anchor_body="base")
-        box_text = render_rigid_overlay("Drawer_Box", "./uuc_box/Drawer_Box.usda")
+        box_text = render_rigid_overlay("Drawer_Box", "./uuc_box/Drawer_Box.usda", soft_grasp_body="drawer")
         DRAWER_HOUSING_OVERLAY.write_text(housing_text, encoding="utf-8")
         DRAWER_BOX_OVERLAY.write_text(box_text, encoding="utf-8")
+        apply_drawer_contact_materials(DRAWER_HOUSING_OVERLAY, "base")
+        apply_drawer_contact_materials(DRAWER_BOX_OVERLAY, "drawer")
         print(f"[OVERLAY] wrote {DRAWER_HOUSING_OVERLAY}")
         print(f"[OVERLAY] wrote {DRAWER_BOX_OVERLAY}")
     if want_shock:

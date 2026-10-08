@@ -38,7 +38,7 @@ from isaaclab_hiveboard.tasks.scenes.mechanism import (
 def _body_props(*, kinematic: bool) -> sim_utils.RigidBodyPropertiesCfg:
     return sim_utils.RigidBodyPropertiesCfg(
         kinematic_enabled=kinematic,
-        disable_gravity=True,
+        disable_gravity=False,
         retain_accelerations=False,
         linear_damping=0.0,
         angular_damping=0.0,

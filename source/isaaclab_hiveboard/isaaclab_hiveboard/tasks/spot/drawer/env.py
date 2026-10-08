@@ -7,6 +7,8 @@
 
 from isaaclab.utils.configclass import configclass
 
+from isaaclab_hiveboard.tasks.anymal.drawer.configs.commands import FramePoseCommandsCfg
+from isaaclab_hiveboard.tasks.anymal.drawer.configs.terminations import TerminationsCfg
 from isaaclab_hiveboard.tasks.anymal.drawer.env import AnymalDrawerEnvCfg, AnymalDrawerEnvCfg_PLAY
 from isaaclab_hiveboard.tasks.spot.common import use_spot
 
@@ -17,8 +19,12 @@ PINCH_FRAMES = ("drawer_approaching", "drawer_grasp", "drawer_pulled")
 class SpotDrawerEnvCfg(AnymalDrawerEnvCfg):
     """Fixed-base Spot on the shared HiveBoard sliding-drawer scene."""
 
+    commands: FramePoseCommandsCfg = FramePoseCommandsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+
     def __post_init__(self):
         super().__post_init__()
+        self.episode_length_s = 12.0
         use_spot(self, PINCH_FRAMES)
 
 
@@ -26,6 +32,10 @@ class SpotDrawerEnvCfg(AnymalDrawerEnvCfg):
 class SpotDrawerEnvCfg_PLAY(AnymalDrawerEnvCfg_PLAY):
     """Deterministic one-environment Spot demonstration."""
 
+    commands: FramePoseCommandsCfg = FramePoseCommandsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+
     def __post_init__(self):
         super().__post_init__()
+        self.episode_length_s = 12.0
         use_spot(self, PINCH_FRAMES)
