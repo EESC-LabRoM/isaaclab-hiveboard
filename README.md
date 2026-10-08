@@ -55,7 +55,7 @@ have one yet.
 | `CircuitBreaker` | ✓ | ✓ | ✓ |
 | `Button` | ✓ | ✓ | ✓ |
 | `Key` | ✓ | ✓ | ✓ |
-| `Drawer` | ✗ | ✗ | ✗ |
+| `Drawer` | ✗ | ✓| ✓|
 | `M8Thread` / `M30Thread` | ✗ | ✓ | ✓ |
 | `PegInsertion` | ✗ | ✗ | ✗ |
 | `ShockAbsorber` | ✗ | ✗ | ✗ |
