@@ -6,7 +6,7 @@
 
 Isaac Lab tasks for **Boston Dynamics Spot with Arm**, **Franka FR3** and
 **ANYmal + DynaArm** operating the mechanisms of the
-**[HiveBoard Benchmark](https://github.com/EESC-LabRoM/HiveBoard)**, simulated
+**[HiveBoard Benchmark](https://github.com/hiveboard-bench/HiveBoard)**, simulated
 with Newton MJWarp (no Isaac Sim needed).
 
 ---
@@ -14,7 +14,7 @@ with Newton MJWarp (no Isaac Sim needed).
 ## Installation
 
 ```bash
-git clone --recurse-submodules https://github.com/EESC-LabRoM/isaaclab-hiveboard.git
+git clone --recurse-submodules https://github.com/hiveboard-bench/isaaclab-hiveboard.git
 cd isaaclab-hiveboard
 # already cloned? git submodule update --init --recursive
 
