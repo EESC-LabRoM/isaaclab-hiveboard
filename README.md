@@ -1,6 +1,6 @@
 # Isaac Lab - HiveBoard Multi-Robot Manipulation Suite
 
-[![Isaac Lab](https://img.shields.io/badge/IsaacLab-3-bffdce9-blue.svg)](https://github.com/isaac-sim/IsaacLab/commit/bffdce9d7467f349bfc8ab111fe633a0bb234851)
+[![Isaac Lab](https://img.shields.io/badge/IsaacLab-78b12aed-blue.svg)](https://github.com/isaac-sim/IsaacLab/commit/78b12aed1d2a56439493b8ea6d3538e6e379e2e5)
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 
